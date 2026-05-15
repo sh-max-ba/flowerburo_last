@@ -1,6 +1,6 @@
 import Link from "next/link"
 import { ShieldAlertIcon } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { buttonVariants } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -21,9 +21,9 @@ export function AccessDenied({ homeHref = "/" }: { homeHref?: string }) {
           <CardDescription>У вашей роли нет прав на этот раздел.</CardDescription>
         </CardHeader>
         <CardContent>
-          <Button render={<Link href={homeHref} />} className="w-full">
+          <Link href={homeHref} className={buttonVariants({ className: "w-full" })}>
             На главную
-          </Button>
+          </Link>
         </CardContent>
       </Card>
     </main>

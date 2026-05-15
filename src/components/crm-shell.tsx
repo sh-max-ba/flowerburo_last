@@ -1,0 +1,150 @@
+"use client"
+
+import type React from "react"
+import Link from "next/link"
+import {
+  BanknoteIcon,
+  BoxesIcon,
+  ClipboardListIcon,
+  HistoryIcon,
+  LogOutIcon,
+  MenuIcon,
+  PackageCheckIcon,
+  SettingsIcon,
+  TagsIcon,
+  UserCheckIcon,
+} from "lucide-react"
+import { logoutAction } from "@/app/auth-actions"
+import type { CurrentUser, UserRole } from "@/lib/db"
+import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar"
+
+type CrmSection = "clients" | "deals"
+
+type CrmShellProps = {
+  user: CurrentUser
+  active: CrmSection
+  title: string
+  actions?: React.ReactNode
+  children: React.ReactNode
+}
+
+const roleLabels: Record<UserRole, string> = {
+  owner: "Управляющий",
+  manager: "Менеджер",
+  florist: "Флорист",
+}
+
+const navItems: Array<{
+  id: string
+  label: string
+  icon: typeof BoxesIcon
+  href: string
+  roles: UserRole[]
+}> = [
+  { id: "stock", label: "Склад", icon: BoxesIcon, href: "/stock", roles: ["owner"] },
+  { id: "sales", label: "Касса", icon: BanknoteIcon, href: "/cash", roles: ["owner", "manager"] },
+  { id: "ready-orders", label: "Готовые заказы", icon: PackageCheckIcon, href: "/ready-orders", roles: ["owner", "manager"] },
+  { id: "shifts", label: "Смены", icon: BanknoteIcon, href: "/shifts", roles: ["owner"] },
+  { id: "orders", label: "Стол заказов", icon: ClipboardListIcon, href: "/orders", roles: ["owner", "manager", "florist"] },
+  { id: "clients", label: "Клиенты", icon: UserCheckIcon, href: "/clients", roles: ["owner", "manager"] },
+  { id: "deals", label: "Сделки", icon: TagsIcon, href: "/deals", roles: ["owner", "manager"] },
+  { id: "history", label: "История", icon: HistoryIcon, href: "/history", roles: ["owner"] },
+  { id: "settings", label: "Настройки", icon: SettingsIcon, href: "/settings", roles: ["owner"] },
+] as const
+
+export function CrmShell({ user, active, title, actions, children }: CrmShellProps) {
+  const visibleItems = navItems.filter((item) => item.roles.includes(user.role))
+
+  return (
+    <SidebarProvider>
+      <Sidebar collapsible="icon">
+        <SidebarHeader>
+          <div className="flex h-10 items-center px-2">
+            <div className="min-w-0 group-data-[collapsible=icon]:hidden">
+              <div className="truncate text-sm font-semibold">Flower Buro</div>
+            </div>
+            <div className="hidden size-8 items-center justify-center text-sm font-semibold group-data-[collapsible=icon]:flex">
+              FB
+            </div>
+          </div>
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarGroup>
+            <SidebarGroupLabel>Разделы</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {visibleItems.map((item) => {
+                  const Icon = item.icon
+                  const isActive = item.id === active
+
+                  return (
+                    <SidebarMenuItem key={item.id}>
+                      <SidebarMenuButton
+                        tooltip={item.label}
+                        isActive={isActive}
+                        render={<Link href={item.href} />}
+                      >
+                        <Icon />
+                        <span>{item.label}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+        <SidebarFooter>
+          <div className="flex flex-col gap-2 rounded-lg border bg-background p-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-0">
+            <div className="min-w-0 group-data-[collapsible=icon]:hidden">
+              <div className="truncate text-sm font-medium">{user.name}</div>
+              <div className="truncate text-xs text-muted-foreground">{roleLabels[user.role]}</div>
+            </div>
+            <form action={logoutAction} className="w-full group-data-[collapsible=icon]:w-8">
+              <Button
+                type="submit"
+                variant="outline"
+                size="sm"
+                className="w-full justify-start group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!"
+              >
+                <LogOutIcon data-icon="inline-start" />
+                <span className="group-data-[collapsible=icon]:hidden">Выйти</span>
+              </Button>
+            </form>
+          </div>
+        </SidebarFooter>
+      </Sidebar>
+
+      <SidebarInset className="bg-zinc-50">
+        <header className="sticky top-0 z-30 flex min-h-14 items-center justify-between gap-3 border-b border-border bg-background px-4 shadow-sm md:px-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <SidebarTrigger variant="ghost" size="icon-sm">
+              <MenuIcon />
+            </SidebarTrigger>
+            <h1 className="truncate text-lg font-semibold text-zinc-950">{title}</h1>
+          </div>
+          <div className={cn("flex shrink-0 items-center gap-2", !actions && "hidden")}>{actions}</div>
+        </header>
+        <main className="flex flex-1 flex-col p-4 md:p-5">
+          <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">{children}</div>
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
+  )
+}

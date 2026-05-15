@@ -1,36 +1,109 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Flower Ops MVP
 
-## Getting Started
+## Temporary Production Start
 
-First, run the development server:
+Use production mode for the temporary VPS launch. Do not run the user-facing app with `npm run dev`.
+
+```bash
+npm install
+npm run build
+npm run start
+```
+
+By default Next.js starts on `http://localhost:3000`. To use a different port:
+
+```bash
+PORT=3001 npm run start
+```
+
+## Database
+
+The SQLite database is stored at:
+
+```text
+app.db
+```
+
+This path is relative to the project root, because the app opens `path.join(process.cwd(), "app.db")`.
+
+SQLite WAL files may also exist next to it:
+
+```text
+app.db-wal
+app.db-shm
+```
+
+`app.db`, `app.db-wal`, `app.db-shm`, and `app.db.backup*` are ignored by git.
+
+## Backup Before Use
+
+Stop the app before copying the database, then run:
+
+```bash
+cp app.db "app.db.backup-$(date +%Y%m%d%H%M%S)"
+```
+
+If the app is running and WAL files exist, stop the app first so SQLite can checkpoint cleanly.
+
+## Полная очистка перед запуском
+
+Скрипт полной очистки не запускается автоматически. Он требует явное подтверждение через `CONFIRM_RESET=YES`, перед очисткой делает backup `app.db`, сохраняет пользователей, роли и пароли, но очищает сессии, чтобы все вошли заново.
+
+Команда:
+
+```bash
+CONFIRM_RESET=YES npm run reset-database-for-launch
+```
+
+Перед запуском остановите приложение. Backup будет создан рядом с базой:
+
+```text
+app.db.backup-before-launch-reset-YYYY-MM-DD-HH-mm-ss
+```
+
+Скрипт очищает операционные таблицы, склад, историю импортов и `sessions`. Таблица `users` не очищается.
+
+## Stop And Restart
+
+If the app was started directly with `npm run start`, stop it with `Ctrl+C` in the same terminal.
+
+If it is running in the background, find and stop the process:
+
+```bash
+ps aux | grep "next start"
+kill <PID>
+```
+
+Restart:
+
+```bash
+npm run build
+npm run start
+```
+
+For a several-day VPS run, use a process manager such as `pm2` or `systemd` so the app restarts after a server reboot.
+
+## Development
+
+Development mode is only for local development:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Production checks:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run lint
+npm run build
+npm run start
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Notes
 
-## Learn More
+The app supports warehouse XLSX import/export in production mode. The runtime dependencies include `xlsx` and `exceljs`; they are not dev-only dependencies.
 
-To learn more about Next.js, take a look at the following resources:
+## Wazzup Safety Note
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+На этапе CRM foundation Wazzup не подключен: нет iframe, webhooks и реальных API-запросов.
+Для следующего этапа API keys должны храниться только server-side, iframe нужно получать через server-side route/action, webhooks должны сохранять raw payload, а поведение API нельзя придумывать без актуальной документации Wazzup.

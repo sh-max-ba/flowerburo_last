@@ -1,9 +1,21 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { canCloseShift, canUseCash, requireRole, requireUser } from "@/lib/auth"
+import { canCloseShift, canUseCash, getCurrentUser } from "@/lib/auth"
+import {
+  addDealItem,
+  createCustomer,
+  createDeal,
+  removeDealItem,
+  updateCustomer,
+  updateDealFields,
+  updateDealItem,
+  updateDealStage,
+} from "@/lib/crm"
 import {
   cancelOrder,
+  cancelStockDocument,
+  acceptDealPayment,
   cashIn,
   cashOut,
   changeUserPassword,
@@ -11,18 +23,31 @@ import {
   closeDeliveredOrder,
   completePickupOrder,
   createOrder,
+  createOrderFromDeal,
   createSale,
+  createAndPostStockDocument,
   createUser,
   deleteProduct,
   handOrderToCourier,
   markOrderReady,
   openShift,
+  applyWarehouseImport,
+  previewWarehouseImport,
   replenishProductStock,
+  postStockDocument,
+  saveStockDocumentDraft,
+  clearProductCategory,
+  renameProductCategory,
+  setSupplierActive,
   setUserActive,
   startOrderWork,
   updateUser,
+  upsertSupplier,
   upsertProduct,
   writeOffProductStock,
+  type StockDocumentType,
+  type UserRole,
+  type CurrentUser,
 } from "@/lib/db"
 
 type ActionResult = {
@@ -31,12 +56,26 @@ type ActionResult = {
   messages?: string[]
 }
 
+type DataActionResult<T> =
+  | {
+      ok: true
+      message: string
+      data: T
+    }
+  | {
+      ok: false
+      message: string
+    }
+
+type ActionPayload = void | string[] | boolean | { acceptedPayment: boolean; paidCourier: boolean }
+type UserAction = (user: CurrentUser) => ActionPayload | Promise<ActionPayload>
+
 function getShiftId(formData: FormData) {
   return Number(String(formData.get("shiftId") ?? "").trim())
 }
 
 async function requireCashAccess() {
-  const user = await requireUser()
+  const user = await requireActionUser()
   if (!(await canUseCash(user))) {
     throw new Error("Недостаточно прав для кассы.")
   }
@@ -44,17 +83,38 @@ async function requireCashAccess() {
   return user
 }
 
+async function requireActionUser() {
+  const user = await getCurrentUser()
+  if (!user) {
+    throw new Error("Сессия истекла. Войдите снова.")
+  }
+
+  return user
+}
+
+async function requireActionRole(roles: UserRole[]) {
+  const user = await requireActionUser()
+  if (!roles.includes(user.role)) {
+    throw new Error("Недостаточно прав.")
+  }
+
+  return user
+}
+
 async function runAction(
-  action: () => void | string[] | boolean | { acceptedPayment: boolean; paidCourier: boolean },
+  action: () => ActionPayload | Promise<ActionPayload>,
   message: string
 ): Promise<ActionResult> {
   try {
-    const result = action()
+    const result = await action()
     revalidatePath("/")
+    revalidatePath("/stock")
     revalidatePath("/cash")
+    revalidatePath("/ready-orders")
     revalidatePath("/orders")
     revalidatePath("/shifts")
     revalidatePath("/users")
+    revalidatePath("/settings")
     if (Array.isArray(result)) {
       return { ok: true, message: result[0] ?? message, messages: result }
     }
@@ -82,90 +142,328 @@ async function runAction(
   }
 }
 
+async function runRoleAction(
+  roles: UserRole[],
+  action: UserAction,
+  message: string
+) {
+  return runAction(async () => {
+    const user = await requireActionRole(roles)
+    return action(user)
+  }, message)
+}
+
+async function runCashAction(
+  action: UserAction,
+  message: string
+) {
+  return runAction(async () => {
+    const user = await requireCashAccess()
+    return action(user)
+  }, message)
+}
+
 export async function saveProductAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => upsertProduct(formData), "Товар сохранен.")
+  return runRoleAction(["owner"], (user) => upsertProduct(formData, user), "Товар сохранен.")
+}
+
+function revalidateCrm(customerId?: number | null, dealId?: number | null) {
+  revalidatePath("/clients")
+  revalidatePath("/deals")
+  if (customerId) {
+    revalidatePath(`/clients/${customerId}`)
+  }
+  if (dealId) {
+    revalidatePath(`/deals/${dealId}`)
+  }
+}
+
+export async function createCustomerAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], () => {
+    const customerId = createCustomer(formData)
+    revalidateCrm(customerId, null)
+  }, "Клиент создан.")
+}
+
+export async function updateCustomerAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], () => {
+    const customerId = Number(String(formData.get("customerId") ?? ""))
+    updateCustomer(formData)
+    revalidateCrm(customerId, null)
+  }, "Клиент сохранен.")
+}
+
+export async function createDealAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], (user) => {
+    const dealId = createDeal(formData, user)
+    revalidateCrm(null, dealId)
+  }, "Сделка создана.")
+}
+
+export async function updateDealFieldsAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], (user) => {
+    const dealId = Number(String(formData.get("dealId") ?? ""))
+    updateDealFields(formData, user)
+    revalidateCrm(Number(String(formData.get("customerId") ?? "")) || null, dealId)
+  }, "Сделка сохранена.")
+}
+
+export async function updateDealStageAction(dealId: number, stageId: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    updateDealStage(dealId, stageId)
+    revalidateCrm(null, dealId)
+  }, "Этап сделки обновлен.")
+}
+
+export async function addDealItemAction(dealId: number, productCode: string) {
+  return runRoleAction(["owner", "manager"], () => {
+    addDealItem(dealId, productCode)
+    revalidateCrm(null, dealId)
+  }, "Позиция добавлена.")
+}
+
+export async function updateDealItemAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], () => {
+    const dealId = Number(String(formData.get("dealId") ?? ""))
+    updateDealItem(formData)
+    revalidateCrm(null, dealId)
+  }, "Позиция сохранена.")
+}
+
+export async function removeDealItemAction(dealId: number, itemId: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    removeDealItem(dealId, itemId)
+    revalidateCrm(null, dealId)
+  }, "Позиция удалена.")
+}
+
+export async function createOrderFromDealAction(dealId: number) {
+  return runRoleAction(["owner", "manager"], (user) => {
+    const orderId = createOrderFromDeal(dealId, user)
+    revalidateCrm(null, dealId)
+    revalidatePath("/orders")
+    revalidatePath(`/orders?orderId=${orderId}`)
+  }, "Заказ создан и отправлен флористам")
+}
+
+export async function acceptDealPaymentAction(formData: FormData) {
+  return runCashAction((user) => {
+    const dealId = Number(String(formData.get("dealId") ?? ""))
+    acceptDealPayment(formData, user)
+    revalidateCrm(null, dealId)
+    revalidatePath("/cash")
+    revalidatePath("/shifts")
+    revalidatePath("/orders")
+  }, "Оплата по сделке принята")
 }
 
 export async function deleteProductAction(code: string) {
-  await requireRole(["owner"])
-  return runAction(() => deleteProduct(code), "Товар удален.")
+  return runRoleAction(["owner"], (user) => deleteProduct(code, user), "Товар удален.")
 }
 
 export async function replenishProductStockAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => replenishProductStock(formData), "Товар пополнен")
+  return runRoleAction(["owner"], (user) => replenishProductStock(formData, user), "Товар пополнен")
 }
 
 export async function writeOffProductStockAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => writeOffProductStock(formData), "Товар списан")
+  return runRoleAction(["owner"], (user) => writeOffProductStock(formData, user), "Товар списан")
+}
+
+export async function createStockDocumentAction(type: StockDocumentType, formData: FormData) {
+  const message = type === "stock_in" ? "Акт пополнения проведен" : "Акт списания проведен"
+
+  return runRoleAction(
+    ["owner"],
+    (user) => {
+      const documentId = createAndPostStockDocument(formData, type, user)
+      revalidatePath("/stock/acts")
+      revalidatePath(`/stock/acts/${documentId}`)
+      revalidatePath("/history/stock")
+    },
+    message
+  )
+}
+
+export async function saveStockDocumentDraftAction(type: StockDocumentType, formData: FormData) {
+  return runRoleAction(
+    ["owner"],
+    (user) => {
+      const documentId = saveStockDocumentDraft(formData, type, user)
+      revalidatePath("/stock/acts")
+      revalidatePath(`/stock/acts/${documentId}`)
+    },
+    "Черновик акта сохранен"
+  )
+}
+
+export async function postStockDocumentAction(documentId: number) {
+  return runRoleAction(
+    ["owner"],
+    (user) => {
+      postStockDocument(documentId, user)
+      revalidatePath("/stock/acts")
+      revalidatePath(`/stock/acts/${documentId}`)
+      revalidatePath("/history/stock")
+    },
+    "Акт склада проведен"
+  )
+}
+
+export async function cancelStockDocumentAction(documentId: number) {
+  return runRoleAction(
+    ["owner"],
+    () => {
+      cancelStockDocument(documentId)
+      revalidatePath("/stock/acts")
+      revalidatePath(`/stock/acts/${documentId}`)
+      revalidatePath("/history/stock")
+    },
+    "Акт склада отменен"
+  )
+}
+
+export async function renameProductCategoryAction(formData: FormData) {
+  return runRoleAction(["owner"], () => {
+    const count = renameProductCategory(formData)
+    return [`Категория переименована. Обновлено товаров: ${count}`]
+  }, "Категория переименована")
+}
+
+export async function clearProductCategoryAction(categoryPath: string) {
+  return runRoleAction(["owner"], () => {
+    const count = clearProductCategory(categoryPath)
+    return [`Категория очищена. Обновлено товаров: ${count}`]
+  }, "Категория очищена")
+}
+
+export async function saveSupplierAction(formData: FormData) {
+  return runRoleAction(["owner"], () => {
+    upsertSupplier(formData)
+    revalidatePath("/settings")
+  }, "Поставщик сохранен")
+}
+
+export async function setSupplierActiveAction(supplierId: number, isActive: boolean) {
+  return runRoleAction(["owner"], () => {
+    setSupplierActive(supplierId, isActive)
+    revalidatePath("/settings")
+  }, isActive ? "Поставщик включен" : "Поставщик отключен")
+}
+
+export async function previewWarehouseImportAction(formData: FormData) {
+  try {
+    const user = await requireActionRole(["owner"])
+    const file = formData.get("file")
+    if (!(file instanceof File) || file.size === 0) {
+      throw new Error("Выберите XLSX файл.")
+    }
+    if (!file.name.toLowerCase().endsWith(".xlsx")) {
+      throw new Error("Загрузите файл в формате .xlsx.")
+    }
+
+    const preview = previewWarehouseImport({
+      filename: file.name,
+      buffer: await file.arrayBuffer(),
+      currentUser: user,
+    })
+
+    revalidatePath("/stock")
+    revalidatePath("/warehouse/imports")
+
+    return {
+      ok: true,
+      message: "Предпросмотр импорта сформирован.",
+      data: preview,
+    } satisfies DataActionResult<typeof preview>
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Не удалось прочитать XLSX.",
+    }
+  }
+}
+
+export async function applyWarehouseImportAction(importId: number) {
+  try {
+    const user = await requireActionRole(["owner"])
+    const preview = applyWarehouseImport(importId, user)
+
+    revalidatePath("/stock")
+    revalidatePath("/warehouse/imports")
+    revalidatePath(`/warehouse/imports/${importId}`)
+
+    return {
+      ok: true,
+      message: "Импорт применен.",
+      data: preview,
+    } satisfies DataActionResult<typeof preview>
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Импорт не применен.",
+    }
+  }
 }
 
 export async function createSaleAction(formData: FormData) {
-  await requireCashAccess()
-  return runAction(() => createSale(formData), "Продажа проведена.")
+  return runCashAction((user) => createSale(formData, user), "Продажа проведена.")
 }
 
 export async function openShiftAction(formData: FormData) {
-  const user = await requireRole(["owner", "manager"])
-  return runAction(() => openShift(formData, user), "Смена открыта.")
+  return runAction(async () => {
+    const user = await requireActionRole(["owner", "manager"])
+    openShift(formData, user)
+  }, "Смена открыта.")
 }
 
 export async function closeShiftAction(formData: FormData) {
-  const user = await requireUser()
-  if (!canCloseShift(user, getShiftId(formData))) {
-    return { ok: false, message: "Недостаточно прав для закрытия этой смены." }
-  }
+  return runAction(async () => {
+    const user = await requireActionUser()
+    if (!canCloseShift(user, getShiftId(formData))) {
+      throw new Error("Недостаточно прав для закрытия этой смены.")
+    }
 
-  return runAction(() => closeShift(formData, user), "Смена закрыта.")
+    closeShift(formData, user)
+  }, "Смена закрыта.")
 }
 
 export async function cashInAction(formData: FormData) {
-  await requireCashAccess()
-  return runAction(() => cashIn(formData), "Наличные внесены")
+  return runCashAction((user) => cashIn(formData, user), "Наличные внесены")
 }
 
 export async function cashOutAction(formData: FormData) {
-  await requireCashAccess()
-  return runAction(() => cashOut(formData), "Наличные изъяты")
+  return runCashAction((user) => cashOut(formData, user), "Наличные изъяты")
 }
 
 export async function createOrderAction(formData: FormData) {
-  await requireRole(["owner", "manager"])
-  return runAction(() => createOrder(formData), "Заказ создан и отправлен флористам")
+  return runRoleAction(["owner", "manager"], (user) => createOrder(formData, user), "Заказ создан и отправлен флористам")
 }
 
 export async function startOrderWorkAction(orderId: number) {
-  await requireRole(["owner", "manager", "florist"])
-  return runAction(() => startOrderWork(orderId), "Заказ взят в работу")
+  return runRoleAction(["owner", "manager", "florist"], (user) => startOrderWork(orderId, user), "Заказ взят в работу")
 }
 
 export async function markOrderReadyAction(orderId: number) {
-  await requireRole(["owner", "manager", "florist"])
-  return runAction(() => markOrderReady(orderId), "Букет готов, склад списан")
+  return runRoleAction(["owner", "manager", "florist"], (user) => markOrderReady(orderId, user), "Букет готов, склад списан")
 }
 
 export async function completePickupOrderAction(orderId: number, formData: FormData) {
-  await requireCashAccess()
-  return runAction(() => completePickupOrder(orderId, formData), "Заказ закрыт")
+  return runCashAction((user) => completePickupOrder(orderId, formData, user), "Заказ закрыт")
 }
 
 export async function handOrderToCourierAction(orderId: number, formData: FormData) {
-  await requireCashAccess()
-  return runAction(() => handOrderToCourier(orderId, formData), "Заказ передан курьеру")
+  return runCashAction((user) => handOrderToCourier(orderId, formData, user), "Заказ передан курьеру")
 }
 
 export async function closeDeliveredOrderAction(orderId: number) {
-  await requireCashAccess()
-  return runAction(() => closeDeliveredOrder(orderId), "Заказ закрыт")
+  return runCashAction((user) => closeDeliveredOrder(orderId, user), "Заказ закрыт")
 }
 
 export async function cancelOrderAction(orderId: number) {
-  await requireRole(["owner", "manager", "florist"])
-  return runAction(
-    () =>
-      cancelOrder(orderId)
+  return runRoleAction(
+    ["owner", "manager", "florist"],
+    (user) =>
+      cancelOrder(orderId, user)
         ? ["Букет уже собран, склад автоматически не восстанавливается", "Заказ отменен"]
         : ["Заказ отменен"],
     "Заказ отменен"
@@ -173,21 +471,21 @@ export async function cancelOrderAction(orderId: number) {
 }
 
 export async function createUserAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => createUser(formData), "Пользователь создан.")
+  return runRoleAction(["owner"], () => createUser(formData), "Пользователь создан.")
 }
 
 export async function updateUserAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => updateUser(formData), "Пользователь сохранен.")
+  return runRoleAction(["owner"], () => updateUser(formData), "Пользователь сохранен.")
 }
 
 export async function changeUserPasswordAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => changeUserPassword(formData), "Пароль изменен.")
+  return runRoleAction(["owner"], () => changeUserPassword(formData), "Пароль изменен.")
 }
 
 export async function setUserActiveAction(userId: number, isActive: boolean) {
-  await requireRole(["owner"])
-  return runAction(() => setUserActive(userId, isActive), isActive ? "Пользователь включен." : "Пользователь отключен.")
+  return runRoleAction(
+    ["owner"],
+    () => setUserActive(userId, isActive),
+    isActive ? "Пользователь включен." : "Пользователь отключен."
+  )
 }

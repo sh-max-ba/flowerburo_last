@@ -36,7 +36,13 @@ function canAccessSection(section: Section, role: string, canAccessCash: boolean
   }
 
   if (role === "manager") {
-    return section === "sales" || section === "orders"
+    return (
+      section === "sales" ||
+      section === "ready-orders" ||
+      section === "orders" ||
+      section === "clients" ||
+      section === "deals"
+    )
   }
 
   if (section === "orders") {

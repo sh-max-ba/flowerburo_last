@@ -3,6 +3,7 @@ import type { CashTransactionType, PaymentMethod } from "@/lib/db"
 export const paymentMethodOptions: Array<{ value: PaymentMethod; label: string }> = [
   { value: "cash", label: "Наличные" },
   { value: "card", label: "Карта" },
+  { value: "terminal", label: "Терминал" },
   { value: "mbank", label: "Mbank" },
   { value: "optima", label: "Optima" },
   { value: "elsom", label: "ЭлСом" },
@@ -13,6 +14,7 @@ export function getPaymentMethodLabel(method: PaymentMethod | string) {
   const labels: Record<PaymentMethod, string> = {
     cash: "Наличные",
     card: "Карта",
+    terminal: "Терминал",
     mbank: "Mbank",
     optima: "Optima",
     elsom: "ЭлСом",
@@ -29,6 +31,7 @@ export function cashTransactionTypeLabel(type: CashTransactionType | string) {
     sale: "Продажа",
     prepayment: "Предоплата",
     order_payment: "Доплата по заказу",
+    deal_payment: "Оплата по сделке",
     cash_in: "Внесение",
     cash_out: "Изъятие / выплата",
     cash_refund: "Возврат",

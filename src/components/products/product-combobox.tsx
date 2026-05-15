@@ -1,6 +1,7 @@
 "use client"
 
-import { useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { SearchIcon } from "lucide-react"
 import type { Product } from "@/lib/db"
 import { formatMoney } from "@/lib/utils"
@@ -13,6 +14,7 @@ type ProductComboboxProps = {
   products: Product[]
   disabled?: boolean
   placeholder?: string
+  portalDropdown?: boolean
   onSelect: (product: Product) => void
 }
 
@@ -22,11 +24,13 @@ export function ProductCombobox({
   products,
   disabled,
   placeholder = "Найти товар по названию, коду или артикулу",
+  portalDropdown = false,
   onSelect,
 }: ProductComboboxProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState("")
   const [focused, setFocused] = useState(false)
+  const [dropdownRect, setDropdownRect] = useState<DOMRect | null>(null)
 
   const normalizedQuery = query.trim().toLowerCase()
   const results = useMemo(() => {
@@ -46,6 +50,26 @@ export function ProductCombobox({
 
   const dropdownOpen = focused && normalizedQuery.length > 0
 
+  const updateDropdownRect = useCallback(() => {
+    const rect = inputRef.current?.getBoundingClientRect()
+    setDropdownRect(rect ?? null)
+  }, [])
+
+  useEffect(() => {
+    if (!portalDropdown || !dropdownOpen) {
+      return
+    }
+
+    updateDropdownRect()
+    window.addEventListener("resize", updateDropdownRect)
+    window.addEventListener("scroll", updateDropdownRect, true)
+
+    return () => {
+      window.removeEventListener("resize", updateDropdownRect)
+      window.removeEventListener("scroll", updateDropdownRect, true)
+    }
+  }, [dropdownOpen, portalDropdown, updateDropdownRect])
+
   function selectProduct(product: Product) {
     onSelect(product)
     setQuery("")
@@ -54,6 +78,12 @@ export function ProductCombobox({
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault()
+      setFocused(false)
+      return
+    }
+
     if (event.key !== "Enter") {
       return
     }
@@ -75,34 +105,78 @@ export function ProductCombobox({
         value={query}
         disabled={disabled}
         onBlur={() => window.setTimeout(() => setFocused(false), 120)}
-        onChange={(event) => setQuery(event.target.value)}
-        onFocus={() => setFocused(true)}
+        onChange={(event) => {
+          setQuery(event.target.value)
+          updateDropdownRect()
+        }}
+        onFocus={() => {
+          setFocused(true)
+          updateDropdownRect()
+        }}
         onKeyDown={handleKeyDown}
       />
 
-      {dropdownOpen && (
-        <div className="absolute left-0 right-0 top-11 z-50 rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10">
-          {results.length > 0 ? (
-            <ScrollArea style={{ height: Math.min(results.length * 66, 320) }}>
-              <div className="flex flex-col gap-1">
-                {results.map((product) => (
-                  <ProductComboboxRow
-                    key={product.code}
-                    product={product}
-                    onSelect={() => selectProduct(product)}
-                  />
-                ))}
-              </div>
-            </ScrollArea>
-          ) : (
-            <Empty className="py-4">
-              <EmptyHeader>
-                <EmptyTitle>Ничего не найдено</EmptyTitle>
-                <EmptyDescription>Попробуйте название, код или артикул.</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          )}
-        </div>
+      {dropdownOpen &&
+        (portalDropdown && dropdownRect && typeof document !== "undefined"
+          ? createPortal(
+              <ProductComboboxDropdown
+                results={results}
+                onSelect={selectProduct}
+                className="fixed z-[9999]"
+                style={{
+                  left: dropdownRect.left,
+                  top: dropdownRect.bottom + 6,
+                  width: dropdownRect.width,
+                }}
+              />,
+              document.body
+            )
+          : (
+            <ProductComboboxDropdown
+              results={results}
+              onSelect={selectProduct}
+              className="absolute left-0 right-0 top-11 z-50"
+            />
+          ))}
+    </div>
+  )
+}
+
+function ProductComboboxDropdown({
+  results,
+  onSelect,
+  className,
+  style,
+}: {
+  results: Product[]
+  onSelect: (product: Product) => void
+  className?: string
+  style?: React.CSSProperties
+}) {
+  return (
+    <div
+      className={`rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 ${className ?? ""}`}
+      style={style}
+    >
+      {results.length > 0 ? (
+        <ScrollArea style={{ height: Math.min(results.length * 66, 320) }}>
+          <div className="flex flex-col gap-1">
+            {results.map((product) => (
+              <ProductComboboxRow
+                key={product.code}
+                product={product}
+                onSelect={() => onSelect(product)}
+              />
+            ))}
+          </div>
+        </ScrollArea>
+      ) : (
+        <Empty className="py-4">
+          <EmptyHeader>
+            <EmptyTitle>Ничего не найдено</EmptyTitle>
+            <EmptyDescription>Попробуйте название, код или артикул.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       )}
     </div>
   )
@@ -115,7 +189,7 @@ function ProductComboboxRow({
   product: Product
   onSelect: () => void
 }) {
-  const hasStockProblem = product.available < 0 || product.stock < 0
+  const hasStockProblem = product.stock < 0
 
   return (
     <button
@@ -139,7 +213,7 @@ function ProductComboboxRow({
         <span className="text-xs font-medium">{formatMoney(product.salePrice)}</span>
         <span className="flex gap-1">
           <Badge variant={hasStockProblem ? "destructive" : "outline"} className="px-1.5 py-0 text-xs">
-            {formatNumber(product.available)}
+            Остаток {formatNumber(product.stock)}
           </Badge>
           {product.salePrice === 0 && (
             <Badge className="border-amber-200 bg-amber-50 px-1.5 py-0 text-xs text-amber-800">

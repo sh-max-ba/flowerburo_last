@@ -1,55 +1,84 @@
 "use client"
 
-import { useMemo, useState, useTransition } from "react"
+import { useEffect, useMemo, useState, useTransition } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
   AlertTriangleIcon,
   BanknoteIcon,
   BoxesIcon,
+  ChevronsUpDownIcon,
   CheckCircle2Icon,
   ClipboardListIcon,
+  PackageCheckIcon,
+  DownloadIcon,
   EyeIcon,
+  FileSpreadsheetIcon,
   HistoryIcon,
   KeyRoundIcon,
   LogOutIcon,
   MenuIcon,
   MinusCircleIcon,
+  MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
   PlusCircleIcon,
   ReceiptTextIcon,
   SearchIcon,
+  SettingsIcon,
+  TagsIcon,
   Trash2Icon,
+  UploadIcon,
   UserCheckIcon,
   UserXIcon,
-  UsersIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import {
   cancelOrderAction,
+  applyWarehouseImportAction,
   cashInAction,
   cashOutAction,
   changeUserPasswordAction,
+  clearProductCategoryAction,
   closeDeliveredOrderAction,
   closeShiftAction,
   completePickupOrderAction,
   createOrderAction,
   createSaleAction,
+  createStockDocumentAction,
   createUserAction,
   deleteProductAction,
   handOrderToCourierAction,
   markOrderReadyAction,
   openShiftAction,
-  replenishProductStockAction,
+  previewWarehouseImportAction,
+  renameProductCategoryAction,
+  saveStockDocumentDraftAction,
   saveProductAction,
+  saveSupplierAction,
+  setSupplierActiveAction,
   setUserActiveAction,
   startOrderWorkAction,
   updateUserAction,
-  writeOffProductStockAction,
 } from "@/app/actions"
 import { logoutAction } from "@/app/auth-actions"
-import type { CurrentUser, DashboardData, Order, OrderStatus, PaymentMethod, Product, UserRole } from "@/lib/db"
+import type {
+  CurrentUser,
+  CustomerOption,
+  DashboardData,
+  Order,
+  OrderStatus,
+  PaymentMethod,
+  Product,
+  Supplier,
+  StockDocumentType,
+  UserRole,
+  WarehouseImportAction,
+  WarehouseImportPreview,
+} from "@/lib/db"
+import { toDatetimeLocalValue } from "@/lib/datetime"
 import { getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
+import { calculateCommercialTotals, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
 import { formatMoney } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -63,7 +92,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -72,6 +101,14 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import {
   Field,
@@ -83,7 +120,15 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Separator } from "@/components/ui/separator"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
   SelectContent,
@@ -127,22 +172,32 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { ShiftCloseSummary } from "@/components/shifts/shift-pages"
+import { StockActProductPicker } from "@/components/stock/stock-act-product-picker"
 import { ProductCombobox } from "@/components/products/product-combobox"
 import {
   addProductToLineItems,
   ProductLineItems,
-  getLineItemsTotal,
   type ProductLineItem,
   validateProductLineItems,
 } from "@/components/products/product-line-items"
 
-export type Section = "stock" | "sales" | "shifts" | "orders" | "history" | "users"
+export type Section =
+  | "stock"
+  | "sales"
+  | "ready-orders"
+  | "shifts"
+  | "orders"
+  | "clients"
+  | "deals"
+  | "history"
+  | "settings"
 type Result = Awaited<ReturnType<typeof saveProductAction>>
-type StockOperation = { product: Product; type: "replenish" | "writeOff" }
 type CashOperation = "cashIn" | "cashOut"
+type StockDocumentDialogType = StockDocumentType | null
+type CategorySummary = { path: string; label: string; count: number }
 
 const initialOpenShiftForm = {
-  openingCash: "0",
+  openingCash: "",
   openingComment: "",
 }
 
@@ -151,13 +206,21 @@ const initialCloseShiftForm = {
   closingComment: "",
 }
 
-const sections: Array<{ id: Section; label: string; icon: typeof BoxesIcon }> = [
-  { id: "stock", label: "Склад", icon: BoxesIcon },
-  { id: "sales", label: "Касса", icon: ReceiptTextIcon },
-  { id: "shifts", label: "Смены", icon: BanknoteIcon },
-  { id: "orders", label: "Стол заказов", icon: ClipboardListIcon },
-  { id: "history", label: "История", icon: HistoryIcon },
-  { id: "users", label: "Пользователи", icon: UsersIcon },
+const orderRealtimeRefreshMs = 5000
+const allCategoriesValue = "__all__"
+const uncategorizedValue = "__uncategorized__"
+const uncategorizedLabel = "Без категории"
+
+const sections: Array<{ id: Section; label: string; icon: typeof BoxesIcon; href: string }> = [
+  { id: "stock", label: "Склад", icon: BoxesIcon, href: "/stock" },
+  { id: "sales", label: "Касса", icon: ReceiptTextIcon, href: "/cash" },
+  { id: "ready-orders", label: "Готовые заказы", icon: PackageCheckIcon, href: "/ready-orders" },
+  { id: "shifts", label: "Смены", icon: BanknoteIcon, href: "/shifts" },
+  { id: "orders", label: "Стол заказов", icon: ClipboardListIcon, href: "/orders" },
+  { id: "clients", label: "Клиенты", icon: UserCheckIcon, href: "/clients" },
+  { id: "deals", label: "Сделки", icon: TagsIcon, href: "/deals" },
+  { id: "history", label: "История", icon: HistoryIcon, href: "/history" },
+  { id: "settings", label: "Настройки", icon: SettingsIcon, href: "/settings" },
 ]
 
 const roleLabels: Record<UserRole, string> = {
@@ -169,9 +232,55 @@ const roleLabels: Record<UserRole, string> = {
 const userRoleOptions: UserRole[] = ["owner", "manager", "florist"]
 
 const roleSectionIds: Record<UserRole, Section[]> = {
-  owner: ["stock", "sales", "shifts", "orders", "history", "users"],
-  manager: ["sales", "orders"],
+  owner: ["stock", "sales", "ready-orders", "shifts", "orders", "clients", "deals", "history", "settings"],
+  manager: ["sales", "ready-orders", "orders", "clients", "deals"],
   florist: ["orders"],
+}
+
+function normalizeCategoryPath(value: string | null | undefined) {
+  return String(value ?? "").trim()
+}
+
+function getCategoryLabel(value: string | null | undefined) {
+  return normalizeCategoryPath(value) || uncategorizedLabel
+}
+
+function getCategoryValue(value: string | null | undefined) {
+  return normalizeCategoryPath(value) || uncategorizedValue
+}
+
+function padDatePart(value: number) {
+  return String(value).padStart(2, "0")
+}
+
+function dateInputValue(date: Date) {
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`
+}
+
+function buildCategorySummaries(products: Product[]) {
+  const counts = new Map<string, number>()
+
+  for (const product of products) {
+    const value = getCategoryValue(product.categoryPath)
+    counts.set(value, (counts.get(value) ?? 0) + 1)
+  }
+
+  return Array.from(counts.entries())
+    .map(([path, count]) => ({
+      path,
+      label: path === uncategorizedValue ? uncategorizedLabel : path,
+      count,
+    }))
+    .sort((a, b) => {
+      if (a.path === uncategorizedValue) {
+        return 1
+      }
+      if (b.path === uncategorizedValue) {
+        return -1
+      }
+
+      return a.label.localeCompare(b.label, "ru")
+    })
 }
 
 export function Backoffice({
@@ -200,17 +309,28 @@ export function Backoffice({
     visibleSectionIds.includes(initialSection) ? initialSection : visibleSectionIds[0]
   )
   const [query, setQuery] = useState("")
+  const [categoryFilter, setCategoryFilter] = useState(allCategoriesValue)
   const [productSheet, setProductSheet] = useState(false)
+  const [categoriesOpen, setCategoriesOpen] = useState(false)
+  const [clearingCategory, setClearingCategory] = useState<CategorySummary | null>(null)
   const [shiftSheet, setShiftSheet] = useState(false)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [deletingProduct, setDeletingProduct] = useState<Product | null>(null)
-  const [stockOperation, setStockOperation] = useState<StockOperation | null>(null)
+  const [stockDocumentType, setStockDocumentType] = useState<StockDocumentDialogType>(null)
+  const [warehouseImportOpen, setWarehouseImportOpen] = useState(false)
+  const [warehouseImportPreview, setWarehouseImportPreview] = useState<WarehouseImportPreview | null>(null)
   const [cashOperation, setCashOperation] = useState<CashOperation | null>(null)
   const [handoverOrder, setHandoverOrder] = useState<Order | null>(null)
+  const [readyOrdersCount, setReadyOrdersCount] = useState(
+    data.orders.filter((order) => order.status === "Готов").length
+  )
   const [userSheet, setUserSheet] = useState(false)
   const [editingUser, setEditingUser] = useState<CurrentUser | null>(null)
   const [passwordUser, setPasswordUser] = useState<CurrentUser | null>(null)
   const [activeToggleUser, setActiveToggleUser] = useState<CurrentUser | null>(null)
+  const [supplierSheet, setSupplierSheet] = useState(false)
+  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null)
+  const [activeToggleSupplier, setActiveToggleSupplier] = useState<Supplier | null>(null)
   const [isPending, startTransition] = useTransition()
   const displayedSection = visibleSectionIds.includes(section) ? section : visibleSectionIds[0]
   const activeSection = sections.find((item) => item.id === displayedSection)
@@ -219,18 +339,70 @@ export function Backoffice({
     ? data.shiftDetails.find((detail) => detail.shift.id === data.stats.openShift?.id) ?? null
     : null
 
-  const filteredProducts = useMemo(() => {
-    const normalized = query.trim().toLowerCase()
-    if (!normalized) {
-      return data.products
+  useEffect(() => {
+    if (displayedSection !== "orders" && displayedSection !== "sales" && displayedSection !== "ready-orders") {
+      return
     }
 
-    return data.products.filter((product) =>
-      `${product.code} ${product.article} ${product.name} ${product.categoryPath}`
-        .toLowerCase()
-        .includes(normalized)
-    )
-  }, [data.products, query])
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        router.refresh()
+      }
+    }, orderRealtimeRefreshMs)
+
+    return () => window.clearInterval(interval)
+  }, [displayedSection, router])
+
+  useEffect(() => {
+    if (!visibleSectionIds.includes("ready-orders")) {
+      return
+    }
+
+    let mounted = true
+
+    async function loadCount() {
+      try {
+        const response = await fetch("/api/ready-orders/count", { cache: "no-store" })
+        if (!response.ok) {
+          return
+        }
+        const payload = (await response.json()) as { count?: number }
+        if (mounted) {
+          setReadyOrdersCount(payload.count ?? 0)
+        }
+      } catch {
+        // Polling should never break the sidebar.
+      }
+    }
+
+    loadCount()
+    const interval = window.setInterval(loadCount, orderRealtimeRefreshMs)
+
+    return () => {
+      mounted = false
+      window.clearInterval(interval)
+    }
+  }, [visibleSectionIds])
+
+  const categories = useMemo(() => buildCategorySummaries(data.products), [data.products])
+  const activeCategoryFilter =
+    categoryFilter === allCategoriesValue || categories.some((category) => category.path === categoryFilter)
+      ? categoryFilter
+      : allCategoriesValue
+
+  const filteredProducts = useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+
+    return data.products.filter((product) => {
+      const matchesQuery =
+        !normalized ||
+        `${product.code} ${product.article} ${product.name}`.toLowerCase().includes(normalized)
+      const matchesCategory =
+        activeCategoryFilter === allCategoriesValue || getCategoryValue(product.categoryPath) === activeCategoryFilter
+
+      return matchesQuery && matchesCategory
+    })
+  }, [activeCategoryFilter, data.products, query])
 
   function run(action: () => Promise<Result>, after?: () => void) {
     startTransition(async () => {
@@ -275,18 +447,30 @@ export function Backoffice({
             <SidebarGroupLabel>Разделы</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {visibleSections.map((item) => (
-                  <SidebarMenuItem key={item.id}>
-                    <SidebarMenuButton
-                      isActive={displayedSection === item.id}
-                      tooltip={item.label}
-                      onClick={() => setSection(item.id)}
-                    >
-                      <item.icon />
-                      <span>{item.label}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
+                {visibleSections.map((item) => {
+                  const Icon = item.icon
+
+                  return (
+                    <SidebarMenuItem key={item.id}>
+                      <SidebarMenuButton
+                        isActive={displayedSection === item.id}
+                        tooltip={item.label}
+                        onClick={() => {
+                          setSection(item.id)
+                          router.push(item.href)
+                        }}
+                      >
+                        <Icon />
+                        <span>{item.label}</span>
+                        {item.id === "ready-orders" && readyOrdersCount > 0 && (
+                          <Badge className="ml-auto h-5 min-w-5 rounded-full px-1.5 text-xs group-data-[collapsible=icon]:hidden">
+                            {readyOrdersCount}
+                          </Badge>
+                        )}
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
+                })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -369,9 +553,12 @@ export function Backoffice({
             {displayedSection === "stock" && (
               <StockSection
                 products={filteredProducts}
+                categories={categories}
                 negativeStockCount={data.stats.negativeStockCount}
                 query={query}
                 setQuery={setQuery}
+                categoryFilter={activeCategoryFilter}
+                setCategoryFilter={setCategoryFilter}
                 onCreate={() => {
                   setEditingProduct(null)
                   setProductSheet(true)
@@ -380,7 +567,10 @@ export function Backoffice({
                   setEditingProduct(product)
                   setProductSheet(true)
                 }}
-                onStockOperation={(product, type) => setStockOperation({ product, type })}
+                onStockDocument={(type) => setStockDocumentType(type)}
+                onImport={() => setWarehouseImportOpen(true)}
+                onOpenCategories={() => setCategoriesOpen(true)}
+                pending={isPending}
                 onDelete={setDeletingProduct}
               />
             )}
@@ -391,6 +581,12 @@ export function Backoffice({
                 onSaleSubmit={(event, after) => submitForm(event, createSaleAction, after)}
                 onOrderSubmit={(event, after) => submitForm(event, createOrderAction, after)}
                 onCashOperation={setCashOperation}
+              />
+            )}
+            {displayedSection === "ready-orders" && (
+              <ReadyOrdersSection
+                data={data}
+                pending={isPending}
                 onPickup={(order, event) => {
                   event.preventDefault()
                   const formData = new FormData(event.currentTarget)
@@ -413,21 +609,31 @@ export function Backoffice({
               />
             )}
             {displayedSection === "history" && <HistorySection data={data} />}
-            {displayedSection === "users" && (
-              <UsersSection
+            {displayedSection === "settings" && (
+              <SettingsSection
                 users={data.users}
+                suppliers={data.suppliers}
                 currentUserId={user.id}
                 pending={isPending}
-                onCreate={() => {
+                onCreateUser={() => {
                   setEditingUser(null)
                   setUserSheet(true)
                 }}
-                onEdit={(targetUser) => {
+                onEditUser={(targetUser) => {
                   setEditingUser(targetUser)
                   setUserSheet(true)
                 }}
                 onPassword={setPasswordUser}
-                onToggleActive={setActiveToggleUser}
+                onToggleUserActive={setActiveToggleUser}
+                onCreateSupplier={() => {
+                  setEditingSupplier(null)
+                  setSupplierSheet(true)
+                }}
+                onEditSupplier={(supplier) => {
+                  setEditingSupplier(supplier)
+                  setSupplierSheet(true)
+                }}
+                onToggleSupplierActive={setActiveToggleSupplier}
               />
             )}
           </div>
@@ -435,8 +641,10 @@ export function Backoffice({
       </SidebarInset>
 
       <ProductSheet
+        key={productSheet ? editingProduct?.code ?? "create-product" : "product-sheet-closed"}
         open={productSheet}
         product={editingProduct}
+        categories={categories}
         pending={isPending}
         onOpenChange={setProductSheet}
         onSubmit={(event) =>
@@ -446,11 +654,20 @@ export function Backoffice({
           })
         }
       />
+      <CategoriesDialog
+        open={categoriesOpen}
+        categories={categories.filter((category) => category.path !== uncategorizedValue)}
+        pending={isPending}
+        onOpenChange={setCategoriesOpen}
+        onRename={(event) => submitForm(event, renameProductCategoryAction)}
+        onClear={setClearingCategory}
+      />
       <ShiftSheet
         open={shiftSheet}
         currentUserId={user.id}
         currentUserName={user.name}
         currentUserRole={user.role}
+        defaultOpeningCash={data.stats.defaultOpeningCash}
         activeFlorists={activeFlorists}
         openShift={data.stats.openShift}
         openShiftDetails={openShiftDetails}
@@ -475,17 +692,54 @@ export function Backoffice({
           run(() => handOrderToCourierAction(order.id, formData), () => setHandoverOrder(null))
         }}
       />
-      <StockOperationDialog
-        key={stockOperation ? `${stockOperation.type}-${stockOperation.product.code}` : "stock-operation-closed"}
-        operation={stockOperation}
+      <StockDocumentDialog
+        key={stockDocumentType ?? "stock-document-closed"}
+        type={stockDocumentType}
+        products={data.products}
+        suppliers={data.suppliers.filter((supplier) => supplier.isActive)}
         pending={isPending}
-        onOpenChange={(open) => !open && setStockOperation(null)}
-        onSubmit={(event, operation) => {
-          submitForm(
-            event,
-            operation.type === "replenish" ? replenishProductStockAction : writeOffProductStockAction,
-            () => setStockOperation(null)
-          )
+        onOpenChange={(open) => !open && setStockDocumentType(null)}
+        onSubmit={(event, type) =>
+          submitForm(event, (formData) => createStockDocumentAction(type, formData), () => setStockDocumentType(null))
+        }
+        onSaveDraft={(event, type) =>
+          submitForm(event, (formData) => saveStockDocumentDraftAction(type, formData), () => setStockDocumentType(null))
+        }
+      />
+      <WarehouseImportDialog
+        open={warehouseImportOpen}
+        pending={isPending}
+        preview={warehouseImportPreview}
+        onOpenChange={(open) => {
+          setWarehouseImportOpen(open)
+          if (!open) {
+            setWarehouseImportPreview(null)
+          }
+        }}
+        onPreview={(event) => {
+          event.preventDefault()
+          const formData = new FormData(event.currentTarget)
+          startTransition(async () => {
+            const result = await previewWarehouseImportAction(formData)
+            if (result.ok && "data" in result && result.data) {
+              setWarehouseImportPreview(result.data)
+              toast.success(result.message)
+            } else {
+              toast.error(result.message)
+            }
+          })
+        }}
+        onApply={(importId) => {
+          startTransition(async () => {
+            const result = await applyWarehouseImportAction(importId)
+            if (result.ok && "data" in result && result.data) {
+              setWarehouseImportPreview(result.data)
+              toast.success(result.message)
+              router.refresh()
+            } else {
+              toast.error(result.message)
+            }
+          })
         }}
       />
       <CashOperationDialog
@@ -511,6 +765,24 @@ export function Backoffice({
           submitForm(event, targetUser ? updateUserAction : createUserAction, () => {
             setUserSheet(false)
             setEditingUser(null)
+          })
+        }
+      />
+      <SupplierSheet
+        key={editingSupplier ? `edit-supplier-${editingSupplier.id}` : "create-supplier"}
+        open={supplierSheet}
+        supplier={editingSupplier}
+        pending={isPending}
+        onOpenChange={(open) => {
+          setSupplierSheet(open)
+          if (!open) {
+            setEditingSupplier(null)
+          }
+        }}
+        onSubmit={(event) =>
+          submitForm(event, saveSupplierAction, () => {
+            setSupplierSheet(false)
+            setEditingSupplier(null)
           })
         }
       />
@@ -551,6 +823,32 @@ export function Backoffice({
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog open={Boolean(clearingCategory)} onOpenChange={() => setClearingCategory(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Очистить категорию?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Товары останутся на складе, но категория {clearingCategory?.label ? `«${clearingCategory.label}»` : ""}
+              будет заменена на «{uncategorizedLabel}».
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              render={<Button variant="destructive" disabled={isPending} />}
+              onClick={() => {
+                if (!clearingCategory) {
+                  return
+                }
+                run(() => clearProductCategoryAction(clearingCategory.path), () => setClearingCategory(null))
+              }}
+            >
+              Очистить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={Boolean(activeToggleUser)} onOpenChange={() => setActiveToggleUser(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -582,6 +880,35 @@ export function Backoffice({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <AlertDialog open={Boolean(activeToggleSupplier)} onOpenChange={() => setActiveToggleSupplier(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {activeToggleSupplier?.isActive ? "Отключить поставщика?" : "Включить поставщика?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Отключенный поставщик не будет показан в новых актах пополнения. Старые акты сохранят его название.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              render={<Button variant={activeToggleSupplier?.isActive ? "destructive" : "default"} disabled={isPending} />}
+              onClick={() => {
+                if (!activeToggleSupplier) {
+                  return
+                }
+                run(
+                  () => setSupplierActiveAction(activeToggleSupplier.id, !activeToggleSupplier.isActive),
+                  () => setActiveToggleSupplier(null)
+                )
+              }}
+            >
+              {activeToggleSupplier?.isActive ? "Отключить" : "Включить"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </SidebarProvider>
   )
 }
@@ -590,11 +917,10 @@ function StatsGrid({ data }: { data: DashboardData }) {
   const stats = [
     { label: "Товаров", value: data.stats.productsCount, subtitle: "в активном списке склада" },
     { label: "Низкий остаток", value: data.stats.lowStockCount, subtitle: "нужно проверить закупку" },
-    { label: "В резерве", value: data.stats.reservedCount, subtitle: "позиции в заказах" },
   ]
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       {stats.map((item) => (
         <Card key={item.label} className="rounded-2xl border bg-white">
           <CardHeader>
@@ -610,70 +936,147 @@ function StatsGrid({ data }: { data: DashboardData }) {
 
 function StockSection({
   products,
+  categories,
   negativeStockCount,
   query,
   setQuery,
+  categoryFilter,
+  setCategoryFilter,
   onCreate,
   onEdit,
-  onStockOperation,
+  onStockDocument,
+  onImport,
+  onOpenCategories,
   onDelete,
+  pending,
 }: {
   products: Product[]
+  categories: CategorySummary[]
   negativeStockCount: number
   query: string
   setQuery: (value: string) => void
+  categoryFilter: string
+  setCategoryFilter: (value: string) => void
   onCreate: () => void
   onEdit: (product: Product) => void
-  onStockOperation: (product: Product, type: StockOperation["type"]) => void
+  onStockDocument: (type: StockDocumentType) => void
+  onImport: () => void
+  onOpenCategories: () => void
   onDelete: (product: Product) => void
+  pending: boolean
 }) {
+  const selectedCategory = categories.find((category) => category.path === categoryFilter)
+
   return (
     <Card className="rounded-2xl border bg-white">
-      <CardHeader className="gap-3">
-        <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-          <div>
-            <CardTitle>Склад</CardTitle>
-            <CardDescription>Остаток считается как stock - reserved</CardDescription>
+      <CardHeader>
+        <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
+          <div className="relative min-w-64 flex-1">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="h-10 pl-9"
+              placeholder="Найти товар по названию, коду или артикулу"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
           </div>
-          <Button onClick={onCreate}>
-            <PlusIcon data-icon="inline-start" />
-            Товар
-          </Button>
-        </div>
-        <div className="relative max-w-md">
-          <SearchIcon className="pointer-events-none absolute left-3 top-3 size-4 text-muted-foreground" />
-          <Input
-            className="h-10 pl-9"
-            placeholder="Найти товар по названию, коду или артикулу"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
+          <Select
+            items={[
+              { label: "Все категории", value: allCategoriesValue },
+              ...categories.map((category) => ({
+                label: `${category.label} — ${category.count}`,
+                value: category.path,
+              })),
+            ]}
+            value={categoryFilter}
+              onValueChange={(value) => setCategoryFilter(value ?? allCategoriesValue)}
+            >
+            <SelectTrigger className="h-10 w-full min-w-56 xl:w-72">
+              <SelectValue placeholder="Все категории">
+                {categoryFilter === allCategoriesValue
+                  ? "Все категории"
+                  : selectedCategory
+                    ? `${selectedCategory.label} — ${selectedCategory.count}`
+                    : "Все категории"}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent align="start">
+              <SelectGroup>
+                <SelectItem value={allCategoriesValue}>Все категории</SelectItem>
+                {categories.map((category) => (
+                  <SelectItem key={category.path} value={category.path}>
+                    <span className="max-w-64 truncate">{category.label}</span>
+                    <span className="ml-auto text-xs text-muted-foreground">{category.count}</span>
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <div className="flex flex-wrap gap-2 xl:ml-auto xl:flex-nowrap">
+            <Button className="h-10" onClick={() => onStockDocument("stock_in")} disabled={pending}>
+              <PlusCircleIcon data-icon="inline-start" />
+              Пополнить
+            </Button>
+            <Button className="h-10" variant="outline" onClick={() => onStockDocument("stock_out")} disabled={pending}>
+              <MinusCircleIcon data-icon="inline-start" />
+              Списать
+            </Button>
+            <Button className="h-10" variant="outline" render={<Link href="/stock/acts" />}>
+              <ClipboardListIcon data-icon="inline-start" />
+              Акты склада
+            </Button>
+            <Button className="h-10" onClick={onCreate}>
+              <PlusIcon data-icon="inline-start" />
+              Новый товар
+            </Button>
+            <Button className="h-10" variant="outline" onClick={onOpenCategories} disabled={pending}>
+              <TagsIcon data-icon="inline-start" />
+              Категории
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<Button className="h-10" variant="outline" disabled={pending} />}>
+                <MoreHorizontalIcon data-icon="inline-start" />
+                Действия
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={onImport}>
+                  <UploadIcon />
+                  Импорт XLSX
+                </DropdownMenuItem>
+                <DropdownMenuItem render={<a href="/warehouse/export" />}>
+                  <FileSpreadsheetIcon />
+                  Экспорт XLSX
+                </DropdownMenuItem>
+                <DropdownMenuItem render={<Link href="/warehouse/imports" />}>
+                  <HistoryIcon />
+                  История импортов
+                </DropdownMenuItem>
+                <DropdownMenuItem render={<Link href="/history/stock" />}>
+                  <HistoryIcon />
+                  Движения склада
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <ResponsiveTable
           emptyTitle="Склад пуст"
-          headers={["Товар", "Код", "Остаток", "Резерв", "Цена", ""]}
+          headers={["Код", "Товар", "Категория", "Остаток", "Цена", ""]}
           rows={products.map((product) => [
+            product.code,
             <div key="name" className="min-w-52">
               <div className="font-medium">{product.name}</div>
-              <div className="truncate text-xs text-muted-foreground">{product.categoryPath}</div>
+              <div className="truncate text-xs text-muted-foreground">{product.article || "Артикул не указан"}</div>
             </div>,
-            product.code,
+            <CategoryCell key="category" categoryPath={product.categoryPath} />,
             <StockBadge key="stock" product={product} />,
-            number(product.reserved),
             formatMoney(product.salePrice),
             <div key="actions" className="flex justify-end gap-1">
-              <Button variant="outline" size="sm" onClick={() => onStockOperation(product, "replenish")}>
-                <PlusCircleIcon data-icon="inline-start" />
-                Пополнить
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => onStockOperation(product, "writeOff")}>
-                <MinusCircleIcon data-icon="inline-start" />
-                Списать
-              </Button>
               <Button variant="outline" size="sm" onClick={() => onEdit(product)}>
-                Изм.
+                <PencilIcon data-icon="inline-start" />
+                Редактировать
               </Button>
               <Button variant="ghost" size="icon-sm" onClick={() => onDelete(product)}>
                 <Trash2Icon />
@@ -693,26 +1096,33 @@ function StockSection({
   )
 }
 
+function CategoryCell({ categoryPath }: { categoryPath: string }) {
+  const label = getCategoryLabel(categoryPath)
+  const isEmpty = !normalizeCategoryPath(categoryPath)
+
+  return (
+    <span
+      title={label}
+      className={isEmpty ? "block max-w-56 truncate text-muted-foreground" : "block max-w-56 truncate"}
+    >
+      {label}
+    </span>
+  )
+}
+
 function SalesSection({
   data,
   pending,
   onSaleSubmit,
   onOrderSubmit,
   onCashOperation,
-  onPickup,
-  onHandover,
-  onCloseDelivery,
 }: {
   data: DashboardData
   pending: boolean
   onSaleSubmit: (event: React.FormEvent<HTMLFormElement>, after?: () => void) => void
   onOrderSubmit: (event: React.FormEvent<HTMLFormElement>, after?: () => void) => void
   onCashOperation: (operation: CashOperation) => void
-  onPickup: (order: Order, event: React.FormEvent<HTMLFormElement>) => void
-  onHandover: (order: Order) => void
-  onCloseDelivery: (order: Order) => void
 }) {
-  const readyOrders = data.orders.filter((order) => ["Готов", "Передан курьеру"].includes(order.status))
   const openShift = data.stats.openShift
   const activeShiftDetail = openShift
     ? data.shiftDetails.find((detail) => detail.shift.id === openShift.id) ?? null
@@ -721,7 +1131,7 @@ function SalesSection({
   return (
     <div className="flex flex-col gap-4">
       {!openShift && (
-        <Alert>
+        <Alert className="border-amber-200 bg-amber-50 text-amber-950">
           <AlertTriangleIcon />
           <AlertTitle>Откройте смену для кассовых операций</AlertTitle>
           <AlertDescription>
@@ -733,11 +1143,11 @@ function SalesSection({
         <TabsList className="h-10 w-full justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit">
           <TabsTrigger value="sale">Быстрая продажа</TabsTrigger>
           <TabsTrigger value="order">Новый заказ</TabsTrigger>
-          <TabsTrigger value="ready">Готовые заказы</TabsTrigger>
         </TabsList>
         <TabsContent value="sale">
           <QuickSaleForm
             products={data.products}
+            customers={data.customers}
             pending={pending}
             disabled={!openShift}
             onSubmit={onSaleSubmit}
@@ -746,19 +1156,10 @@ function SalesSection({
         <TabsContent value="order">
           <NewOrderForm
             products={data.products}
+            customers={data.customers}
             pending={pending}
             shiftOpen={Boolean(openShift)}
             onSubmit={onOrderSubmit}
-          />
-        </TabsContent>
-        <TabsContent value="ready">
-          <ReadyOrders
-            orders={readyOrders}
-            shiftOpen={Boolean(openShift)}
-            pending={pending}
-            onPickup={onPickup}
-            onHandover={onHandover}
-            onCloseDelivery={onCloseDelivery}
           />
         </TabsContent>
       </Tabs>
@@ -772,23 +1173,142 @@ function SalesSection({
   )
 }
 
+function CustomerSelector({
+  customers,
+  value,
+  disabled,
+  onValueChange,
+}: {
+  customers: CustomerOption[]
+  value: string
+  disabled?: boolean
+  onValueChange: (value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const selectedCustomer = value === "none"
+    ? null
+    : customers.find((customer) => String(customer.id) === value) ?? null
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full justify-between"
+            disabled={disabled}
+          />
+        }
+      >
+          <span className="truncate">
+            {selectedCustomer
+              ? `${selectedCustomer.name}${selectedCustomer.phone ? ` · ${selectedCustomer.phone}` : ""}`
+              : "Без клиента"}
+          </span>
+          <ChevronsUpDownIcon className="size-4 opacity-60" />
+      </PopoverTrigger>
+      <PopoverContent className="w-(--anchor-width) p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Поиск клиента" />
+          <CommandList>
+            <CommandEmpty>Клиент не найден</CommandEmpty>
+            <CommandGroup>
+              <CommandItem
+                value="Без клиента"
+                data-checked={value === "none"}
+                onSelect={() => {
+                  onValueChange("none")
+                  setOpen(false)
+                }}
+              >
+                Без клиента
+              </CommandItem>
+              {customers.map((customer) => (
+                <CommandItem
+                  key={customer.id}
+                  value={`${customer.name} ${customer.phone}`}
+                  data-checked={value === String(customer.id)}
+                  onSelect={() => {
+                    onValueChange(String(customer.id))
+                    setOpen(false)
+                  }}
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {customer.name}
+                    {customer.phone ? ` · ${customer.phone}` : ""}
+                  </span>
+                  {customer.defaultDiscountPercent > 0 && (
+                    <span className="text-xs text-muted-foreground">{customer.defaultDiscountPercent}%</span>
+                  )}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function QuickSaleForm({
   products,
+  customers,
   pending,
   disabled,
   onSubmit,
 }: {
   products: Product[]
+  customers: CustomerOption[]
   pending: boolean
   disabled: boolean
   onSubmit: (event: React.FormEvent<HTMLFormElement>, after?: () => void) => void
 }) {
   const [items, setItems] = useState<ProductLineItem[]>([])
   const [paymentMethod, setPaymentMethod] = useState("cash")
-  const saleTotal = getLineItemsTotal(items)
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("none")
+  const [saleDiscountType, setSaleDiscountType] = useState<DiscountType>("none")
+  const [saleDiscountValue, setSaleDiscountValue] = useState(0)
+  const [saleDiscountTouched, setSaleDiscountTouched] = useState(false)
+  const selectedCustomer = selectedCustomerId === "none"
+    ? null
+    : customers.find((customer) => String(customer.id) === selectedCustomerId) ?? null
+  const saleTotals = calculateCommercialTotals(items, saleDiscountType, saleDiscountValue)
+  const saleTotal = saleTotals.total
 
   function addProduct(product: Product) {
     setItems((current) => addProductToLineItems(current, product))
+  }
+
+  function resetForm() {
+    setItems([])
+    setSelectedCustomerId("none")
+    setSaleDiscountType("none")
+    setSaleDiscountValue(0)
+    setSaleDiscountTouched(false)
+  }
+
+  function handleCustomerChange(value: string) {
+    const customer = value === "none" ? null : customers.find((current) => String(current.id) === value) ?? null
+    setSelectedCustomerId(value)
+    if (!saleDiscountTouched) {
+      if (customer && customer.defaultDiscountPercent > 0) {
+        setSaleDiscountType("percent")
+        setSaleDiscountValue(customer.defaultDiscountPercent)
+      } else {
+        setSaleDiscountType("none")
+        setSaleDiscountValue(0)
+      }
+    }
+  }
+
+  function handleSaleDiscountTypeChange(value: string) {
+    const nextType = normalizeDiscountType(value)
+    setSaleDiscountTouched(true)
+    setSaleDiscountType(nextType)
+    if (nextType === "none") {
+      setSaleDiscountValue(0)
+    }
   }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -799,7 +1319,7 @@ function QuickSaleForm({
       return
     }
 
-    onSubmit(event, () => setItems([]))
+    onSubmit(event, resetForm)
   }
 
   return (
@@ -820,7 +1340,6 @@ function QuickSaleForm({
                   items={items}
                   disabled={pending}
                   emptyTitle="Корзина пуста"
-                  maxHeightClassName="max-h-[320px]"
                   onItemsChange={setItems}
                 />
               </div>
@@ -834,6 +1353,27 @@ function QuickSaleForm({
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <FieldGroup>
+                <input type="hidden" name="customerId" value={selectedCustomer?.id ?? ""} />
+                <input type="hidden" name="saleDiscountType" value={saleDiscountType} />
+                <input type="hidden" name="saleDiscountValue" value={saleDiscountValue} />
+                <Field>
+                  <FieldLabel>Клиент</FieldLabel>
+                  <CustomerSelector
+                    customers={customers}
+                    value={selectedCustomerId}
+                    disabled={disabled || pending}
+                    onValueChange={handleCustomerChange}
+                  />
+                  {selectedCustomer ? (
+                    <div className="text-xs text-muted-foreground">
+                      Скидка клиента: {selectedCustomer.defaultDiscountPercent}%
+                    </div>
+                  ) : (
+                    <Link href="/clients" className="text-xs font-medium text-primary hover:underline">
+                      Создать клиента
+                    </Link>
+                  )}
+                </Field>
                 <Field>
                   <FieldLabel htmlFor="salePaymentMethod">Оплата</FieldLabel>
                   <select
@@ -856,9 +1396,50 @@ function QuickSaleForm({
                   <Textarea id="sale-note" name="note" disabled={disabled || pending} />
                 </Field>
               </FieldGroup>
-              <div className="rounded-xl border bg-muted/40 p-4">
-                <div className="text-sm text-muted-foreground">Общий итог</div>
-                <div className="text-3xl font-semibold">{formatMoney(saleTotal)}</div>
+              <FieldSet>
+                <FieldLegend>Скидка на чек</FieldLegend>
+                <div className="flex items-end gap-2">
+                  <Field>
+                    <FieldLabel htmlFor="saleDiscountType">Тип</FieldLabel>
+                    <select
+                      id="saleDiscountType"
+                      className="h-8 w-28 rounded-lg border border-input bg-background px-2 text-sm"
+                      value={saleDiscountType}
+                      disabled={disabled || pending}
+                      onChange={(event) => handleSaleDiscountTypeChange(event.target.value)}
+                    >
+                      <option value="none">Без скидки</option>
+                      <option value="percent">%</option>
+                      <option value="amount">Сумма</option>
+                    </select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="saleDiscountValue">Значение</FieldLabel>
+                    <Input
+                      id="saleDiscountValue"
+                      type="number"
+                      step="1"
+                      min="0"
+                      value={saleDiscountValue}
+                      disabled={disabled || pending}
+                      readOnly={saleDiscountType === "none"}
+                      className="w-24 text-right"
+                      onChange={(event) => {
+                        setSaleDiscountTouched(true)
+                        setSaleDiscountValue(Number(event.target.value) || 0)
+                      }}
+                    />
+                  </Field>
+                </div>
+              </FieldSet>
+              <div className="grid gap-2 rounded-xl border bg-muted/40 p-4">
+                <Info label="Товары до скидки" value={formatMoney(saleTotals.itemsTotalBeforeDiscount)} />
+                <Info label="Скидка по позициям" value={formatMoney(saleTotals.itemsDiscountTotal)} />
+                <Info label="Скидка на чек" value={formatMoney(saleTotals.dealDiscountAmount)} />
+                <div>
+                  <div className="text-xs text-muted-foreground">Итого после скидок</div>
+                  <div className="text-3xl font-semibold">{formatMoney(saleTotal)}</div>
+                </div>
               </div>
               <Button className="w-full" type="submit" disabled={pending || disabled || items.length === 0}>
                 <ReceiptTextIcon data-icon="inline-start" />
@@ -928,9 +1509,12 @@ function CashShiftBlock({
       <CardContent className="flex flex-col gap-4">
         {summary ? (
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
-            <CashMetric label="Выручка за смену" value={formatMoney(summary.revenueTotal)} />
+            <CashMetric label="Выручка до скидок" value={formatMoney(summary.revenueBeforeDiscount)} />
+            <CashMetric label="Скидки" value={formatMoney(summary.discountTotal)} />
+            <CashMetric label="Выручка после скидок" value={formatMoney(summary.revenueTotal)} />
             <CashMetric label="Наличные" value={formatMoney(summary.cash)} />
             <CashMetric label="Карта" value={formatMoney(summary.card)} />
+            <CashMetric label="Терминал" value={formatMoney(summary.terminal)} />
             <CashMetric label="Mbank" value={formatMoney(summary.mbank)} />
             <CashMetric label="Optima" value={formatMoney(summary.optima)} />
             <CashMetric label="ЭлСом" value={formatMoney(summary.elsom)} />
@@ -948,12 +1532,15 @@ function CashShiftBlock({
           <div className="mb-2 text-sm font-medium">Последние продажи</div>
           <ResponsiveTable
             emptyTitle="Продаж пока нет"
-            headers={["Дата", "Позиций", "Способ оплаты", "Сумма", "Комментарий"]}
+            headers={["Дата", "Позиций", "До скидки", "Скидка", "Итого", "Способ оплаты", "Клиент", "Комментарий"]}
             rows={sales.map((sale) => [
               dateTime(sale.createdAt),
               sale.itemsCount,
-              getPaymentMethodLabel(sale.paymentMethod),
+              formatMoney(sale.totalBeforeDiscount),
+              formatMoney(sale.discountTotal),
               formatMoney(sale.total),
+              getPaymentMethodLabel(sale.paymentMethod),
+              sale.customerName || "-",
               sale.note || "без комментария",
             ])}
           />
@@ -974,11 +1561,13 @@ function CashMetric({ label, value }: { label: string; value: string }) {
 
 function NewOrderForm({
   products,
+  customers,
   pending,
   shiftOpen,
   onSubmit,
 }: {
   products: Product[]
+  customers: CustomerOption[]
   pending: boolean
   shiftOpen: boolean
   onSubmit: (event: React.FormEvent<HTMLFormElement>, after?: () => void) => void
@@ -990,15 +1579,26 @@ function NewOrderForm({
   const [items, setItems] = useState<ProductLineItem[]>([])
   const [customer, setCustomer] = useState("")
   const [phone, setPhone] = useState("")
-  const [dueAt, setDueAt] = useState("")
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("none")
+  const [orderDiscountType, setOrderDiscountType] = useState<DiscountType>("none")
+  const [orderDiscountValue, setOrderDiscountValue] = useState(0)
+  const [orderDiscountTouched, setOrderDiscountTouched] = useState(false)
+  const [dueDate, setDueDate] = useState("")
+  const [dueTime, setDueTime] = useState("")
   const [address, setAddress] = useState("")
   const [note, setNote] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("cash")
 
-  const itemsTotal = getLineItemsTotal(items)
+  const selectedCustomer = selectedCustomerId === "none"
+    ? null
+    : customers.find((current) => String(current.id) === selectedCustomerId) ?? null
+  const orderTotals = calculateCommercialTotals(items, orderDiscountType, orderDiscountValue)
+  const itemsTotal = orderTotals.total
   const total = itemsTotal + deliveryPrice
   const balance = total - prepaid
   const needsShift = prepaid > 0 && !shiftOpen
+  const prepaidTooHigh = prepaid > total
+  const dueAt = dueDate && dueTime ? `${dueDate}T${dueTime}` : ""
 
   function addProduct(product: Product) {
     setItems((current) => addProductToLineItems(current, product))
@@ -1006,9 +1606,14 @@ function NewOrderForm({
 
   function resetForm() {
     setItems([])
+    setSelectedCustomerId("none")
     setCustomer("")
     setPhone("")
-    setDueAt("")
+    setOrderDiscountType("none")
+    setOrderDiscountValue(0)
+    setOrderDiscountTouched(false)
+    setDueDate("")
+    setDueTime("")
     setDeliveryType("pickup")
     setAddress("")
     setNote("")
@@ -1016,6 +1621,31 @@ function NewOrderForm({
     setCourierPayout(0)
     setPrepaid(0)
     setPaymentMethod("cash")
+  }
+
+  function handleCustomerChange(value: string) {
+    const nextCustomer = value === "none" ? null : customers.find((current) => String(current.id) === value) ?? null
+    setSelectedCustomerId(value)
+    setCustomer(nextCustomer?.name ?? "")
+    setPhone(nextCustomer?.phone ?? "")
+    if (!orderDiscountTouched) {
+      if (nextCustomer && nextCustomer.defaultDiscountPercent > 0) {
+        setOrderDiscountType("percent")
+        setOrderDiscountValue(nextCustomer.defaultDiscountPercent)
+      } else {
+        setOrderDiscountType("none")
+        setOrderDiscountValue(0)
+      }
+    }
+  }
+
+  function handleOrderDiscountTypeChange(value: string) {
+    const nextType = normalizeDiscountType(value)
+    setOrderDiscountTouched(true)
+    setOrderDiscountType(nextType)
+    if (nextType === "none") {
+      setOrderDiscountValue(0)
+    }
   }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -1038,7 +1668,22 @@ function NewOrderForm({
       return
     }
 
+    if (prepaidTooHigh) {
+      event.preventDefault()
+      toast.error("Предоплата не может быть больше итога заказа.")
+      return
+    }
+
     onSubmit(event, resetForm)
+  }
+
+  function setDueDay(offsetDays: number) {
+    const date = new Date()
+    date.setDate(date.getDate() + offsetDays)
+    setDueDate(dateInputValue(date))
+    if (!dueTime) {
+      setDueTime("18:00")
+    }
   }
 
   return (
@@ -1052,6 +1697,27 @@ function NewOrderForm({
             </CardHeader>
             <CardContent>
               <FieldGroup>
+                <input type="hidden" name="customerId" value={selectedCustomer?.id ?? ""} />
+                <input type="hidden" name="orderDiscountType" value={orderDiscountType} />
+                <input type="hidden" name="orderDiscountValue" value={orderDiscountValue} />
+                <Field>
+                  <FieldLabel>Выбор клиента</FieldLabel>
+                  <CustomerSelector
+                    customers={customers}
+                    value={selectedCustomerId}
+                    disabled={pending}
+                    onValueChange={handleCustomerChange}
+                  />
+                  {selectedCustomer ? (
+                    <div className="text-xs text-muted-foreground">
+                      Скидка клиента: {selectedCustomer.defaultDiscountPercent}%
+                    </div>
+                  ) : (
+                    <Link href="/clients" className="text-xs font-medium text-primary hover:underline">
+                      Создать клиента
+                    </Link>
+                  )}
+                </Field>
                 <div className="grid gap-4 md:grid-cols-2">
                   <Field>
                     <FieldLabel htmlFor="customer">Имя клиента</FieldLabel>
@@ -1081,14 +1747,31 @@ function NewOrderForm({
               <FieldGroup>
                 <div className="grid gap-4 md:grid-cols-2">
                   <Field>
-                    <FieldLabel htmlFor="dueAt">Дата / время</FieldLabel>
-                    <Input
-                      id="dueAt"
-                      name="dueAt"
-                      type="datetime-local"
-                      value={dueAt}
-                      onChange={(event) => setDueAt(event.target.value)}
-                    />
+                    <FieldLabel>Дата / время</FieldLabel>
+                    <input type="hidden" name="dueAt" value={dueAt} />
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px]">
+                      <Input
+                        id="dueDate"
+                        type="date"
+                        value={dueDate}
+                        onChange={(event) => setDueDate(event.target.value)}
+                      />
+                      <Input
+                        id="dueTime"
+                        type="time"
+                        step="900"
+                        value={dueTime}
+                        onChange={(event) => setDueTime(event.target.value)}
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => setDueDay(0)}>
+                        Сегодня
+                      </Button>
+                      <Button type="button" variant="outline" size="sm" onClick={() => setDueDay(1)}>
+                        Завтра
+                      </Button>
+                    </div>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="deliveryType">Получение</FieldLabel>
@@ -1135,14 +1818,13 @@ function NewOrderForm({
                 items={items}
                 disabled={pending}
                 emptyTitle="Добавьте товары через поиск"
-                maxHeightClassName="max-h-[320px]"
                 onItemsChange={setItems}
               />
             </CardContent>
           </Card>
         </div>
 
-        <Card className="min-w-0 rounded-2xl border bg-white xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem)]">
+        <Card className="min-w-0 rounded-2xl border bg-white xl:sticky xl:top-20 xl:self-start">
           <CardHeader>
             <CardTitle>Заказ</CardTitle>
             <CardDescription>Доставка, оплата и итог</CardDescription>
@@ -1210,6 +1892,42 @@ function NewOrderForm({
                   </select>
                 </Field>
               </div>
+              <div className="grid gap-3 rounded-lg border bg-background p-3">
+                <div className="text-sm font-medium">Скидка на чек</div>
+                <div className="flex items-end gap-2">
+                  <Field>
+                    <FieldLabel htmlFor="orderDiscountType">Тип</FieldLabel>
+                    <select
+                      id="orderDiscountType"
+                      className="h-8 w-28 rounded-lg border border-input bg-background px-2 text-sm"
+                      value={orderDiscountType}
+                      disabled={pending}
+                      onChange={(event) => handleOrderDiscountTypeChange(event.target.value)}
+                    >
+                      <option value="none">Без скидки</option>
+                      <option value="percent">%</option>
+                      <option value="amount">Сумма</option>
+                    </select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="orderDiscountValue">Значение</FieldLabel>
+                    <Input
+                      id="orderDiscountValue"
+                      type="number"
+                      step="1"
+                      min="0"
+                      value={orderDiscountValue}
+                      disabled={pending}
+                      readOnly={orderDiscountType === "none"}
+                      className="w-24 text-right"
+                      onChange={(event) => {
+                        setOrderDiscountTouched(true)
+                        setOrderDiscountValue(Number(event.target.value) || 0)
+                      }}
+                    />
+                  </Field>
+                </div>
+              </div>
               {needsShift && (
                 <Alert>
                   <AlertTriangleIcon />
@@ -1217,9 +1935,19 @@ function NewOrderForm({
                   <AlertDescription>Предоплату можно принять только при открытой смене.</AlertDescription>
                 </Alert>
               )}
+              {prepaidTooHigh && (
+                <Alert className="border-amber-200 bg-amber-50 text-amber-950">
+                  <AlertTriangleIcon />
+                  <AlertTitle>Предоплата выше итога</AlertTitle>
+                  <AlertDescription>Уменьшите предоплату до суммы заказа после скидок.</AlertDescription>
+                </Alert>
+              )}
               <div className="grid gap-3 rounded-lg border bg-muted/40 p-3">
-                <Info label="Состав" value={formatMoney(itemsTotal)} />
-                <Info label="Итого" value={formatMoney(total)} />
+                <Info label="До скидки" value={formatMoney(orderTotals.itemsTotalBeforeDiscount)} />
+                <Info label="Скидка по позициям" value={formatMoney(orderTotals.itemsDiscountTotal)} />
+                <Info label="Скидка на чек" value={formatMoney(orderTotals.dealDiscountAmount)} />
+                <Info label="Доставка" value={formatMoney(deliveryPrice)} />
+                <Info label="Итого после скидок" value={formatMoney(total)} />
                 <div>
                   <div className="text-xs text-muted-foreground">Остаток</div>
                   <div className="text-3xl font-semibold">{formatMoney(balance)}</div>
@@ -1228,8 +1956,8 @@ function NewOrderForm({
             </FieldSet>
 
             <div className="mt-auto border-t pt-3">
-              <Button className="w-full" type="submit" disabled={pending || needsShift || items.length === 0}>
-                Создать заказ
+              <Button className="w-full" type="submit" disabled={pending || needsShift || prepaidTooHigh || items.length === 0}>
+                Провести заказ
               </Button>
             </div>
           </CardContent>
@@ -1239,148 +1967,185 @@ function NewOrderForm({
   )
 }
 
-function ReadyOrders({
-  orders,
+function ReadyOrdersSection({
+  data,
+  pending,
+  onPickup,
+  onHandover,
+  onCloseDelivery,
+}: {
+  data: DashboardData
+  pending: boolean
+  onPickup: (order: Order, event: React.FormEvent<HTMLFormElement>) => void
+  onHandover: (order: Order) => void
+  onCloseDelivery: (order: Order) => void
+}) {
+  const orders = data.orders.filter((order) => ["Готов", "Передан курьеру"].includes(order.status))
+  const actionCount = orders.filter((order) => order.status === "Готов").length
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex justify-end">
+        <Badge className="w-fit bg-amber-100 text-amber-900 hover:bg-amber-100">
+          {actionCount} ожидают действия
+        </Badge>
+      </div>
+
+      {!orders.length ? (
+        <Empty className="min-h-36 rounded-lg border bg-white py-6">
+          <EmptyHeader>
+            <EmptyTitle>Готовых заказов пока нет</EmptyTitle>
+            <EmptyDescription>Заказы появятся здесь после отметки “Букет готов”.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+          {orders.map((order) => (
+            <ReadyOrderCard
+              key={order.id}
+              order={order}
+              shiftOpen={Boolean(data.stats.openShift)}
+              pending={pending}
+              onPickup={onPickup}
+              onHandover={onHandover}
+              onCloseDelivery={onCloseDelivery}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ReadyOrderCard({
+  order,
   shiftOpen,
   pending,
   onPickup,
   onHandover,
   onCloseDelivery,
 }: {
-  orders: Order[]
+  order: Order
   shiftOpen: boolean
   pending: boolean
   onPickup: (order: Order, event: React.FormEvent<HTMLFormElement>) => void
   onHandover: (order: Order) => void
   onCloseDelivery: (order: Order) => void
 }) {
-  if (!orders.length) {
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>Готовых заказов нет</EmptyTitle>
-          <EmptyDescription>Здесь появятся заказы после отметки флориста.</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    )
-  }
+  const balance = order.total - order.paid
+  const needsPayment = balance > 0
 
   return (
-    <div className="flex flex-col gap-3 pt-3">
-      {orders.map((order) => {
-        const balance = order.total - order.paid
-        const needsPayment = balance > 0
-        const nextAction =
-          order.deliveryType === "pickup"
-            ? needsPayment
-              ? "Принять доплату и выдать клиенту"
-              : "Выдать клиенту"
-            : order.status === "Передан курьеру"
-              ? "Закрыть после доставки"
-              : needsPayment
-                ? "Принять доплату и передать курьеру"
-                : "Передать курьеру"
-        return (
-          <div key={order.id} className="rounded-2xl border bg-white p-4">
-            <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
-              <div className="flex flex-col gap-1">
-                <div className="font-semibold">{order.number || `#${order.id}`} · {order.customer}</div>
-                <div className="text-sm text-muted-foreground">{order.phone || "телефон не указан"}</div>
-                <div className="text-sm">
-                  {deliveryTypeLabel(order.deliveryType)}
-                  {order.address ? ` · ${order.address}` : ""}
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2 md:justify-end">
-                <OrderBadge status={order.status} />
-                {balance <= 0 ? (
-                  <Badge variant="secondary">Сумма закрыта</Badge>
-                ) : (
-                  <Badge variant="destructive">Остаток: {formatMoney(balance)}</Badge>
-                )}
-                {order.deliveryPayoutPaid ? (
-                  <Badge variant="outline">Курьер оплачен</Badge>
-                ) : (
-                  <Badge variant="outline">Курьер не оплачен</Badge>
-                )}
-              </div>
-            </div>
-            <div className="mt-3 rounded-lg bg-muted/50 p-3">
-              <div className="mb-2 text-xs font-medium text-muted-foreground">Состав</div>
-              <div className="flex flex-col gap-1 text-sm">
-                {order.items.map((item) => (
-                  <div key={item.id} className="flex justify-between gap-3">
-                    <span className="truncate">{item.name}</span>
-                    <span className="shrink-0">{number(item.qty)} шт</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="mt-3 grid gap-3 text-sm md:grid-cols-5">
-              <Info label="Итого" value={formatMoney(order.total)} />
-              <Info label="Оплачено" value={formatMoney(order.paid)} />
-              <Info label="Доставка" value={formatMoney(order.deliveryPrice)} />
-              <Info label="Курьеру" value={formatMoney(order.courierPayout)} />
-              <Info label="Выплата" value={order.deliveryPayoutPaid ? "выдана" : "не выдана"} />
-            </div>
-            <div className="mt-3 rounded-lg border bg-muted/30 p-3 text-sm">
-              <span className="text-muted-foreground">Следующее действие: </span>
-              <span className="font-medium">{nextAction}</span>
-            </div>
-            <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-end md:justify-end">
-              {order.deliveryType === "pickup" && order.status === "Готов" && (
-                <form onSubmit={(event) => onPickup(order, event)} className="flex flex-col gap-2 md:flex-row md:items-end">
-                  {needsPayment && (
-                    <>
-                      <Field>
-                        <FieldLabel htmlFor={`pickupAmount-${order.id}`}>Доплата</FieldLabel>
-                        <Input
-                          id={`pickupAmount-${order.id}`}
-                          name="paymentAmount"
-                          type="number"
-                          step="0.01"
-                          defaultValue={balance}
-                          disabled={!shiftOpen}
-                        />
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor={`pickupMethod-${order.id}`}>Оплата</FieldLabel>
-                        <select
-                          id={`pickupMethod-${order.id}`}
-                          name="paymentMethod"
-                          className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
-                          defaultValue="cash"
-                          disabled={!shiftOpen}
-                        >
-                          {paymentMethodOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </Field>
-                    </>
-                  )}
-                  <Button type="submit" disabled={pending || (needsPayment && !shiftOpen)}>
-                    Выдать клиенту
-                  </Button>
-                </form>
-              )}
-              {order.deliveryType === "delivery" && order.status === "Готов" && (
-                <Button onClick={() => onHandover(order)} disabled={pending}>
-                  Передать курьеру
-                </Button>
-              )}
-              {order.status === "Передан курьеру" && (
-                <Button onClick={() => onCloseDelivery(order)} disabled={pending}>
-                  Доставлен / Закрыть
-                </Button>
-              )}
-            </div>
+    <Card className="min-w-0 rounded-lg border bg-white">
+      <CardHeader className="gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle className="truncate text-base">{order.number || `#${order.id}`}</CardTitle>
+            <CardDescription className="truncate">{order.customer || "Клиент не указан"}</CardDescription>
           </div>
-        )
-      })}
-    </div>
+          <ReadyStatusBadge status={order.status} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {balance <= 0 ? (
+            <Badge className="bg-emerald-100 text-emerald-900 hover:bg-emerald-100">Сумма закрыта</Badge>
+          ) : (
+            <Badge
+              className={
+                balance > order.total / 2
+                  ? "bg-red-100 text-red-900 hover:bg-red-100"
+                  : "bg-amber-100 text-amber-900 hover:bg-amber-100"
+              }
+            >
+              Остаток {formatMoney(balance)}
+            </Badge>
+          )}
+          {order.deliveryPayoutPaid ? (
+            <Badge className="bg-emerald-100 text-emerald-900 hover:bg-emerald-100">Курьер оплачен</Badge>
+          ) : (
+            <Badge className="bg-amber-100 text-amber-900 hover:bg-amber-100">Курьер не оплачен</Badge>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col gap-4">
+        <div className="grid gap-3 text-sm">
+          <Info label="Телефон" value={order.phone || "не указан"} />
+          <Info label="Тип" value={deliveryTypeLabel(order.deliveryType)} />
+          {order.deliveryType === "delivery" && <Info label="Адрес" value={order.address || "не указан"} />}
+          <div className="grid grid-cols-2 gap-3">
+            <Info label="К сроку" value={order.dueAt ? dateTime(order.dueAt) : "-"} />
+            <Info label="Готов" value={order.readyAt ? dateTime(order.readyAt) : "-"} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/30 p-3 text-sm md:grid-cols-3">
+          <Info label="До скидки" value={formatMoney(order.totalBeforeDiscount)} />
+          <Info
+            label="Скидка"
+            value={formatMoney(order.itemsDiscountTotal + order.orderDiscountAmount)}
+          />
+          <Info label="Итого" value={formatMoney(order.total)} />
+          <Info label="Оплачено" value={formatMoney(order.paid)} />
+          <Info label="Остаток" value={formatMoney(balance)} />
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 rounded-lg border bg-muted/30 p-3 text-sm">
+          <Info label="Доставка" value={formatMoney(order.deliveryPrice)} />
+          <Info label="Курьеру" value={formatMoney(order.courierPayout)} />
+          <Info label="Выплата" value={order.deliveryPayoutPaid ? "выдана" : "не выдана"} />
+        </div>
+
+        <div className="mt-auto flex flex-col gap-2 border-t pt-3">
+          {order.deliveryType === "pickup" && order.status === "Готов" && (
+            <form onSubmit={(event) => onPickup(order, event)} className="flex flex-col gap-2">
+              {needsPayment && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor={`pickupAmount-${order.id}`}>Доплата</FieldLabel>
+                    <Input
+                      id={`pickupAmount-${order.id}`}
+                      name="paymentAmount"
+                      type="number"
+                      step="0.01"
+                      defaultValue={balance}
+                      disabled={!shiftOpen}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`pickupMethod-${order.id}`}>Оплата</FieldLabel>
+                    <select
+                      id={`pickupMethod-${order.id}`}
+                      name="paymentMethod"
+                      className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
+                      defaultValue="cash"
+                      disabled={!shiftOpen}
+                    >
+                      {paymentMethodOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+              )}
+              <Button type="submit" disabled={pending || (needsPayment && !shiftOpen)}>
+                Выдать клиенту
+              </Button>
+            </form>
+          )}
+          {order.deliveryType === "delivery" && order.status === "Готов" && (
+            <Button onClick={() => onHandover(order)} disabled={pending}>
+              Передать курьеру
+            </Button>
+          )}
+          {order.status === "Передан курьеру" && (
+            <Button onClick={() => onCloseDelivery(order)} disabled={pending}>
+              Доставлен / Закрыть
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -1566,24 +2331,204 @@ function ShiftsSection({
 
 function HistorySection({ data }: { data: DashboardData }) {
   return (
+    <div className="flex flex-col gap-4">
+      <Card className="rounded-2xl border bg-white">
+        <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1.5">
+            <CardTitle>История</CardTitle>
+            <CardDescription>Операции системы</CardDescription>
+          </div>
+          <a href="/history/export" className={buttonVariants({ variant: "outline" })}>
+            <FileSpreadsheetIcon />
+            Скачать XLSX
+          </a>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveTable
+            emptyTitle="История операций пуста"
+            headers={["Дата", "Тип", "Товар", "Кол-во", "Сумма", "Провёл", "Комментарий"]}
+            rows={data.movements.map((movement) => [
+              dateTime(movement.createdAt),
+              movementLabel(movement),
+              movement.productName || movement.productCode || "-",
+              signedNumber(movement.qty),
+              movement.total === null ? "-" : formatMoney(movement.total),
+              movement.userName || "не зафиксирован",
+              movement.note || "-",
+            ])}
+          />
+        </CardContent>
+      </Card>
+      <Card className="rounded-2xl border bg-white">
+        <CardHeader>
+          <CardTitle>Продажи</CardTitle>
+          <CardDescription>До скидки, скидка и итог после скидок</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveTable
+            emptyTitle="Продаж пока нет"
+            headers={["Дата", "До скидки", "Скидка", "Итого", "Способ оплаты", "Клиент"]}
+            rows={data.sales.map((sale) => [
+              dateTime(sale.createdAt),
+              formatMoney(sale.totalBeforeDiscount),
+              formatMoney(sale.discountTotal),
+              formatMoney(sale.total),
+              getPaymentMethodLabel(sale.paymentMethod),
+              sale.customerName || "-",
+            ])}
+          />
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+function SettingsSection({
+  users,
+  suppliers,
+  currentUserId,
+  pending,
+  onCreateUser,
+  onEditUser,
+  onPassword,
+  onToggleUserActive,
+  onCreateSupplier,
+  onEditSupplier,
+  onToggleSupplierActive,
+}: {
+  users: CurrentUser[]
+  suppliers: Supplier[]
+  currentUserId: number
+  pending: boolean
+  onCreateUser: () => void
+  onEditUser: (user: CurrentUser) => void
+  onPassword: (user: CurrentUser) => void
+  onToggleUserActive: (user: CurrentUser) => void
+  onCreateSupplier: () => void
+  onEditSupplier: (supplier: Supplier) => void
+  onToggleSupplierActive: (supplier: Supplier) => void
+}) {
+  return (
+    <Tabs defaultValue="users" className="gap-4">
+      <TabsList className="h-10 w-full justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit">
+        <TabsTrigger value="users">Пользователи</TabsTrigger>
+        <TabsTrigger value="suppliers">Поставщики</TabsTrigger>
+      </TabsList>
+      <TabsContent value="users">
+        <UsersSection
+          users={users}
+          currentUserId={currentUserId}
+          pending={pending}
+          onCreate={onCreateUser}
+          onEdit={onEditUser}
+          onPassword={onPassword}
+          onToggleActive={onToggleUserActive}
+        />
+      </TabsContent>
+      <TabsContent value="suppliers">
+        <SuppliersSection
+          suppliers={suppliers}
+          pending={pending}
+          onCreate={onCreateSupplier}
+          onEdit={onEditSupplier}
+          onToggleActive={onToggleSupplierActive}
+        />
+      </TabsContent>
+    </Tabs>
+  )
+}
+
+function SuppliersSection({
+  suppliers,
+  pending,
+  onCreate,
+  onEdit,
+  onToggleActive,
+}: {
+  suppliers: Supplier[]
+  pending: boolean
+  onCreate: () => void
+  onEdit: (supplier: Supplier) => void
+  onToggleActive: (supplier: Supplier) => void
+}) {
+  return (
     <Card className="rounded-2xl border bg-white">
-      <CardHeader>
-        <CardTitle>История движений</CardTitle>
-        <CardDescription>Импорт, продажи, смены, заказы и ручные изменения</CardDescription>
+      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <CardTitle>Поставщики</CardTitle>
+          <CardDescription>Список для актов пополнения склада</CardDescription>
+        </div>
+        <Button onClick={onCreate} disabled={pending}>
+          <PlusIcon data-icon="inline-start" />
+          Добавить
+        </Button>
       </CardHeader>
       <CardContent>
-        <ResponsiveTable
-          emptyTitle="История пуста"
-          headers={["Дата", "Тип", "Товар", "Кол-во", "Сумма", "Комментарий"]}
-          rows={data.movements.map((movement) => [
-            dateTime(movement.createdAt),
-            movementLabel(movement),
-            movement.productName || movement.productCode || "-",
-            movement.qty === null ? "-" : number(movement.qty),
-            movement.total === null ? "-" : formatMoney(movement.total),
-            movement.note || "-",
-          ])}
-        />
+        {suppliers.length ? (
+          <div className="overflow-x-auto rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Название</TableHead>
+                  <TableHead>Контакт</TableHead>
+                  <TableHead>Телефон</TableHead>
+                  <TableHead>Статус</TableHead>
+                  <TableHead>Комментарий</TableHead>
+                  <TableHead className="text-right">Действия</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {suppliers.map((supplier) => (
+                  <TableRow key={supplier.id}>
+                    <TableCell className="font-medium">{supplier.name}</TableCell>
+                    <TableCell>{supplier.contactName || "-"}</TableCell>
+                    <TableCell>{supplier.phone || "-"}</TableCell>
+                    <TableCell>
+                      <Badge variant={supplier.isActive ? "secondary" : "outline"}>
+                        {supplier.isActive ? "Активен" : "Отключен"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="min-w-56">{supplier.comment || "-"}</TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" size="icon-sm" onClick={() => onEdit(supplier)} disabled={pending}>
+                          <PencilIcon />
+                          <span className="sr-only">Редактировать</span>
+                        </Button>
+                        <Button
+                          variant={supplier.isActive ? "outline" : "default"}
+                          size="sm"
+                          onClick={() => onToggleActive(supplier)}
+                          disabled={pending}
+                        >
+                          {supplier.isActive ? (
+                            <UserXIcon data-icon="inline-start" />
+                          ) : (
+                            <UserCheckIcon data-icon="inline-start" />
+                          )}
+                          {supplier.isActive ? "Отключить" : "Включить"}
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>Поставщиков нет</EmptyTitle>
+              <EmptyDescription>Добавьте поставщика для актов пополнения.</EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button onClick={onCreate}>
+                <PlusIcon data-icon="inline-start" />
+                Добавить поставщика
+              </Button>
+            </EmptyContent>
+          </Empty>
+        )}
       </CardContent>
     </Card>
   )
@@ -1805,6 +2750,79 @@ function UserSheet({
   )
 }
 
+function SupplierSheet({
+  open,
+  supplier,
+  pending,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean
+  supplier: Supplier | null
+  pending: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
+}) {
+  const [isActive, setIsActive] = useState(supplier?.isActive ?? true)
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent className="overflow-y-auto sm:max-w-lg">
+        <SheetHeader>
+          <SheetTitle>{supplier ? "Редактировать поставщика" : "Новый поставщик"}</SheetTitle>
+          <SheetDescription>Отключенные поставщики не показываются в новых актах пополнения.</SheetDescription>
+        </SheetHeader>
+        <form onSubmit={onSubmit} className="flex flex-1 flex-col">
+          <div className="px-4">
+            <FieldGroup>
+              {supplier && <input type="hidden" name="id" value={supplier.id} />}
+              <input type="hidden" name="isActive" value={isActive ? "1" : "0"} />
+              <Field>
+                <FieldLabel htmlFor="supplier-name">Название</FieldLabel>
+                <Input id="supplier-name" name="name" defaultValue={supplier?.name} disabled={pending} required />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="supplier-contact-name">Контактное лицо</FieldLabel>
+                <Input
+                  id="supplier-contact-name"
+                  name="contactName"
+                  defaultValue={supplier?.contactName}
+                  disabled={pending}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="supplier-phone">Телефон</FieldLabel>
+                <Input id="supplier-phone" name="phone" defaultValue={supplier?.phone} disabled={pending} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="supplier-comment">Комментарий</FieldLabel>
+                <Textarea id="supplier-comment" name="comment" defaultValue={supplier?.comment} disabled={pending} />
+              </Field>
+              <Field orientation="horizontal">
+                <Checkbox
+                  id="supplier-is-active"
+                  checked={isActive}
+                  onCheckedChange={(checked) => setIsActive(checked === true)}
+                  disabled={pending}
+                />
+                <FieldContent>
+                  <FieldLabel htmlFor="supplier-is-active">Активен</FieldLabel>
+                  <FieldDescription>Активный поставщик доступен для выбора в акте пополнения.</FieldDescription>
+                </FieldContent>
+              </Field>
+            </FieldGroup>
+          </div>
+          <SheetFooter>
+            <Button type="submit" disabled={pending}>
+              Сохранить
+            </Button>
+          </SheetFooter>
+        </form>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
 function PasswordDialog({
   user,
   pending,
@@ -1868,16 +2886,21 @@ function PasswordDialog({
 function ProductSheet({
   open,
   product,
+  categories,
   pending,
   onOpenChange,
   onSubmit,
 }: {
   open: boolean
   product: Product | null
+  categories: CategorySummary[]
   pending: boolean
   onOpenChange: (open: boolean) => void
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
 }) {
+  const [categoryPath, setCategoryPath] = useState(product?.categoryPath ?? "")
+  const selectableCategories = categories.filter((category) => category.path !== uncategorizedValue)
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="overflow-y-auto sm:max-w-lg">
@@ -1896,29 +2919,46 @@ function ProductSheet({
                 <FieldLabel htmlFor="name">Название</FieldLabel>
                 <Input id="name" name="name" defaultValue={product?.name} required />
               </Field>
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field>
-                  <FieldLabel htmlFor="stock">Stock</FieldLabel>
-                  <Input id="stock" name="stock" type="number" step="0.01" defaultValue={product?.stock ?? 0} />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="reserved">Reserved</FieldLabel>
-                  <Input id="reserved" name="reserved" type="number" step="0.01" defaultValue={product?.reserved ?? 0} />
-                </Field>
-              </div>
+              <input type="hidden" name="stock" value={product?.stock ?? 0} />
+              <input type="hidden" name="reserved" value={product?.reserved ?? 0} />
+              <input type="hidden" name="expected" value={product?.expected ?? 0} />
               <div className="grid gap-4 md:grid-cols-2">
                 <Field>
                   <FieldLabel htmlFor="costPrice">Закупка</FieldLabel>
-                  <Input id="costPrice" name="costPrice" type="number" step="0.01" defaultValue={product?.costPrice ?? 0} />
+                  <Input
+                    id="costPrice"
+                    name="costPrice"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    defaultValue={product?.costPrice ?? 0}
+                  />
                 </Field>
                 <Field>
                   <FieldLabel htmlFor="salePrice">Цена</FieldLabel>
-                  <Input id="salePrice" name="salePrice" type="number" step="0.01" defaultValue={product?.salePrice ?? 0} />
+                  <Input
+                    id="salePrice"
+                    name="salePrice"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    defaultValue={product?.salePrice ?? 0}
+                  />
                 </Field>
               </div>
               <Field>
                 <FieldLabel htmlFor="categoryPath">Категория</FieldLabel>
-                <Input id="categoryPath" name="categoryPath" defaultValue={product?.categoryPath} />
+                <CategoryCombobox
+                  id="categoryPath"
+                  name="categoryPath"
+                  value={categoryPath}
+                  categories={selectableCategories}
+                  disabled={pending}
+                  onChange={setCategoryPath}
+                />
+                <FieldDescription>
+                  {categoryPath ? `Текущая категория: ${categoryPath}` : uncategorizedLabel}
+                </FieldDescription>
               </Field>
               <div className="grid gap-4 md:grid-cols-2">
                 <Field>
@@ -1930,10 +2970,6 @@ function ProductSheet({
                   <Input id="unit" name="unit" defaultValue={product?.unit ?? "шт"} />
                 </Field>
               </div>
-              <Field>
-                <FieldLabel htmlFor="expected">Ожидается</FieldLabel>
-                <Input id="expected" name="expected" type="number" step="0.01" defaultValue={product?.expected ?? 0} />
-              </Field>
             </FieldGroup>
           </div>
           <SheetFooter>
@@ -1947,11 +2983,209 @@ function ProductSheet({
   )
 }
 
+function CategoryCombobox({
+  id,
+  name,
+  value,
+  categories,
+  disabled,
+  onChange,
+}: {
+  id: string
+  name: string
+  value: string
+  categories: CategorySummary[]
+  disabled: boolean
+  onChange: (value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const normalized = normalizeCategoryPath(value)
+
+  return (
+    <div className="flex flex-col gap-2">
+      <input type="hidden" id={id} name={name} value={normalized} />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full justify-between font-normal"
+              disabled={disabled}
+            />
+          }
+        >
+          <span className={normalized ? "truncate" : "truncate text-muted-foreground"}>
+            {normalized || uncategorizedLabel}
+          </span>
+          <ChevronsUpDownIcon className="size-4 opacity-60" />
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-(--anchor-width) p-0">
+          <Command>
+            <CommandInput
+              placeholder="Выберите или введите категорию"
+              value={value}
+              onValueChange={onChange}
+            />
+            <CommandList>
+              <CommandEmpty>Новая категория будет сохранена при отправке формы.</CommandEmpty>
+              <CommandGroup>
+                <CommandItem
+                  value={uncategorizedLabel}
+                  data-checked={!normalized}
+                  onSelect={() => {
+                    onChange("")
+                    setOpen(false)
+                  }}
+                >
+                  <span className="text-muted-foreground">{uncategorizedLabel}</span>
+                </CommandItem>
+                {categories.map((category) => (
+                  <CommandItem
+                    key={category.path}
+                    value={category.path}
+                    data-checked={normalized === category.path}
+                    onSelect={() => {
+                      onChange(category.path)
+                      setOpen(false)
+                    }}
+                  >
+                    <span className="truncate">{category.label}</span>
+                    <span className="ml-auto text-xs text-muted-foreground">{category.count}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+}
+
+function CategoriesDialog({
+  open,
+  categories,
+  pending,
+  onOpenChange,
+  onRename,
+  onClear,
+}: {
+  open: boolean
+  categories: CategorySummary[]
+  pending: boolean
+  onOpenChange: (open: boolean) => void
+  onRename: (event: React.FormEvent<HTMLFormElement>) => void
+  onClear: (category: CategorySummary) => void
+}) {
+  const [editing, setEditing] = useState<CategorySummary | null>(null)
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        onOpenChange(nextOpen)
+        if (!nextOpen) {
+          setEditing(null)
+        }
+      }}
+    >
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Категории склада</DialogTitle>
+          <DialogDescription>
+            Переименование объединит товары, если новая категория уже существует.
+          </DialogDescription>
+        </DialogHeader>
+        {categories.length === 0 ? (
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>Категорий пока нет</EmptyTitle>
+              <EmptyDescription>Товары без категории отображаются как «{uncategorizedLabel}».</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Категория</TableHead>
+                  <TableHead>Товаров</TableHead>
+                  <TableHead className="text-right">Действия</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {categories.map((category) => (
+                  <TableRow key={category.path}>
+                    <TableCell className="max-w-96">
+                      <span title={category.label} className="block truncate font-medium">
+                        {category.label}
+                      </span>
+                    </TableCell>
+                    <TableCell>{category.count}</TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" size="sm" onClick={() => setEditing(category)} disabled={pending}>
+                          Переименовать
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => onClear(category)} disabled={pending}>
+                          Очистить
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {editing && (
+          <form
+            key={editing.path}
+            onSubmit={(event) => {
+              onRename(event)
+              setEditing(null)
+            }}
+            className="rounded-lg border bg-muted/30 p-3"
+          >
+            <FieldGroup>
+              <input type="hidden" name="oldName" value={editing.path} />
+              <Field>
+                <FieldLabel htmlFor="new-category-name">Новое имя</FieldLabel>
+                <Input
+                  id="new-category-name"
+                  name="newName"
+                  defaultValue={editing.label}
+                  disabled={pending}
+                  required
+                />
+                <FieldDescription>
+                  Если такая категория уже есть, товары будут объединены в одну категорию.
+                </FieldDescription>
+              </Field>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setEditing(null)} disabled={pending}>
+                  Отмена
+                </Button>
+                <Button type="submit" disabled={pending}>
+                  Сохранить
+                </Button>
+              </div>
+            </FieldGroup>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function ShiftSheet({
   open,
   currentUserId,
   currentUserName,
   currentUserRole,
+  defaultOpeningCash,
   activeFlorists,
   openShift,
   openShiftDetails,
@@ -1963,6 +3197,7 @@ function ShiftSheet({
   currentUserId: number
   currentUserName: string
   currentUserRole: UserRole
+  defaultOpeningCash: number
   activeFlorists: CurrentUser[]
   openShift: DashboardData["stats"]["openShift"]
   openShiftDetails: DashboardData["shiftDetails"][number] | null
@@ -1992,6 +3227,7 @@ function ShiftSheet({
           currentUserId={currentUserId}
           currentUserName={currentUserName}
           currentUserRole={currentUserRole}
+          defaultOpeningCash={defaultOpeningCash}
           activeFlorists={activeFlorists}
           openShift={openShift}
           openShiftDetails={openShiftDetails}
@@ -2007,6 +3243,7 @@ function ShiftSheetForm({
   currentUserId,
   currentUserName,
   currentUserRole,
+  defaultOpeningCash,
   activeFlorists,
   openShift,
   openShiftDetails,
@@ -2016,27 +3253,47 @@ function ShiftSheetForm({
   currentUserId: number
   currentUserName: string
   currentUserRole: UserRole
+  defaultOpeningCash: number
   activeFlorists: CurrentUser[]
   openShift: DashboardData["stats"]["openShift"]
   openShiftDetails: DashboardData["shiftDetails"][number] | null
   pending: boolean
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
 }) {
-  const [openForm, setOpenForm] = useState(initialOpenShiftForm)
+  const [openForm, setOpenForm] = useState({
+    ...initialOpenShiftForm,
+    openingCash: defaultOpeningCash.toString(),
+  })
   const [closeForm, setCloseForm] = useState({
     ...initialCloseShiftForm,
     closingCash: openShift?.expectedCash?.toString() ?? "",
   })
   const [openNightShift, setOpenNightShift] = useState(false)
   const [nightFloristId, setNightFloristId] = useState("")
+  const openingCash = Number(openForm.openingCash || 0)
+  const openingDifference = openingCash - defaultOpeningCash
+  const needsOpeningComment = !openShift && Math.abs(openingDifference) >= 0.01
   const closingCash = Number(closeForm.closingCash || 0)
   const difference = closingCash - (openShift?.expectedCash ?? 0)
+  const needsClosingComment = Boolean(openShift) && Math.abs(difference) >= 0.01
   const canOpenNightShift =
     currentUserRole === "manager" &&
     openShift?.type === "day" &&
     openShift.userId === currentUserId
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    if (needsOpeningComment && !openForm.openingComment.trim()) {
+      event.preventDefault()
+      toast.error("Укажите комментарий, если начальная наличка отличается от прошлой закрытой смены.")
+      return
+    }
+
+    if (needsClosingComment && !closeForm.closingComment.trim()) {
+      event.preventDefault()
+      toast.error("Укажите комментарий, если фактическая наличка отличается от ожидаемой.")
+      return
+    }
+
     if (openNightShift && !closeForm.closingCash.trim()) {
       event.preventDefault()
       toast.error("Введите фактическую наличку для открытия ночной смены.")
@@ -2077,7 +3334,17 @@ function ShiftSheetForm({
                 }
                 required
               />
+              <FieldDescription>
+                Ожидается по прошлой закрытой смене: {formatMoney(defaultOpeningCash)}
+              </FieldDescription>
             </Field>
+            {needsOpeningComment && (
+              <Alert className="border-amber-200 bg-amber-50 text-amber-950">
+                <AlertTriangleIcon />
+                <AlertTitle>Начальная наличка отличается</AlertTitle>
+                <AlertDescription>Добавьте комментарий к открытию смены.</AlertDescription>
+              </Alert>
+            )}
             <Field>
               <FieldLabel htmlFor="opening-note">Комментарий</FieldLabel>
               <Textarea
@@ -2087,6 +3354,7 @@ function ShiftSheetForm({
                 onChange={(event) =>
                   setOpenForm((current) => ({ ...current, openingComment: event.target.value }))
                 }
+                required={needsOpeningComment}
               />
             </Field>
           </>
@@ -2132,7 +3400,13 @@ function ShiftSheetForm({
                 onChange={(event) =>
                   setCloseForm((current) => ({ ...current, closingComment: event.target.value }))
                 }
+                required={needsClosingComment}
               />
+              {needsClosingComment && (
+                <FieldDescription>
+                  Комментарий обязателен, потому что факт отличается от ожидаемой кассы.
+                </FieldDescription>
+              )}
             </Field>
             {canOpenNightShift && (
               <FieldSet>
@@ -2234,6 +3508,11 @@ function CourierSheet({
                   </Alert>
                 )}
                 <div className="grid gap-3 rounded-lg border p-3 md:grid-cols-2">
+                  <Info label="До скидки" value={formatMoney(order.totalBeforeDiscount)} />
+                  <Info
+                    label="Скидка"
+                    value={formatMoney(order.itemsDiscountTotal + order.orderDiscountAmount)}
+                  />
                   <Info label="Итого" value={formatMoney(order.total)} />
                   <Info label="Оплачено" value={formatMoney(order.paid)} />
                   <Info label="Остаток" value={formatMoney(balance)} />
@@ -2300,88 +3579,454 @@ function CourierSheet({
   )
 }
 
-function StockOperationDialog({
-  operation,
+function WarehouseImportDialog({
+  open,
   pending,
+  preview,
   onOpenChange,
-  onSubmit,
+  onPreview,
+  onApply,
 }: {
-  operation: StockOperation | null
+  open: boolean
   pending: boolean
+  preview: WarehouseImportPreview | null
   onOpenChange: (open: boolean) => void
-  onSubmit: (event: React.FormEvent<HTMLFormElement>, operation: StockOperation) => void
+  onPreview: (event: React.FormEvent<HTMLFormElement>) => void
+  onApply: (importId: number) => void
 }) {
-  const [qty, setQty] = useState("1")
-  const isWriteOff = operation?.type === "writeOff"
-  const product = operation?.product ?? null
-  const nextStock = product ? product.stock + (isWriteOff ? -Number(qty || 0) : Number(qty || 0)) : 0
+  const hasErrors = Boolean(preview && preview.errorCount > 0)
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    if (!operation) {
-      event.preventDefault()
-      return
-    }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[92vh] w-[calc(100vw-2rem)] max-w-[1400px] flex-col overflow-hidden sm:max-w-[1400px]">
+        <DialogHeader>
+          <DialogTitle>Импорт склада XLSX</DialogTitle>
+          <DialogDescription>Загрузите файл, проверьте предпросмотр и примените изменения.</DialogDescription>
+        </DialogHeader>
 
-    const parsedQty = Number(qty)
-    if (!Number.isInteger(parsedQty) || parsedQty < 1) {
-      event.preventDefault()
-      toast.error("Количество должно быть целым числом от 1.")
-      return
-    }
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap gap-2">
+            <a href="/warehouse/template" className={buttonVariants({ variant: "outline" })}>
+              <DownloadIcon data-icon="inline-start" />
+              Скачать шаблон
+            </a>
+            <Link href="/warehouse/imports" className={buttonVariants({ variant: "outline" })}>
+              <HistoryIcon data-icon="inline-start" />
+              История импортов
+            </Link>
+          </div>
 
-    onSubmit(event, operation)
+          <form onSubmit={onPreview} className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3 sm:flex-row sm:items-end">
+            <Field className="flex-1">
+              <FieldLabel htmlFor="warehouse-import-file">Файл XLSX</FieldLabel>
+              <Input id="warehouse-import-file" name="file" type="file" accept=".xlsx" required disabled={pending} />
+            </Field>
+            <Button type="submit" disabled={pending}>
+              <UploadIcon data-icon="inline-start" />
+              Предпросмотр
+            </Button>
+          </form>
+
+          {hasErrors && (
+            <Alert variant="destructive">
+              <AlertTriangleIcon />
+              <AlertTitle>В файле есть ошибки</AlertTitle>
+              <AlertDescription>Импорт нельзя применить. Исправьте XLSX и загрузите его снова.</AlertDescription>
+            </Alert>
+          )}
+
+          {preview && (
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                <ImportStat label="Строк" value={preview.totalRows} />
+                <ImportStat label="Новых" value={preview.createdCount} />
+                <ImportStat label="Обновлений" value={preview.updatedCount} />
+                <ImportStat label="Без изменений" value={preview.unchangedCount} />
+                <ImportStat label="Ошибок" value={preview.errorCount} />
+              </div>
+
+              <div className="max-w-full overflow-x-auto rounded-lg border">
+                <Table className="min-w-[1120px] text-sm">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-20">Строка</TableHead>
+                      <TableHead className="w-32">Код</TableHead>
+                      <TableHead className="w-64">Название</TableHead>
+                      <TableHead className="w-64">Категория</TableHead>
+                      <TableHead className="w-36">Действие</TableHead>
+                      <TableHead className="w-24">Было</TableHead>
+                      <TableHead className="w-24">Будет</TableHead>
+                      <TableHead className="w-28">Изменение</TableHead>
+                      <TableHead className="min-w-52">Ошибка</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {preview.items.map((item) => (
+                      <TableRow key={item.id}>
+                        <TableCell>{item.rowNumber ?? "-"}</TableCell>
+                        <TableCell className="font-medium">{item.code || "-"}</TableCell>
+                        <TableCell className="max-w-64 truncate" title={item.name || "-"}>
+                          {item.name || "-"}
+                        </TableCell>
+                        <TableCell>
+                          <CategoryCell categoryPath={item.categoryPath} />
+                        </TableCell>
+                        <TableCell>
+                          <WarehouseImportActionBadge action={item.action} />
+                        </TableCell>
+                        <TableCell>{nullableNumber(item.oldStock)}</TableCell>
+                        <TableCell>{nullableNumber(item.newStock)}</TableCell>
+                        <TableCell>
+                          <WarehouseImportDelta value={item.stockDelta} />
+                        </TableCell>
+                        <TableCell className="max-w-72 truncate text-destructive" title={item.error}>
+                          {item.error}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+          </div>
+        </div>
+
+        <DialogFooter className="shrink-0 border-t pt-4">
+          <Button
+            type="button"
+            disabled={pending || !preview || hasErrors || preview.status === "applied"}
+            onClick={() => preview && onApply(preview.id)}
+          >
+            Применить импорт
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ImportStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border bg-background p-3">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-xl font-semibold">{value}</div>
+    </div>
+  )
+}
+
+function WarehouseImportActionBadge({ action }: { action: WarehouseImportAction }) {
+  const labels: Record<WarehouseImportAction, string> = {
+    create: "Новый товар",
+    update: "Обновлен",
+    unchanged: "Без изменений",
+    error: "Ошибка",
+  }
+  const variant = action === "error" ? "destructive" : action === "unchanged" ? "outline" : "secondary"
+
+  return <Badge variant={variant}>{labels[action]}</Badge>
+}
+
+function WarehouseImportDelta({ value }: { value: number | null }) {
+  if (!value) {
+    return <span className="text-muted-foreground">0</span>
   }
 
   return (
-    <Dialog open={Boolean(operation)} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{isWriteOff ? "Списать товар" : "Пополнить товар"}</DialogTitle>
-          <DialogDescription>{product ? product.name : "Выберите товар"}</DialogDescription>
-        </DialogHeader>
-        {product && operation && (
-          <form key={`${operation.type}-${product.code}`} onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <input type="hidden" name="productCode" value={product.code} />
-            <div className="grid grid-cols-3 gap-2 rounded-lg border bg-muted/30 p-3">
-              <Info label="Stock" value={number(product.stock)} />
-              <Info label="Reserved" value={number(product.reserved)} />
-              <Info label="Available" value={number(product.available)} />
+    <span className={value > 0 ? "font-medium text-emerald-700" : "font-medium text-destructive"}>
+      {value > 0 ? `+${nullableNumber(value)}` : nullableNumber(value)}
+    </span>
+  )
+}
+
+function nullableNumber(value: number | null) {
+  if (value === null) {
+    return "-"
+  }
+
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)))
+}
+
+type StockDocumentLine = {
+  product: Product
+  qty: string
+}
+
+function StockDocumentDialog({
+  type,
+  products,
+  suppliers,
+  pending,
+  onOpenChange,
+  onSubmit,
+  onSaveDraft,
+}: {
+  type: StockDocumentDialogType
+  products: Product[]
+  suppliers: Supplier[]
+  pending: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (event: React.FormEvent<HTMLFormElement>, type: StockDocumentType) => void
+  onSaveDraft: (event: React.FormEvent<HTMLFormElement>, type: StockDocumentType) => void
+}) {
+  const [items, setItems] = useState<StockDocumentLine[]>([])
+  const [supplierId, setSupplierId] = useState("none")
+  const [operationAt, setOperationAt] = useState(() => toDatetimeLocalValue())
+  const isWriteOff = type === "stock_out"
+  const title = isWriteOff ? "Акт списания" : "Акт пополнения"
+  const description = "Добавьте товары, проверьте количество и сохраните или проведите акт"
+  const operationAtLabel = isWriteOff ? "Дата и время списания" : "Дата и время приемки"
+
+  function addProduct(product: Product) {
+    const freshProduct = products.find((item) => item.code === product.code) ?? product
+    setItems((current) => {
+      const existing = current.find((item) => item.product.code === freshProduct.code)
+      if (existing) {
+        return current.map((item) =>
+          item.product.code === freshProduct.code
+            ? { ...item, product: freshProduct, qty: String(Number(item.qty || 0) + 1) }
+            : item
+        )
+      }
+
+      return [...current, { product: freshProduct, qty: "1" }]
+    })
+  }
+
+  function updateQty(productCode: string, qty: string) {
+    setItems((current) =>
+      current.map((item) => (item.product.code === productCode ? { ...item, qty } : item))
+    )
+  }
+
+  function removeProduct(productCode: string) {
+    setItems((current) => current.filter((item) => item.product.code !== productCode))
+  }
+
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    if (!type) {
+      event.preventDefault()
+      return
+    }
+
+    if (items.length === 0) {
+      event.preventDefault()
+      toast.error("Добавьте в акт хотя бы один товар.")
+      return
+    }
+
+    for (const item of items) {
+      const parsedQty = Number(item.qty)
+      if (!Number.isInteger(parsedQty) || parsedQty < 1) {
+        event.preventDefault()
+        toast.error("Количество должно быть целым числом от 1.")
+        return
+      }
+    }
+
+    const submitter = (event.nativeEvent as SubmitEvent).submitter
+    const intent = submitter instanceof HTMLButtonElement ? submitter.value : "post"
+    if (intent === "draft") {
+      onSaveDraft(event, type)
+      return
+    }
+
+    onSubmit(event, type)
+  }
+
+  return (
+    <Sheet
+      open={Boolean(type)}
+      onOpenChange={(open) => {
+        if (!open) {
+          setItems([])
+          setSupplierId("none")
+          setOperationAt(toDatetimeLocalValue())
+        }
+        onOpenChange(open)
+      }}
+    >
+      <SheetContent
+        side="right"
+        className="!w-screen !max-w-none p-0 sm:!max-w-none md:!max-w-none lg:!max-w-none xl:!max-w-none data-[side=right]:!w-screen data-[side=right]:sm:!w-[90vw] data-[side=right]:md:!w-[860px] data-[side=right]:lg:!w-[1040px] data-[side=right]:xl:!w-[1180px] data-[side=right]:sm:!max-w-none"
+      >
+        <div className="flex h-full min-h-0 flex-col">
+          <SheetHeader className="border-b px-6 py-4">
+            <SheetTitle>{title}</SheetTitle>
+            <SheetDescription>{description}</SheetDescription>
+          </SheetHeader>
+        {type && (
+          <form key={type} onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+                <div className="flex min-w-0 flex-col gap-4">
+                <Card className="rounded-lg">
+                  <CardHeader>
+                    <CardTitle className="text-base">Основная информация</CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid gap-4 md:grid-cols-2">
+                    <Info label="Тип" value={isWriteOff ? "Списание" : "Пополнение"} />
+                    <Info label="Статус" value="Новый акт" />
+                    <Field className="md:col-span-2">
+                      <FieldLabel htmlFor="stock-document-operation-at">{operationAtLabel}</FieldLabel>
+                      <Input
+                        id="stock-document-operation-at"
+                        name="operationAt"
+                        type="datetime-local"
+                        value={operationAt}
+                        disabled={pending}
+                        onChange={(event) => setOperationAt(event.target.value)}
+                      />
+                    </Field>
+                    {!isWriteOff && (
+                      <Field className="md:col-span-2">
+                        <FieldLabel htmlFor="stock-document-supplier">Поставщик</FieldLabel>
+                        <input type="hidden" name="supplierId" value={supplierId === "none" ? "" : supplierId} />
+                        <Select value={supplierId} onValueChange={(value) => setSupplierId(value ?? "none")}>
+                          <SelectTrigger id="stock-document-supplier" className="w-full" disabled={pending}>
+                            <SelectValue placeholder="Без поставщика" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectGroup>
+                              <SelectItem value="none">Без поставщика</SelectItem>
+                              {suppliers.map((supplier) => (
+                                <SelectItem key={supplier.id} value={String(supplier.id)}>
+                                  {supplier.name}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                        {supplierId === "none" && (
+                          <FieldDescription>Поставщик не указан, акт все равно можно сохранить или провести.</FieldDescription>
+                        )}
+                      </Field>
+                    )}
+                    <Field className="md:col-span-2">
+                      <FieldLabel htmlFor="stock-document-comment">
+                        {isWriteOff ? "Причина списания / комментарий" : "Комментарий / основание"}
+                      </FieldLabel>
+                      <Textarea id="stock-document-comment" name="comment" disabled={pending} />
+                    </Field>
+                  </CardContent>
+                </Card>
+
+                <Card className="rounded-lg">
+                  <CardHeader>
+                    <CardTitle className="text-base">Поиск товара</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <StockActProductPicker
+                      products={products}
+                      disabled={pending}
+                      placeholder="Найти товар и добавить в акт"
+                      onSelect={addProduct}
+                    />
+                  </CardContent>
+                </Card>
+                </div>
+
+                <div className="min-w-0 rounded-lg border bg-background">
+                  {items.length === 0 ? (
+                    <div className="py-10 text-center text-sm text-muted-foreground">Позиции акта пока не добавлены</div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <ScrollArea style={{ height: Math.min(items.length * 90 + 48, 420) }}>
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="min-w-64">Товар</TableHead>
+                              <TableHead className="w-28">Остаток</TableHead>
+                              <TableHead className="w-32">Qty</TableHead>
+                              <TableHead className="w-36">После</TableHead>
+                              <TableHead className="min-w-44">Комментарий</TableHead>
+                              <TableHead className="w-12" />
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {items.map((item) => {
+                              const product = products.find((candidate) => candidate.code === item.product.code) ?? item.product
+                              const qty = Number(item.qty || 0)
+                              const nextStock = product.stock + (isWriteOff ? -qty : qty)
+
+                              return (
+                                <TableRow key={product.code}>
+                                  <TableCell>
+                                    <input type="hidden" name="itemProductCode" value={product.code} />
+                                    <div className="font-medium">{product.name}</div>
+                                    <div className="text-xs text-muted-foreground">{product.code}</div>
+                                  </TableCell>
+                                  <TableCell>{number(product.stock)}</TableCell>
+                                  <TableCell>
+                                    <Input
+                                      name="itemQty"
+                                      type="number"
+                                      min="1"
+                                      step="1"
+                                      value={item.qty}
+                                      disabled={pending}
+                                      onChange={(event) => updateQty(product.code, event.target.value)}
+                                      required
+                                    />
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="flex items-center gap-2">
+                                      <span>{number(nextStock)}</span>
+                                      {isWriteOff && nextStock < 0 && (
+                                        <Badge className="border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-50">
+                                          Будет минус
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Input name="itemComment" disabled={pending} placeholder="Комментарий" />
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      disabled={pending}
+                                      onClick={() => removeProduct(product.code)}
+                                    >
+                                      <Trash2Icon />
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              )
+                            })}
+                          </TableBody>
+                        </Table>
+                      </ScrollArea>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-            {isWriteOff && nextStock < 0 && (
-              <Alert>
-                <AlertTriangleIcon />
-                <AlertTitle>Остаток уйдет в минус</AlertTitle>
-                <AlertDescription>Операция разрешена, но проверьте количество перед подтверждением.</AlertDescription>
-              </Alert>
-            )}
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="stock-operation-qty">Количество</FieldLabel>
-                <Input
-                  id="stock-operation-qty"
-                  name="qty"
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={qty}
-                  onChange={(event) => setQty(event.target.value)}
-                  required
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="stock-operation-comment">Комментарий</FieldLabel>
-                <Textarea id="stock-operation-comment" name="comment" />
-              </Field>
-            </FieldGroup>
-            <DialogFooter>
-              <Button type="submit" variant={isWriteOff ? "destructive" : "default"} disabled={pending}>
-                {isWriteOff ? "Списать" : "Пополнить"}
+            <SheetFooter className="sticky bottom-0 flex-row justify-end border-t bg-background px-6 py-4">
+              <Button type="button" variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>
+                Отмена
               </Button>
-            </DialogFooter>
+              <Button type="submit" name="intent" value="draft" variant="outline" disabled={pending}>
+                Сохранить черновик
+              </Button>
+              <Button
+                type="submit"
+                name="intent"
+                value="post"
+                variant={isWriteOff ? "destructive" : "default"}
+                disabled={pending}
+              >
+                Провести акт
+              </Button>
+            </SheetFooter>
           </form>
         )}
-      </DialogContent>
-    </Dialog>
+        </div>
+      </SheetContent>
+    </Sheet>
   )
 }
 
@@ -2496,15 +4141,15 @@ function ResponsiveTable({
 }
 
 function StockBadge({ product }: { product: Product }) {
-  if (product.available < 0) {
-    return <Badge variant="destructive">{number(product.available)}</Badge>
+  if (product.stock < 0) {
+    return <Badge variant="destructive">{number(product.stock)}</Badge>
   }
 
-  if (product.available <= 3) {
-    return <Badge variant="outline">{number(product.available)}</Badge>
+  if (product.stock <= 3) {
+    return <Badge variant="outline">{number(product.stock)}</Badge>
   }
 
-  return <Badge variant="secondary">{number(product.available)}</Badge>
+  return <Badge variant="secondary">{number(product.stock)}</Badge>
 }
 
 function OrderBadge({ status }: { status: OrderStatus }) {
@@ -2524,6 +4169,18 @@ function OrderBadge({ status }: { status: OrderStatus }) {
   return <Badge variant="outline">{status}</Badge>
 }
 
+function ReadyStatusBadge({ status }: { status: OrderStatus }) {
+  if (status === "Готов") {
+    return <Badge className="bg-emerald-100 text-emerald-900 hover:bg-emerald-100">Готов</Badge>
+  }
+
+  if (status === "Передан курьеру") {
+    return <Badge className="bg-amber-100 text-amber-900 hover:bg-amber-100">Передан курьеру</Badge>
+  }
+
+  return <OrderBadge status={status} />
+}
+
 function Info({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -2536,19 +4193,24 @@ function Info({ label, value }: { label: string; value: string }) {
 function movementLabel(movement: DashboardData["movements"][number]) {
   if (movement.type === "adjustment" && typeof movement.qty === "number") {
     if (movement.qty > 0) {
-      return "Пополнение"
+      return "Поступление"
     }
 
     if (movement.qty < 0) {
       return "Списание"
     }
+
+    return "Корректировка"
   }
 
   const labels: Record<string, string> = {
     import: "Импорт",
+    stock_in: "Пополнение по акту",
+    stock_out: "Списание по акту",
+    sale: "Реализация",
+    order_fulfill: "Реализация заказа",
     stock_update: "Склад",
     delete_product: "Удаление",
-    sale: "Продажа",
     shift_open: "Открытие смены",
     shift_close: "Закрытие смены",
     order_create: "Заказ",
@@ -2558,15 +4220,25 @@ function movementLabel(movement: DashboardData["movements"][number]) {
   return labels[movement.type] ?? movement.type
 }
 
+function signedNumber(value: number | null) {
+  if (value === null) {
+    return "-"
+  }
+
+  const formatted = number(value)
+  return value > 0 ? `+${formatted}` : formatted
+}
+
 function deliveryTypeLabel(type: string) {
   return type === "delivery" ? "Доставка" : "Самовывоз"
 }
 
 function getShiftCashSummary(detail: DashboardData["shiftDetails"][number]) {
-  const revenueTypes = new Set(["sale", "prepayment", "order_payment"])
+  const revenueTypes = new Set(["sale", "prepayment", "order_payment", "deal_payment"])
   const byMethod: Record<PaymentMethod, number> = {
     cash: 0,
     card: 0,
+    terminal: 0,
     mbank: 0,
     optima: 0,
     elsom: 0,
@@ -2581,6 +4253,8 @@ function getShiftCashSummary(detail: DashboardData["shiftDetails"][number]) {
 
   return {
     ...byMethod,
+    revenueBeforeDiscount: detail.summary.revenueBeforeDiscount,
+    discountTotal: detail.summary.discountTotal,
     revenueTotal: detail.summary.revenueTotal,
     expectedCash: detail.summary.expectedCash,
   }

@@ -2,8 +2,8 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ArrowLeftIcon, BanknoteIcon, EyeIcon } from "lucide-react"
-import { useState, useTransition } from "react"
+import { ArrowLeftIcon, BanknoteIcon, ChevronDownIcon, EyeIcon } from "lucide-react"
+import { Fragment, useState, useTransition } from "react"
 import { toast } from "sonner"
 import { closeShiftAction } from "@/app/actions"
 import type { DashboardData, ShiftDetails } from "@/lib/db"
@@ -156,8 +156,12 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <ShiftStat title="Выручка до скидок" value={formatMoney(detail.summary.revenueBeforeDiscount)} />
+          <ShiftStat title="Скидки" value={formatMoney(detail.summary.discountTotal)} />
+          <ShiftStat title="Выручка после скидок" value={formatMoney(detail.summary.revenueTotal)} />
           <ShiftStat title="Наличные" value={formatMoney(revenueByMethod.cash)} />
           <ShiftStat title="Карта" value={formatMoney(revenueByMethod.card)} />
+          <ShiftStat title="Терминал" value={formatMoney(revenueByMethod.terminal)} />
           <ShiftStat title="Mbank" value={formatMoney(revenueByMethod.mbank)} />
           <ShiftStat title="Optima" value={formatMoney(revenueByMethod.optima)} />
           <ShiftStat title="ЭлСом" value={formatMoney(revenueByMethod.elsom)} />
@@ -167,7 +171,6 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
           <ShiftStat title="Ожидается в кассе" value={formatMoney(shift.expectedCash)} emphasis />
           <ShiftStat title="Фактическая наличка" value={shift.closingCash === null ? "-" : formatMoney(shift.closingCash)} />
           <ShiftStat title="Разница" value={difference === null ? "-" : formatMoney(difference)} />
-          <ShiftStat title="Выручка всего" value={formatMoney(detail.summary.revenueTotal)} />
         </div>
 
         <FormulaCard detail={detail} />
@@ -186,6 +189,7 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Время</TableHead>
+                      <TableHead>Провёл</TableHead>
                       <TableHead>Операция</TableHead>
                       <TableHead>Способ оплаты</TableHead>
                       <TableHead>Сумма</TableHead>
@@ -197,6 +201,7 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
                     {detail.cashTransactions.map((transaction) => (
                       <TableRow key={transaction.id}>
                         <TableCell>{dateTime(transaction.createdAt)}</TableCell>
+                        <TableCell>{operationUser(transaction.userName)}</TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-1.5">
                             <span>{cashTransactionTypeLabel(transaction.type)}</span>
@@ -212,7 +217,9 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
                             ? `Заказ #${transaction.orderId}`
                             : transaction.saleId
                               ? `Продажа #${transaction.saleId}`
-                              : "-"}
+                              : transaction.dealId
+                                ? `Сделка #${transaction.dealId}`
+                                : "-"}
                         </TableCell>
                         <TableCell className="max-w-72 truncate">{transaction.comment || "-"}</TableCell>
                       </TableRow>
@@ -224,34 +231,9 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
           </CardContent>
         </Card>
 
-        <DataTableCard
-          title="Продажи смены"
-          description="Быстрые продажи, проведенные в смене"
-          emptyTitle="Продаж за эту смену нет"
-          headers={["Время", "Sale ID", "Сумма", "Способ оплаты", "Позиций", "Комментарий"]}
-          rows={detail.sales.map((sale) => [
-            dateTime(sale.createdAt),
-            `#${sale.id}`,
-            formatMoney(sale.total),
-            getPaymentMethodLabel(sale.paymentMethod),
-            sale.itemsCount,
-            sale.note || "-",
-          ])}
-        />
+        <ShiftSalesCard sales={detail.sales} />
 
-        <DataTableCard
-          title="Заказы / оплаты"
-          description="Операции смены, связанные с заказами"
-          emptyTitle="Операций по заказам в смене пока нет"
-          headers={["Заказ", "Клиент", "Тип оплаты", "Сумма", "Комментарий"]}
-          rows={detail.relatedOrders.map((order) => [
-            order.number || `#${order.orderId}`,
-            order.customer || "-",
-            cashTransactionTypeLabel(order.type),
-            formatMoney(order.amount),
-            order.comment || "-",
-          ])}
-        />
+        <ShiftOrderPaymentsCard orders={detail.relatedOrders} />
       </div>
     </main>
   )
@@ -338,18 +320,22 @@ export function ShiftCloseSummary({ detail }: { detail: ShiftDetails }) {
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <ShiftStat title="Ожидается в кассе" value={formatMoney(detail.summary.expectedCash)} emphasis />
-        <ShiftStat title="Выручка всего" value={formatMoney(detail.summary.revenueTotal)} />
+        <ShiftStat title="Выручка до скидок" value={formatMoney(detail.summary.revenueBeforeDiscount)} />
+        <ShiftStat title="Скидки" value={formatMoney(detail.summary.discountTotal)} />
+        <ShiftStat title="Выручка после скидок" value={formatMoney(detail.summary.revenueTotal)} />
         <ShiftStat title="Ответственный" value={detail.cashier} />
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Metric label="Наличные" value={formatMoney(revenueByMethod.cash)} />
         <Metric label="Карта" value={formatMoney(revenueByMethod.card)} />
+        <Metric label="Терминал" value={formatMoney(revenueByMethod.terminal)} />
         <Metric label="Mbank" value={formatMoney(revenueByMethod.mbank)} />
         <Metric label="Optima" value={formatMoney(revenueByMethod.optima)} />
         <Metric label="ЭлСом" value={formatMoney(revenueByMethod.elsom)} />
         <Metric label="Перевод" value={formatMoney(revenueByMethod.transfer)} />
         <Metric label="Предоплаты" value={formatMoney(getPrepayments(detail))} />
         <Metric label="Доплаты по заказам" value={formatMoney(getOrderPayments(detail))} />
+        <Metric label="Оплаты по сделкам" value={formatMoney(getDealPayments(detail))} />
         <Metric label="Внесения" value={formatMoney(detail.summary.cashIn)} />
         <Metric label="Изъятия" value={formatMoney(detail.breakdown.cashOutOther)} />
         <Metric label="Выплаты курьеру" value={formatMoney(detail.breakdown.courierPayouts)} />
@@ -392,52 +378,205 @@ function FormulaCard({ detail, compact }: { detail: ShiftDetails; compact?: bool
   )
 }
 
-function DataTableCard({
-  title,
-  description,
-  emptyTitle,
-  headers,
-  rows,
-}: {
-  title: string
-  description: string
-  emptyTitle: string
-  headers: string[]
-  rows: React.ReactNode[][]
-}) {
+function ShiftSalesCard({ sales }: { sales: ShiftDetails["sales"] }) {
+  const [openId, setOpenId] = useState<number | null>(null)
+
   return (
     <Card className="rounded-2xl border bg-white">
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
+        <CardTitle>Продажи смены</CardTitle>
+        <CardDescription>Быстрые продажи, проведенные в смене</CardDescription>
       </CardHeader>
       <CardContent>
-        {!rows.length ? (
-          <CompactEmpty title={emptyTitle} />
+        {!sales.length ? (
+          <CompactEmpty title="Продаж за эту смену нет" />
         ) : (
           <div className="min-w-0 overflow-x-auto">
             <Table>
               <TableHeader>
-                <TableRow>
-                  {headers.map((header) => (
-                    <TableHead key={header}>{header}</TableHead>
-                  ))}
+                  <TableRow>
+                    <TableHead>Время</TableHead>
+                    <TableHead>Провел</TableHead>
+                    <TableHead>Sale ID</TableHead>
+                    <TableHead>До скидки</TableHead>
+                    <TableHead>Скидка</TableHead>
+                    <TableHead>Итого</TableHead>
+                    <TableHead>Способ оплаты</TableHead>
+                    <TableHead>Позиций</TableHead>
+                    <TableHead>Комментарий</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((row, rowIndex) => (
-                  <TableRow key={rowIndex}>
-                    {row.map((cell, cellIndex) => (
-                      <TableCell key={cellIndex}>{cell}</TableCell>
-                    ))}
-                  </TableRow>
-                ))}
+                {sales.map((sale) => {
+                  const isOpen = openId === sale.id
+
+                  return (
+                    <Fragment key={sale.id}>
+                      <TableRow
+                        key={`sale-${sale.id}`}
+                        className="cursor-pointer"
+                        onClick={() => setOpenId(isOpen ? null : sale.id)}
+                      >
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <ChevronDownIcon
+                              className={cn("size-4 transition-transform", isOpen && "rotate-180")}
+                            />
+                            {dateTime(sale.createdAt)}
+                          </div>
+                        </TableCell>
+                        <TableCell>{operationUser(sale.userName)}</TableCell>
+                        <TableCell className="font-medium">#{sale.id}</TableCell>
+                        <TableCell>{formatMoney(sale.totalBeforeDiscount)}</TableCell>
+                        <TableCell>{formatMoney(sale.discountTotal)}</TableCell>
+                        <TableCell className="font-medium">{formatMoney(sale.total)}</TableCell>
+                        <TableCell>{getPaymentMethodLabel(sale.paymentMethod)}</TableCell>
+                        <TableCell>{sale.itemsCount}</TableCell>
+                        <TableCell className="max-w-72 truncate">{sale.note || "-"}</TableCell>
+                      </TableRow>
+                      {isOpen && (
+                        <TableRow key={`sale-${sale.id}-items`}>
+                          <TableCell colSpan={9} className="bg-muted/30 p-0">
+                            <ShiftItemsTable items={sale.items} emptyTitle="В продаже нет позиций" />
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </Fragment>
+                  )
+                })}
               </TableBody>
             </Table>
           </div>
         )}
       </CardContent>
     </Card>
+  )
+}
+
+function ShiftOrderPaymentsCard({ orders }: { orders: ShiftDetails["relatedOrders"] }) {
+  const [openId, setOpenId] = useState<number | null>(null)
+
+  return (
+    <Card className="rounded-2xl border bg-white">
+      <CardHeader>
+        <CardTitle>Заказы / оплаты</CardTitle>
+        <CardDescription>Операции смены, связанные с заказами</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!orders.length ? (
+          <CompactEmpty title="Операций по заказам в смене пока нет" />
+        ) : (
+          <div className="min-w-0 overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Заказ</TableHead>
+                  <TableHead>Клиент</TableHead>
+                  <TableHead>Провел</TableHead>
+                  <TableHead>Тип оплаты</TableHead>
+                  <TableHead>До скидки</TableHead>
+                  <TableHead>Скидка</TableHead>
+                  <TableHead>Итого заказа</TableHead>
+                  <TableHead>Сумма</TableHead>
+                  <TableHead>Комментарий</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {orders.map((order) => {
+                  const isOpen = openId === order.transactionId
+
+                  return (
+                    <Fragment key={order.transactionId}>
+                      <TableRow
+                        key={`order-payment-${order.transactionId}`}
+                        className="cursor-pointer"
+                        onClick={() => setOpenId(isOpen ? null : order.transactionId)}
+                      >
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <ChevronDownIcon
+                              className={cn("size-4 transition-transform", isOpen && "rotate-180")}
+                            />
+                            <span className="font-medium">{order.number || `#${order.orderId}`}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>{order.customer || "-"}</TableCell>
+                        <TableCell>{operationUser(order.userName)}</TableCell>
+                        <TableCell>{cashTransactionTypeLabel(order.type)}</TableCell>
+                        <TableCell>{formatMoney(order.totalBeforeDiscount)}</TableCell>
+                        <TableCell>{formatMoney(order.discountTotal)}</TableCell>
+                        <TableCell>{formatMoney(order.total)}</TableCell>
+                        <TableCell className="font-medium">{formatMoney(order.amount)}</TableCell>
+                        <TableCell className="max-w-72 truncate">{order.comment || "-"}</TableCell>
+                      </TableRow>
+                      {isOpen && (
+                        <TableRow key={`order-payment-${order.transactionId}-items`}>
+                          <TableCell colSpan={9} className="bg-muted/30 p-0">
+                            <ShiftItemsTable items={order.items} emptyTitle="В заказе нет позиций" />
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function ShiftItemsTable({
+  items,
+  emptyTitle,
+}: {
+  items: Array<{
+    id: number
+    name: string
+    productCode: string
+    qty: number
+    price: number
+    discountAmount?: number
+    totalBeforeDiscount?: number
+    total: number
+  }>
+  emptyTitle: string
+}) {
+  if (!items.length) {
+    return <div className="px-6 py-4 text-sm text-muted-foreground">{emptyTitle}</div>
+  }
+
+  return (
+    <div className="px-6 py-3">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Позиция</TableHead>
+            <TableHead>Код</TableHead>
+            <TableHead>Кол-во</TableHead>
+            <TableHead>Цена</TableHead>
+            <TableHead>До скидки</TableHead>
+            <TableHead>Скидка</TableHead>
+            <TableHead>Итого</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {items.map((item) => (
+            <TableRow key={item.id}>
+              <TableCell className="font-medium">{item.name}</TableCell>
+              <TableCell>{item.productCode || "-"}</TableCell>
+              <TableCell>{formatNumber(item.qty)}</TableCell>
+              <TableCell>{formatMoney(item.price)}</TableCell>
+              <TableCell>{formatMoney(item.totalBeforeDiscount ?? item.total)}</TableCell>
+              <TableCell>{formatMoney(item.discountAmount ?? 0)}</TableCell>
+              <TableCell className="font-medium">{formatMoney(item.total)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   )
 }
 
@@ -506,6 +645,7 @@ function getFormulaRows(detail: ShiftDetails) {
     { label: "Наличные продажи", sign: "+", amount: detail.summary.cashSales },
     { label: "Наличные предоплаты", sign: "+", amount: detail.summary.cashPrepayments },
     { label: "Наличные доплаты", sign: "+", amount: detail.summary.cashOrderPayments },
+    { label: "Наличные оплаты сделок", sign: "+", amount: detail.summary.cashDealPayments },
     { label: "Внесения", sign: "+", amount: detail.summary.cashIn },
     { label: "Изъятия", sign: "-", amount: detail.breakdown.cashOutOther },
     { label: "Выплаты курьеру", sign: "-", amount: detail.breakdown.courierPayouts },
@@ -517,24 +657,41 @@ function getFormulaRows(detail: ShiftDetails) {
 
 function getRevenueByMethod(detail: ShiftDetails) {
   return {
-    cash: detail.summary.cashSales + detail.summary.cashPrepayments + detail.summary.cashOrderPayments,
-    card: detail.breakdown.cardSales + detail.breakdown.cardPrepayments + detail.breakdown.cardOrderPayments,
+    cash:
+      detail.summary.cashSales +
+      detail.summary.cashPrepayments +
+      detail.summary.cashOrderPayments +
+      detail.summary.cashDealPayments,
+    card:
+      detail.breakdown.cardSales +
+      detail.breakdown.cardPrepayments +
+      detail.breakdown.cardOrderPayments +
+      detail.breakdown.cardDealPayments,
+    terminal:
+      detail.breakdown.terminalSales +
+      detail.breakdown.terminalPrepayments +
+      detail.breakdown.terminalOrderPayments +
+      detail.breakdown.terminalDealPayments,
     mbank:
       detail.breakdown.mbankSales +
       detail.breakdown.mbankPrepayments +
-      detail.breakdown.mbankOrderPayments,
+      detail.breakdown.mbankOrderPayments +
+      detail.breakdown.mbankDealPayments,
     optima:
       detail.breakdown.optimaSales +
       detail.breakdown.optimaPrepayments +
-      detail.breakdown.optimaOrderPayments,
+      detail.breakdown.optimaOrderPayments +
+      detail.breakdown.optimaDealPayments,
     elsom:
       detail.breakdown.elsomSales +
       detail.breakdown.elsomPrepayments +
-      detail.breakdown.elsomOrderPayments,
+      detail.breakdown.elsomOrderPayments +
+      detail.breakdown.elsomDealPayments,
     transfer:
       detail.breakdown.transferSales +
       detail.breakdown.transferPrepayments +
-      detail.breakdown.transferOrderPayments,
+      detail.breakdown.transferOrderPayments +
+      detail.breakdown.transferDealPayments,
   }
 }
 
@@ -542,6 +699,7 @@ function getPrepayments(detail: ShiftDetails) {
   return (
     detail.summary.cashPrepayments +
     detail.breakdown.cardPrepayments +
+    detail.breakdown.terminalPrepayments +
     detail.breakdown.mbankPrepayments +
     detail.breakdown.optimaPrepayments +
     detail.breakdown.elsomPrepayments +
@@ -553,11 +711,32 @@ function getOrderPayments(detail: ShiftDetails) {
   return (
     detail.summary.cashOrderPayments +
     detail.breakdown.cardOrderPayments +
+    detail.breakdown.terminalOrderPayments +
     detail.breakdown.mbankOrderPayments +
     detail.breakdown.optimaOrderPayments +
     detail.breakdown.elsomOrderPayments +
     detail.breakdown.transferOrderPayments
   )
+}
+
+function getDealPayments(detail: ShiftDetails) {
+  return (
+    detail.summary.cashDealPayments +
+    detail.breakdown.cardDealPayments +
+    detail.breakdown.terminalDealPayments +
+    detail.breakdown.mbankDealPayments +
+    detail.breakdown.optimaDealPayments +
+    detail.breakdown.elsomDealPayments +
+    detail.breakdown.transferDealPayments
+  )
+}
+
+function operationUser(name: string | null | undefined) {
+  return name?.trim() || "не зафиксирован"
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value)
 }
 
 function dateTime(value: string) {

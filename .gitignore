@@ -24,7 +24,7 @@
 .DS_Store
 *.pem
 app.db
-app.db.backup
+app.db.backup*
 app.db-shm
 app.db-wal
 
@@ -36,6 +36,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel

@@ -2,6 +2,7 @@
 
 import { MinusIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import type { Product } from "@/lib/db"
+import { calculateLineTotal, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
 import { cn, formatMoney } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -18,6 +19,8 @@ export type ProductLineItem = {
   categoryPath?: string
   qty: number
   price: number
+  discountType?: DiscountType
+  discountValue?: number
 }
 
 type ProductLineItemsProps = {
@@ -25,7 +28,7 @@ type ProductLineItemsProps = {
   products?: Product[]
   disabled?: boolean
   emptyTitle?: string
-  maxHeightClassName?: string
+  maxHeightPx?: number
   onItemsChange: (items: ProductLineItem[]) => void
 }
 
@@ -38,6 +41,8 @@ export function lineFromProduct(product: Product): ProductLineItem {
     categoryPath: product.categoryPath,
     qty: 1,
     price: product.salePrice,
+    discountType: "none",
+    discountValue: 0,
   }
 }
 
@@ -46,10 +51,11 @@ export function ProductLineItems({
   products,
   disabled,
   emptyTitle = "Позиции не выбраны",
-  maxHeightClassName = "max-h-[320px]",
+  maxHeightPx = 520,
   onItemsChange,
 }: ProductLineItemsProps) {
   const productByCode = new Map(products?.map((product) => [product.code, product]) ?? [])
+  const scrollHeight = Math.min(items.length * 116 + 48, maxHeightPx)
 
   function updateItem(productCode: string, patch: Partial<ProductLineItem>) {
     onItemsChange(
@@ -78,15 +84,18 @@ export function ProductLineItems({
 
   return (
     <div className="min-w-0">
-      <ScrollArea className={cn("min-w-0 rounded-lg border bg-background", maxHeightClassName)}>
+      <ScrollArea className="min-w-0 rounded-lg border bg-background" style={{ height: scrollHeight }}>
         <div className="min-w-0 overflow-x-auto">
-          <Table className="min-w-[560px]">
+          <Table className="min-w-[900px]">
           <TableHeader>
             <TableRow>
               <TableHead>Товар</TableHead>
-              <TableHead className="w-32">Qty</TableHead>
+              <TableHead className="w-32">Кол-во</TableHead>
               <TableHead className="w-32">Цена</TableHead>
-              <TableHead className="w-28 text-right">Total</TableHead>
+              <TableHead className="w-56">Скидка</TableHead>
+              <TableHead className="w-32 text-right">До скидки</TableHead>
+              <TableHead className="w-28 text-right">Скидка</TableHead>
+              <TableHead className="w-28 text-right">Итого</TableHead>
               <TableHead className="w-12" />
             </TableRow>
           </TableHeader>
@@ -95,6 +104,15 @@ export function ProductLineItems({
               const product = productByCode.get(item.productCode)
               const qtyInvalid = item.qty < 1 || !Number.isInteger(item.qty)
               const priceInvalid = item.price < 0
+              const discountType = normalizeDiscountType(item.discountType)
+              const discountValue = Number.isFinite(item.discountValue) ? Number(item.discountValue) : 0
+              const discountInvalid = discountValue < 0
+              const totals = calculateLineTotal({
+                qty: item.qty,
+                price: item.price,
+                discountType,
+                discountValue,
+              })
               return (
                 <TableRow key={item.productCode}>
                   <TableCell className="min-w-0">
@@ -107,7 +125,7 @@ export function ProductLineItems({
                       </div>
                       {product && (
                         <div className="mt-1 text-xs text-muted-foreground">
-                          Доступно {formatNumber(product.available)}
+                          Остаток {formatNumber(product.stock)}
                         </div>
                       )}
                     </div>
@@ -147,7 +165,7 @@ export function ProductLineItems({
                         <PlusIcon />
                       </Button>
                     </div>
-                    {qtyInvalid && <div className="mt-1 text-xs text-destructive">Qty от 1</div>}
+                    {qtyInvalid && <div className="mt-1 text-xs text-destructive">Кол-во от 1</div>}
                   </TableCell>
                   <TableCell>
                     <Input
@@ -169,8 +187,49 @@ export function ProductLineItems({
                     )}
                     {priceInvalid && <div className="mt-1 text-xs text-destructive">Цена не ниже 0</div>}
                   </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <select
+                        name="itemDiscountType"
+                        className="h-8 w-28 rounded-lg border border-input bg-background px-2 text-sm"
+                        value={discountType}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          updateItem(item.productCode, {
+                            discountType: normalizeDiscountType(event.target.value),
+                            discountValue: event.target.value === "none" ? 0 : discountValue,
+                          })
+                        }
+                      >
+                        <option value="none">Без скидки</option>
+                        <option value="percent">%</option>
+                        <option value="amount">Сумма</option>
+                      </select>
+                      <Input
+                        name="itemDiscountValue"
+                        type="number"
+                        step="1"
+                        min="0"
+                        value={Number.isFinite(discountValue) ? discountValue : ""}
+                        disabled={disabled}
+                        readOnly={discountType === "none"}
+                        aria-invalid={discountInvalid}
+                        className={cn("w-24 text-right", discountInvalid && "border-destructive")}
+                        onChange={(event) =>
+                          updateItem(item.productCode, { discountValue: Number(event.target.value) || 0 })
+                        }
+                      />
+                    </div>
+                    {discountInvalid && <div className="mt-1 text-xs text-destructive">Скидка не ниже 0</div>}
+                  </TableCell>
                   <TableCell className="text-right font-medium">
-                    {formatMoney(item.qty * item.price)}
+                    {formatMoney(totals.totalBeforeDiscount)}
+                  </TableCell>
+                  <TableCell className="text-right text-muted-foreground">
+                    {formatMoney(totals.discountAmount)}
+                  </TableCell>
+                  <TableCell className="text-right font-medium">
+                    {formatMoney(totals.total)}
                   </TableCell>
                   <TableCell className="text-right">
                     <Button
@@ -208,7 +267,14 @@ export function addProductToLineItems(items: ProductLineItem[], product: Product
 }
 
 export function getLineItemsTotal(items: ProductLineItem[]) {
-  return items.reduce((sum, item) => sum + item.qty * item.price, 0)
+  return items.reduce((sum, item) => {
+    return sum + calculateLineTotal({
+      qty: item.qty,
+      price: item.price,
+      discountType: item.discountType,
+      discountValue: item.discountValue,
+    }).total
+  }, 0)
 }
 
 export function validateProductLineItems(items: ProductLineItem[]) {
@@ -226,6 +292,10 @@ export function validateProductLineItems(items: ProductLineItem[]) {
 
   if (items.some((item) => !Number.isFinite(item.price) || item.price < 0)) {
     return "Цена не может быть отрицательной."
+  }
+
+  if (items.some((item) => Number(item.discountValue ?? 0) < 0)) {
+    return "Скидка не может быть отрицательной."
   }
 
   return null

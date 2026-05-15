@@ -23,6 +23,7 @@ export default function RootLayout({
   return (
     <html
       lang="ru"
+      suppressHydrationWarning
       className={`${manrope.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background text-foreground">
