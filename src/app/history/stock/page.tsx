@@ -1,8 +1,10 @@
 import Link from "next/link"
 import { AccessDenied } from "@/components/access-denied"
+import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getHistoryReportData, type Movement } from "@/lib/db"
@@ -19,16 +21,16 @@ export default async function StockMovementsPage() {
 
   return (
     <main className="min-h-screen bg-zinc-50 p-4 md:p-6">
-      <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Движения склада</h1>
-            <p className="text-sm text-muted-foreground">Поступления, списания, импорт и списания по заказам.</p>
-          </div>
-          <Link href="/stock" className={buttonVariants({ variant: "outline" })}>
-            Вернуться на склад
-          </Link>
-        </div>
+      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
+        <PageHeader
+          title="Движения склада"
+          description="Поступления, списания, импорт и списания по заказам"
+          actions={
+            <Link href="/stock" className={buttonVariants({ variant: "outline" })}>
+              Вернуться на склад
+            </Link>
+          }
+        />
 
         <Card className="rounded-2xl border bg-white">
           <CardHeader>
@@ -36,7 +38,14 @@ export default async function StockMovementsPage() {
             <CardDescription>Изменения количества товаров без резервов.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto rounded-lg border">
+            {report.stockMovements.length === 0 ? (
+              <Empty className="min-h-56">
+                <EmptyHeader>
+                  <EmptyTitle>История склада пуста</EmptyTitle>
+                  <EmptyDescription>Движения появятся после продаж, актов или импорта.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -51,14 +60,7 @@ export default async function StockMovementsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {report.stockMovements.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
-                        История склада пуста
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    report.stockMovements.map((movement) => (
+                  {report.stockMovements.map((movement) => (
                       <TableRow key={movement.id}>
                         <TableCell>{formatDateTime(movement.createdAt)}</TableCell>
                         <TableCell>
@@ -71,11 +73,10 @@ export default async function StockMovementsPage() {
                         <TableCell>{movement.userName || "не зафиксирован"}</TableCell>
                         <TableCell className="min-w-64">{movement.note || "-"}</TableCell>
                       </TableRow>
-                    ))
-                  )}
+                    ))}
                 </TableBody>
               </Table>
-            </div>
+            )}
           </CardContent>
         </Card>
       </div>

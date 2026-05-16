@@ -16,7 +16,7 @@ import {
 } from "lucide-react"
 import { logoutAction } from "@/app/auth-actions"
 import type { CurrentUser, UserRole } from "@/lib/db"
-import { cn } from "@/lib/utils"
+import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
 import {
   Sidebar,
@@ -34,7 +34,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 
-type CrmSection = "clients" | "deals"
+type CrmSection = "clients" | "deals" | "sales" | "orders" | "ready-orders" | "stock" | "stock-acts" | "history" | "shifts" | "settings"
 
 type CrmShellProps = {
   user: CurrentUser
@@ -51,22 +51,43 @@ const roleLabels: Record<UserRole, string> = {
 }
 
 const navItems: Array<{
-  id: string
+  id: CrmSection
   label: string
   icon: typeof BoxesIcon
   href: string
   roles: UserRole[]
 }> = [
-  { id: "stock", label: "Склад", icon: BoxesIcon, href: "/stock", roles: ["owner"] },
-  { id: "sales", label: "Касса", icon: BanknoteIcon, href: "/cash", roles: ["owner", "manager"] },
-  { id: "ready-orders", label: "Готовые заказы", icon: PackageCheckIcon, href: "/ready-orders", roles: ["owner", "manager"] },
-  { id: "shifts", label: "Смены", icon: BanknoteIcon, href: "/shifts", roles: ["owner"] },
-  { id: "orders", label: "Стол заказов", icon: ClipboardListIcon, href: "/orders", roles: ["owner", "manager", "florist"] },
-  { id: "clients", label: "Клиенты", icon: UserCheckIcon, href: "/clients", roles: ["owner", "manager"] },
   { id: "deals", label: "Сделки", icon: TagsIcon, href: "/deals", roles: ["owner", "manager"] },
-  { id: "history", label: "История", icon: HistoryIcon, href: "/history", roles: ["owner"] },
+  { id: "clients", label: "Клиенты", icon: UserCheckIcon, href: "/clients", roles: ["owner", "manager"] },
+  { id: "sales", label: "Касса", icon: BanknoteIcon, href: "/cash", roles: ["owner", "manager"] },
+  { id: "orders", label: "Стол заказов", icon: ClipboardListIcon, href: "/orders", roles: ["owner", "manager", "florist"] },
+  { id: "ready-orders", label: "Готовые заказы", icon: PackageCheckIcon, href: "/ready-orders", roles: ["owner", "manager"] },
+  { id: "stock", label: "Склад", icon: BoxesIcon, href: "/stock", roles: ["owner"] },
+  { id: "stock-acts", label: "Акты склада", icon: ClipboardListIcon, href: "/stock/acts", roles: ["owner"] },
+  { id: "history", label: "История", icon: HistoryIcon, href: "/history/stock", roles: ["owner"] },
+  { id: "shifts", label: "Смены", icon: BanknoteIcon, href: "/shifts", roles: ["owner"] },
   { id: "settings", label: "Настройки", icon: SettingsIcon, href: "/settings", roles: ["owner"] },
 ] as const
+
+const navGroups: Array<{ label: string; ids: CrmSection[] }> = [
+  { label: "CRM", ids: ["deals", "clients"] },
+  { label: "Работа", ids: ["sales", "orders", "ready-orders"] },
+  { label: "Склад", ids: ["stock", "stock-acts", "history"] },
+  { label: "Администрирование", ids: ["shifts", "settings"] },
+]
+
+const descriptions: Partial<Record<CrmSection, string>> = {
+  deals: "Воронка продаж и обработка заявок",
+  clients: "База клиентов, скидки и история заказов",
+  sales: "Продажи, заказы и денежные операции смены",
+  orders: "Состав, сроки и статусы заказов в работе",
+  "ready-orders": "Выдача, доставка и финальная оплата готовых заказов",
+  stock: "Остатки, акты, импорт и движение товаров",
+  "stock-acts": "Черновики, проведения и отмены складских актов",
+  history: "Движения товаров и складская история",
+  shifts: "Открытие, закрытие и сверка кассовых смен",
+  settings: "Пользователи, поставщики и административные справочники",
+}
 
 export function CrmShell({ user, active, title, actions, children }: CrmShellProps) {
   const visibleItems = navItems.filter((item) => item.roles.includes(user.role))
@@ -85,30 +106,39 @@ export function CrmShell({ user, active, title, actions, children }: CrmShellPro
           </div>
         </SidebarHeader>
         <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupLabel>Разделы</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {visibleItems.map((item) => {
-                  const Icon = item.icon
-                  const isActive = item.id === active
+          {navGroups.map((group) => {
+            const items = visibleItems.filter((item) => group.ids.includes(item.id))
+            if (items.length === 0) {
+              return null
+            }
 
-                  return (
-                    <SidebarMenuItem key={item.id}>
-                      <SidebarMenuButton
-                        tooltip={item.label}
-                        isActive={isActive}
-                        render={<Link href={item.href} />}
-                      >
-                        <Icon />
-                        <span>{item.label}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  )
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+            return (
+              <SidebarGroup key={group.label}>
+                <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {items.map((item) => {
+                      const Icon = item.icon
+                      const isActive = item.id === active
+
+                      return (
+                        <SidebarMenuItem key={item.id}>
+                          <SidebarMenuButton
+                            tooltip={item.label}
+                            isActive={isActive}
+                            render={<Link href={item.href} />}
+                          >
+                            <Icon />
+                            <span>{item.label}</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      )
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )
+          })}
         </SidebarContent>
         <SidebarFooter>
           <div className="flex flex-col gap-2 rounded-lg border bg-background p-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-0">
@@ -132,17 +162,19 @@ export function CrmShell({ user, active, title, actions, children }: CrmShellPro
       </Sidebar>
 
       <SidebarInset className="bg-zinc-50">
-        <header className="sticky top-0 z-30 flex min-h-14 items-center justify-between gap-3 border-b border-border bg-background px-4 shadow-sm md:px-5">
+        <header className="sticky top-0 z-30 flex min-h-14 items-center gap-3 border-b border-zinc-200 bg-white px-4 shadow-sm md:px-5">
           <div className="flex min-w-0 items-center gap-3">
             <SidebarTrigger variant="ghost" size="icon-sm">
               <MenuIcon />
             </SidebarTrigger>
-            <h1 className="truncate text-lg font-semibold text-zinc-950">{title}</h1>
+            <span className="truncate text-sm font-medium text-zinc-500">Flower Buro</span>
           </div>
-          <div className={cn("flex shrink-0 items-center gap-2", !actions && "hidden")}>{actions}</div>
         </header>
         <main className="flex flex-1 flex-col p-4 md:p-5">
-          <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">{children}</div>
+          <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
+            <PageHeader title={title} description={descriptions[active]} actions={actions} />
+            {children}
+          </div>
         </main>
       </SidebarInset>
     </SidebarProvider>

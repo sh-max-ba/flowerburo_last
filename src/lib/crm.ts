@@ -22,6 +22,8 @@ export type Customer = {
   createdAt: string
   updatedAt: string
   dealsCount?: number
+  ordersCount?: number
+  salesCount?: number
 }
 
 export type DealPipeline = {
@@ -86,6 +88,8 @@ export type Deal = {
   total: number
   paid: number
   orderId: number | null
+  orderNumber?: string | null
+  orderStatus?: string
   wazzupChatType: string
   wazzupChatId: string
   wazzupChannelId: string
@@ -147,9 +151,14 @@ export function listCustomers(options: { search?: string } = {}) {
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""
   const rows = db()
     .prepare(
-      `SELECT customers.*, COUNT(deals.id) as deals_count
+      `SELECT customers.*,
+        COUNT(DISTINCT deals.id) as deals_count,
+        COUNT(DISTINCT orders.id) as orders_count,
+        COUNT(DISTINCT sales.id) as sales_count
        FROM customers
        LEFT JOIN deals ON deals.customer_id = customers.id
+       LEFT JOIN orders ON orders.customer_id = customers.id
+       LEFT JOIN sales ON sales.customer_id = customers.id
        ${where}
        GROUP BY customers.id
        ORDER BY customers.created_at DESC, customers.id DESC
@@ -351,10 +360,12 @@ export function listDeals(options: { customerId?: number } = {}) {
   const rows = db()
     .prepare(
       `SELECT deals.*, deal_stages.name as stageName, deal_stages.position as stagePosition,
-        COALESCE(customers.default_discount_percent, 0) as customerDefaultDiscountPercent
+        COALESCE(customers.default_discount_percent, 0) as customerDefaultDiscountPercent,
+        orders.number as orderNumber, orders.status as orderStatus
        FROM deals
        LEFT JOIN deal_stages ON deal_stages.id = deals.stage_id
        LEFT JOIN customers ON customers.id = deals.customer_id
+       LEFT JOIN orders ON orders.id = deals.order_id
        ${where}
        ORDER BY COALESCE(deal_stages.position, 999), deals.updated_at DESC, deals.id DESC`
     )
@@ -367,10 +378,12 @@ export function getDeal(dealId: number) {
   const row = db()
     .prepare(
       `SELECT deals.*, deal_stages.name as stageName, deal_stages.position as stagePosition,
-        COALESCE(customers.default_discount_percent, 0) as customerDefaultDiscountPercent
+        COALESCE(customers.default_discount_percent, 0) as customerDefaultDiscountPercent,
+        orders.number as orderNumber, orders.status as orderStatus
        FROM deals
        LEFT JOIN deal_stages ON deal_stages.id = deals.stage_id
        LEFT JOIN customers ON customers.id = deals.customer_id
+       LEFT JOIN orders ON orders.id = deals.order_id
        WHERE deals.id = ?`
     )
     .get(dealId) as Record<string, unknown> | undefined
@@ -867,6 +880,8 @@ function mapCustomer(row: Record<string, unknown>): Customer {
     createdAt: String(row.created_at ?? ""),
     updatedAt: String(row.updated_at ?? ""),
     dealsCount: row.deals_count === undefined ? undefined : toNumber(row.deals_count),
+    ordersCount: row.orders_count === undefined ? undefined : toNumber(row.orders_count),
+    salesCount: row.sales_count === undefined ? undefined : toNumber(row.sales_count),
   }
 }
 
@@ -902,6 +917,8 @@ function mapDeal(row: Record<string, unknown>, items: DealItem[]): Deal {
     total: toNumber(row.total),
     paid: toNumber(row.paid),
     orderId: row.order_id === null || row.order_id === undefined ? null : toNumber(row.order_id),
+    orderNumber: row.orderNumber === null || row.orderNumber === undefined ? null : String(row.orderNumber ?? ""),
+    orderStatus: String(row.orderStatus ?? ""),
     wazzupChatType: String(row.wazzup_chat_type ?? ""),
     wazzupChatId: String(row.wazzup_chat_id ?? ""),
     wazzupChannelId: String(row.wazzup_channel_id ?? ""),

@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { CustomerFields } from "@/components/clients/customers-page"
+import { CustomerFields, sourceLabel } from "@/components/clients/customers-page"
 
 type ActionResult = Awaited<ReturnType<typeof updateCustomerAction>>
 
@@ -50,14 +50,21 @@ export function CustomerDetailPage({
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
-      <Card className="rounded-lg bg-white">
+      <Card className="rounded-2xl border-zinc-200 bg-white">
         <CardHeader>
-          <CardTitle className="text-zinc-950">{customer.name}</CardTitle>
-          <CardDescription>
-            {customer.phone || "Телефон не указан"} · скидка {customer.defaultDiscountPercent}%
-          </CardDescription>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <CardTitle className="truncate font-semibold text-zinc-950">Карточка клиента</CardTitle>
+              <CardDescription className="text-zinc-500">{customer.phone || "Телефон не указан"}</CardDescription>
+            </div>
+            <Badge className="bg-emerald-100 text-emerald-900">Скидка {customer.defaultDiscountPercent}%</Badge>
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
+          <div className="grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm">
+            <InfoLine label="Источник" value={sourceLabel(customer.source)} />
+            <InfoLine label="Комментарий" value={customer.comment || "Нет комментария"} />
+          </div>
           <form onSubmit={submit}>
             <input type="hidden" name="customerId" value={customer.id} />
             <CustomerFields customer={customer} />
@@ -69,10 +76,10 @@ export function CustomerDetailPage({
       </Card>
 
       <div className="flex min-w-0 flex-col gap-5">
-        <Card className="rounded-lg bg-white">
+        <Card className="rounded-2xl border-zinc-200 bg-white">
           <CardHeader>
-            <CardTitle className="text-zinc-950">Сделки клиента</CardTitle>
-            <CardDescription>{deals.length} найдено</CardDescription>
+            <CardTitle className="font-semibold text-zinc-950">Сделки</CardTitle>
+            <CardDescription className="text-zinc-500">{deals.length} найдено</CardDescription>
           </CardHeader>
           <CardContent>
             {deals.length ? (
@@ -99,7 +106,9 @@ export function CustomerDetailPage({
                       </TableCell>
                       <TableCell className="text-right font-semibold">{formatMoney(deal.total)}</TableCell>
                       <TableCell className="text-right">{formatMoney(deal.paid)}</TableCell>
-                      <TableCell className="text-right">{formatMoney(Math.max(0, deal.total - deal.paid))}</TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {formatMoney(Math.max(0, deal.total - deal.paid))}
+                      </TableCell>
                       <TableCell>{dateOnly(deal.createdAt)}</TableCell>
                       <TableCell className="text-right">
                         <Button size="sm" variant="outline" render={<Link href={`/deals/${deal.id}`} />}>
@@ -122,10 +131,10 @@ export function CustomerDetailPage({
           </CardContent>
         </Card>
 
-        <Card className="rounded-lg bg-white">
+        <Card className="rounded-2xl border-zinc-200 bg-white">
           <CardHeader>
-            <CardTitle className="text-zinc-950">Заказы клиента</CardTitle>
-            <CardDescription>{orders.length} найдено</CardDescription>
+            <CardTitle className="font-semibold text-zinc-950">Заказы</CardTitle>
+            <CardDescription className="text-zinc-500">{orders.length} найдено</CardDescription>
           </CardHeader>
           <CardContent>
             {orders.length ? (
@@ -144,7 +153,9 @@ export function CustomerDetailPage({
                   {orders.map((order) => (
                     <TableRow key={order.id}>
                       <TableCell className="font-medium">{order.number}</TableCell>
-                      <TableCell>{order.status}</TableCell>
+                      <TableCell>
+                        <Badge variant={order.status === "Отменен" ? "destructive" : "outline"}>{order.status}</Badge>
+                      </TableCell>
                       <TableCell className="text-right font-semibold">{formatMoney(order.total)}</TableCell>
                       <TableCell className="text-right">{formatMoney(order.paid)}</TableCell>
                       <TableCell>{dateOnly(order.dueAt)}</TableCell>
@@ -172,10 +183,10 @@ export function CustomerDetailPage({
           </CardContent>
         </Card>
 
-        <Card className="rounded-lg bg-white">
+        <Card className="rounded-2xl border-zinc-200 bg-white">
           <CardHeader>
-            <CardTitle className="text-zinc-950">Продажи клиента</CardTitle>
-            <CardDescription>{sales.length} найдено</CardDescription>
+            <CardTitle className="font-semibold text-zinc-950">Продажи</CardTitle>
+            <CardDescription className="text-zinc-500">{sales.length} найдено</CardDescription>
           </CardHeader>
           <CardContent>
             {sales.length ? (
@@ -210,6 +221,15 @@ export function CustomerDetailPage({
           </CardContent>
         </Card>
       </div>
+    </div>
+  )
+}
+
+function InfoLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs text-zinc-500">{label}</div>
+      <div className="font-medium text-zinc-950">{value}</div>
     </div>
   )
 }

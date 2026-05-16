@@ -4,15 +4,23 @@ import type React from "react"
 import { useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ArrowLeftIcon, ArrowRightIcon, ExternalLinkIcon, PlusIcon } from "lucide-react"
+import { ArrowLeftIcon, ArrowRightIcon, ExternalLinkIcon, MoreHorizontalIcon, PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 import { createDealAction, updateDealStageAction } from "@/app/actions"
-import type { Customer, Deal, DealBoardData, DealStage } from "@/lib/crm"
+import type { Customer, Deal, DealBoardData, DealSource, DealStage } from "@/lib/crm"
 import type { CurrentUser } from "@/lib/db"
-import { formatMoney } from "@/lib/utils"
+import { cn, formatMoney } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import {
   Dialog,
   DialogContent,
@@ -32,6 +40,14 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 
 type ActionResult = Awaited<ReturnType<typeof createDealAction>>
+
+const sourceLabels: Record<DealSource, string> = {
+  manual: "Ручная",
+  whatsapp: "WhatsApp",
+  instagram: "Instagram",
+  site: "Сайт",
+  phone: "Телефон",
+}
 
 export function DealsKanban({
   board,
@@ -106,28 +122,41 @@ export function DealsKanban({
             const total = deals.reduce((sum, deal) => sum + deal.total, 0)
 
             return (
-              <section key={stage.id} className="w-[320px] shrink-0">
-                <div className="mb-3 rounded-lg border border-zinc-300 bg-white p-3 shadow-sm">
+              <section key={stage.id} className="w-[360px] shrink-0">
+                <div className="sticky top-0 z-10 mb-3 rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <h2 className="truncate text-sm font-semibold text-zinc-950">{stage.name}</h2>
-                      <div className="mt-1 text-xs text-zinc-600">
-                        {deals.length} сделок · <span className="font-semibold">{formatMoney(total)}</span>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <h2 className="truncate text-base font-semibold text-zinc-950">{stage.name}</h2>
+                        <Badge variant="secondary">{deals.length}</Badge>
+                      </div>
+                      <div className="mt-1 text-sm text-zinc-500">
+                        Сумма: <span className="font-semibold text-zinc-950">{formatMoney(total)}</span>
                       </div>
                     </div>
                     <span className="size-3 rounded-full" style={{ backgroundColor: stage.color || "#64748b" }} />
                   </div>
                 </div>
                 <div className="flex flex-col gap-3">
-                  {deals.map((deal) => (
-                    <DealCard
-                      key={deal.id}
-                      deal={deal}
-                      stages={stages}
-                      pending={pending}
-                      onMove={moveDeal}
-                    />
-                  ))}
+                  {deals.length ? (
+                    deals.map((deal) => (
+                      <DealCard
+                        key={deal.id}
+                        deal={deal}
+                        stages={stages}
+                        pending={pending}
+                        onMove={moveDeal}
+                        onMoveToStage={(stageId) => run(() => updateDealStageAction(deal.id, stageId))}
+                      />
+                    ))
+                  ) : (
+                    <Empty className="min-h-28 rounded-lg border border-dashed border-zinc-200 bg-white">
+                      <EmptyHeader>
+                        <EmptyTitle className="text-sm">Сделок нет</EmptyTitle>
+                        <EmptyDescription className="text-xs">Переместите сюда сделку или создайте новую.</EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  )}
                 </div>
               </section>
             )
@@ -231,11 +260,11 @@ export function DealsKanban({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="manual">manual</SelectItem>
-                        <SelectItem value="whatsapp">whatsapp</SelectItem>
-                        <SelectItem value="instagram">instagram</SelectItem>
-                        <SelectItem value="site">site</SelectItem>
-                        <SelectItem value="phone">phone</SelectItem>
+                        <SelectItem value="manual">Ручная</SelectItem>
+                        <SelectItem value="whatsapp">WhatsApp</SelectItem>
+                        <SelectItem value="instagram">Instagram</SelectItem>
+                        <SelectItem value="site">Сайт</SelectItem>
+                        <SelectItem value="phone">Телефон</SelectItem>
                       </SelectContent>
                     </Select>
                   </FieldContent>
@@ -282,17 +311,20 @@ function DealCard({
   stages,
   pending,
   onMove,
+  onMoveToStage,
 }: {
   deal: Deal
   stages: DealStage[]
   pending: boolean
   onMove: (deal: Deal, direction: -1 | 1) => void
+  onMoveToStage: (stageId: number) => void
 }) {
   const currentIndex = stages.findIndex((stage) => stage.id === deal.stageId)
   const balance = Math.max(0, deal.total - deal.paid)
+  const isPaid = deal.total > 0 && deal.paid >= deal.total
 
   return (
-    <Card className="rounded-lg border-zinc-200 bg-white shadow-sm">
+    <Card className="rounded-2xl border-zinc-200 bg-white shadow-sm">
       <CardHeader className="gap-2">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -311,9 +343,9 @@ function DealCard({
       <CardContent className="flex flex-col gap-3">
         <div className="text-sm">
           <div className="font-medium text-zinc-950">{deal.customerName || "Клиент не указан"}</div>
-          <div className="text-zinc-600">{deal.customerPhone || "Телефон не указан"}</div>
+          <div className="text-zinc-500">{deal.customerPhone || "Телефон не указан"}</div>
         </div>
-        <div className="grid grid-cols-2 gap-2 text-sm">
+        <div className="grid grid-cols-3 gap-2 text-sm">
           <div>
             <div className="text-xs text-zinc-500">Итог</div>
             <div className="font-semibold text-zinc-950">{formatMoney(deal.total)}</div>
@@ -322,17 +354,26 @@ function DealCard({
             <div className="text-xs text-zinc-500">Оплачено</div>
             <div className="font-semibold text-zinc-950">{formatMoney(deal.paid)}</div>
           </div>
+          <div>
+            <div className="text-xs text-zinc-500">Остаток</div>
+            <div className={cn("font-semibold", balance > 0 ? "text-amber-700" : "text-emerald-700")}>
+              {formatMoney(balance)}
+            </div>
+          </div>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {balance > 0 && <Badge className="bg-amber-100 text-amber-900">Есть остаток оплаты</Badge>}
+          {deal.orderId && <Badge className="bg-sky-100 text-sky-900">Есть заказ</Badge>}
+          {deal.orderId && deal.orderStatus && <Badge variant="outline">{deal.orderStatus}</Badge>}
+          {balance > 0 && <Badge className="bg-amber-100 text-amber-900">Остаток {formatMoney(balance)}</Badge>}
+          {isPaid && <Badge className="bg-emerald-100 text-emerald-900">Оплачено</Badge>}
           {deal.dealDiscountType === "percent" && deal.dealDiscountValue > 0 && (
             <Badge className="bg-green-100 text-green-900">Клиентская скидка</Badge>
           )}
-          {deal.source === "whatsapp" && <Badge className="bg-slate-200 text-slate-950">WhatsApp</Badge>}
-          <Badge className="bg-slate-100 text-slate-900">{deal.source}</Badge>
+          <Badge className="bg-slate-100 text-slate-900">{sourceLabels[deal.source]}</Badge>
         </div>
         <div className="text-xs text-zinc-600">
-          {deal.dueAt ? formatDateTime(deal.dueAt) : "Дата не указана"} · {deal.responsibleUserName || "Без ответственного"}
+          Готовность: {deal.dueAt ? formatDateTime(deal.dueAt) : "не указана"} ·{" "}
+          {deal.responsibleUserName || "Без ответственного"}
         </div>
         <div className="flex gap-2">
           <Button
@@ -354,6 +395,28 @@ function DealCard({
             <ArrowRightIcon />
             Переместить
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button type="button" variant="outline" size="icon-sm" disabled={pending}>
+                  <MoreHorizontalIcon />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end">
+              <DropdownMenuGroup>
+                {stages.map((stage) => (
+                  <DropdownMenuItem
+                    key={stage.id}
+                    disabled={stage.id === deal.stageId}
+                    onClick={() => onMoveToStage(stage.id)}
+                  >
+                    {stage.name}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </CardContent>
     </Card>

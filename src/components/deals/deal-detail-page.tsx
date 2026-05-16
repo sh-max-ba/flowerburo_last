@@ -4,7 +4,7 @@ import type React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useRef, useState, useTransition } from "react"
-import { CheckCircle2Icon, ExternalLinkIcon, Trash2Icon } from "lucide-react"
+import { CheckCircle2Icon, ExternalLinkIcon, ReceiptTextIcon, ShoppingBagIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 import {
   addDealItemAction,
@@ -525,29 +525,37 @@ export function DealDetailPage({
     <div className="h-auto overflow-visible xl:h-[calc(100vh-6rem)] xl:overflow-hidden">
       <div className="grid h-full grid-cols-1 gap-5 xl:grid-cols-[minmax(640px,1fr)_minmax(620px,720px)] 2xl:grid-cols-[minmax(720px,1fr)_minmax(680px,760px)]">
         <section className="min-w-0 xl:min-h-0">
-          <Card className="h-full min-h-[520px] overflow-hidden rounded-lg border-zinc-300 bg-white shadow-sm">
+          <Card className="h-full min-h-[520px] overflow-hidden rounded-2xl border-zinc-200 bg-white shadow-sm">
             <CardHeader>
-              <CardTitle className="text-zinc-950">Wazzup чат</CardTitle>
-              <CardDescription>Wazzup iframe будет подключен на следующем этапе</CardDescription>
+              <CardTitle className="text-zinc-950">Workflow сделки</CardTitle>
+              <CardDescription>Клиент → Сделка → Состав → Скидки → Оплата → Заказ</CardDescription>
             </CardHeader>
-            <CardContent className="flex h-[calc(100%-5rem)] min-h-[420px] flex-col justify-between overflow-hidden">
-              <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-700">
-                Реальных запросов к Wazzup на этом этапе нет. API keys не используются на клиенте.
-              </div>
-              {deal.wazzupChatId && (
-                <div className="rounded-lg border bg-slate-50 p-4 text-sm">
-                  <div className="font-semibold text-slate-950">Chat info</div>
-                  <div>type: {deal.wazzupChatType || "-"}</div>
-                  <div>chat_id: {deal.wazzupChatId}</div>
-                  <div>channel_id: {deal.wazzupChannelId || "-"}</div>
+            <CardContent className="flex h-[calc(100%-5rem)] min-h-[420px] flex-col gap-3 overflow-hidden">
+              <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+                <div className="text-sm font-semibold text-zinc-950">{deal.number || `Сделка #${deal.id}`}</div>
+                <div className="mt-1 text-sm text-zinc-500">
+                  {deal.customerName || "Клиент не указан"} · {sourceLabel(draft.source)}
                 </div>
-              )}
+              </div>
+              <div className="grid gap-2 text-sm">
+                <WorkflowStep label="Клиент" done={Boolean(selectedCustomer || deal.customerName)} />
+                <WorkflowStep label="Состав" done={hasItems} />
+                <WorkflowStep label="Скидки" done={totals.itemsDiscountTotal > 0 || totals.dealDiscountAmount > 0} />
+                <WorkflowStep label="Оплата" done={balance <= 0 && totals.total > 0} />
+                <WorkflowStep label="Заказ" done={Boolean(deal.orderId)} />
+              </div>
+              <Alert className="mt-auto border-zinc-200 bg-white">
+                <AlertTitle className="text-zinc-950">Рабочая карточка менеджера</AlertTitle>
+                <AlertDescription className="text-zinc-500">
+                  Заполните состав и скидку, примите оплату при открытой смене и создайте заказ из сделки.
+                </AlertDescription>
+              </Alert>
             </CardContent>
           </Card>
         </section>
 
         <aside className="flex min-w-0 flex-col gap-4 overflow-visible xl:min-h-0 xl:overflow-y-auto xl:pr-2">
-          <div className="overflow-visible rounded-lg border border-zinc-300 bg-white p-4 shadow-sm">
+          <div className="overflow-visible rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-xs text-muted-foreground">{deal.number || `Сделка #${deal.id}`}</div>
@@ -559,7 +567,7 @@ export function DealDetailPage({
             </div>
           </div>
 
-          <Card className="overflow-visible rounded-lg border-zinc-300 bg-white shadow-sm">
+          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Клиент</CardTitle>
               <CardDescription>Контакт и персональная скидка</CardDescription>
@@ -596,7 +604,7 @@ export function DealDetailPage({
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                 <div>
                   <div className="text-xs text-muted-foreground">Телефон</div>
-                  <div className="mt-1 min-h-8 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-950">
+                  <div className="mt-1 min-h-8 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-950">
                     {selectedCustomer?.phone || deal.customerPhone || "Не указан"}
                   </div>
                 </div>
@@ -618,7 +626,7 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-lg border-zinc-300 bg-white shadow-sm">
+          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Детали сделки</CardTitle>
               <CardDescription>Основные поля сохраняются автоматически</CardDescription>
@@ -752,7 +760,7 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-lg border-zinc-300 bg-white shadow-sm">
+          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Состав</CardTitle>
               <CardDescription>Позиции и скидки сохраняются после изменения</CardDescription>
@@ -766,7 +774,7 @@ export function DealDetailPage({
                       <TableHead className="min-w-[180px] max-w-[240px] text-xs font-semibold text-zinc-950">
                         Товар
                       </TableHead>
-                      <TableHead className="w-16 text-xs font-semibold text-zinc-950">Qty</TableHead>
+                      <TableHead className="w-16 text-xs font-semibold text-zinc-950">Кол-во</TableHead>
                       <TableHead className="w-24 text-xs font-semibold text-zinc-950">Цена</TableHead>
                       <TableHead className="w-52 text-xs font-semibold text-zinc-950">Скидка</TableHead>
                       <TableHead className="w-28 text-right text-xs font-semibold text-zinc-950">Итого</TableHead>
@@ -865,8 +873,7 @@ export function DealDetailPage({
                           <Button
                             type="button"
                             size="icon-sm"
-                            variant="ghost"
-                            className="text-red-700 hover:bg-red-50 hover:text-red-800"
+                            variant="destructive"
                             onClick={() => void removeItem(item)}
                           >
                             <Trash2Icon />
@@ -880,7 +887,7 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-lg border-zinc-300 bg-white shadow-sm">
+          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
             <CardHeader className="pb-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle className="text-base font-semibold text-zinc-950">Скидка на чек</CardTitle>
@@ -944,7 +951,85 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-lg border-zinc-300 bg-white shadow-sm">
+          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold text-zinc-950">Оплата</CardTitle>
+              <CardDescription>Оплаты проходят через открытую смену кассы</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 overflow-visible text-sm">
+              <div className="grid grid-cols-3 gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+                <SummaryBox label="Итого" value={formatMoney(totals.total)} />
+                <SummaryBox label="Оплачено" value={formatMoney(deal.paid)} />
+                <SummaryBox label="Остаток" value={formatMoney(balance)} strong={balance > 0} />
+              </div>
+              {balance <= 0 && totals.total > 0 ? (
+                <Badge className="w-fit bg-emerald-100 text-emerald-900">
+                  <CheckCircle2Icon data-icon="inline-start" />
+                  Оплачено
+                </Badge>
+              ) : (
+                <Button
+                  type="button"
+                  disabled={actionPending || hasPendingSaves}
+                  className="h-10 bg-zinc-950 text-white hover:bg-zinc-800"
+                  onClick={openPaymentDialog}
+                >
+                  <ReceiptTextIcon data-icon="inline-start" />
+                  Принять оплату
+                </Button>
+              )}
+              {showShiftWarning && (
+                <Alert className="border-amber-200 bg-amber-50 text-amber-950">
+                  <AlertTitle>Смена не открыта</AlertTitle>
+                  <AlertDescription>Откройте смену в кассе, чтобы принять оплату по сделке.</AlertDescription>
+                </Alert>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold text-zinc-950">Заказ</CardTitle>
+              <CardDescription>Создание заказа из текущей сделки</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 overflow-visible text-sm">
+              {deal.orderId ? (
+                <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
+                  <div className="text-xs font-medium uppercase text-sky-900">Связанный заказ</div>
+                  <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-sky-950">
+                        {deal.orderNumber || `Заказ #${deal.orderId}`}
+                      </div>
+                      <div className="text-xs text-sky-800">{deal.orderStatus || "Статус не указан"}</div>
+                    </div>
+                    <Button size="sm" variant="outline" render={<Link href={orderHref} />}>
+                      <ExternalLinkIcon data-icon="inline-start" />
+                      Открыть заказ
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-zinc-600">
+                    Заказ еще не создан
+                  </div>
+                  <Button
+                    type="button"
+                    disabled={!hasItems || actionPending || hasPendingSaves}
+                    className="h-10 bg-zinc-950 text-white hover:bg-zinc-800"
+                    onClick={createOrderFromDeal}
+                  >
+                    <ShoppingBagIcon data-icon="inline-start" />
+                    Создать заказ
+                  </Button>
+                  {!hasItems && <div className="text-xs text-zinc-500">Добавьте товары, чтобы создать заказ</div>}
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm xl:sticky xl:bottom-4">
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Итог</CardTitle>
               <CardDescription>Суммы считаются текущим pricing engine</CardDescription>
@@ -956,26 +1041,6 @@ export function DealDetailPage({
               <SummaryRow label="Итого" value={formatMoney(totals.total)} strong total />
               <SummaryRow label="Оплачено" value={formatMoney(deal.paid)} />
               <SummaryRow label="Остаток" value={formatMoney(balance)} strong danger={balance > 0} />
-
-              {deal.orderId && (
-                <div className="mt-2 rounded-lg border border-sky-200 bg-sky-50 p-3">
-                  <div className="text-xs font-medium uppercase text-sky-900">Связанный заказ</div>
-                  <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-                    <div className="font-semibold text-sky-950">Заказ #{deal.orderId}</div>
-                    <Button size="sm" variant="outline" render={<Link href={orderHref} />}>
-                      <ExternalLinkIcon data-icon="inline-start" />
-                      Открыть заказ
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {showShiftWarning && (
-                <Alert className="mt-2 border-amber-200 bg-amber-50 text-amber-950">
-                  <AlertTitle>Откройте смену, чтобы принять оплату</AlertTitle>
-                  <AlertDescription>Оплата по сделке проходит через текущую открытую смену.</AlertDescription>
-                </Alert>
-              )}
 
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 {deal.orderId ? (
@@ -994,8 +1059,8 @@ export function DealDetailPage({
                   </Button>
                 )}
                 {balance <= 0 ? (
-                  <div className="flex h-10 items-center justify-center rounded-lg border bg-emerald-50 px-3 text-sm font-medium text-emerald-900">
-                    <CheckCircle2Icon className="mr-2 size-4" />
+                  <div className="flex h-10 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-sm font-medium text-emerald-900">
+                    <CheckCircle2Icon data-icon="inline-start" />
                     Оплачено
                   </div>
                 ) : (
@@ -1005,11 +1070,12 @@ export function DealDetailPage({
                     className="bg-zinc-950 text-white hover:bg-zinc-800"
                     onClick={openPaymentDialog}
                   >
+                    <ReceiptTextIcon data-icon="inline-start" />
                     Принять оплату
                   </Button>
                 )}
               </div>
-              {!hasItems && <div className="text-xs text-muted-foreground">Добавьте товары в сделку.</div>}
+              {!hasItems && <div className="text-xs text-zinc-500">Добавьте товары, чтобы создать заказ</div>}
             </CardContent>
           </Card>
         </aside>
@@ -1023,7 +1089,7 @@ export function DealDetailPage({
               <DialogDescription>{deal.number || `Сделка #${deal.id}`}</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-3 gap-2 rounded-lg border bg-muted/30 p-3 text-sm">
+              <div className="grid grid-cols-3 gap-2 rounded-2xl border bg-muted/30 p-3 text-sm">
                 <SummaryBox label="Итого" value={formatMoney(totals.total)} />
                 <SummaryBox label="Оплачено" value={formatMoney(deal.paid)} />
                 <SummaryBox label="Остаток" value={formatMoney(balance)} strong />
@@ -1090,21 +1156,33 @@ export function DealDetailPage({
   )
 }
 
+function WorkflowStep({ label, done }: { label: string; done: boolean }) {
+  return (
+    <div className="flex items-center justify-between rounded-2xl border border-zinc-200 bg-white px-3 py-2">
+      <span className="font-medium text-zinc-950">{label}</span>
+      <Badge className={done ? "bg-emerald-100 text-emerald-900" : "bg-zinc-100 text-zinc-600"}>
+        {done ? "Готово" : "Ожидает"}
+      </Badge>
+    </div>
+  )
+}
+
 function SaveIndicator({ status, error }: { status: SaveStatus; error: string }) {
   const label = status === "saving" ? "Сохраняем..." : status === "error" ? "Ошибка сохранения" : "Сохранено"
 
   return (
-    <div className="text-right">
-      <div
+    <div className="flex flex-col items-end gap-1 text-right">
+      <Badge
+        variant="outline"
         className={cn(
-          "text-xs font-medium",
+          "border-zinc-200 bg-white",
           status === "saving" && "text-zinc-600",
-          status === "saved" && "text-emerald-700",
-          status === "error" && "text-red-700"
+          status === "saved" && "border-emerald-200 bg-emerald-50 text-emerald-700",
+          status === "error" && "border-red-200 bg-red-50 text-red-700"
         )}
       >
         {label}
-      </div>
+      </Badge>
       {status === "error" && error && <div className="max-w-56 truncate text-xs text-red-700">{error}</div>}
     </div>
   )
@@ -1130,7 +1208,7 @@ function SummaryRow({
         className={cn(
           "font-medium text-zinc-950",
           strong && "font-semibold",
-          total && "text-lg",
+          total && "text-xl",
           danger && "text-amber-700"
         )}
       >
@@ -1144,7 +1222,7 @@ function SummaryBox({ label, value, strong }: { label: string; value: string; st
   return (
     <div className="min-w-0">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className={cn("mt-1 truncate font-medium text-zinc-950", strong && "font-semibold text-amber-800")}>
+      <div className={cn("mt-1 truncate font-semibold text-zinc-950", strong && "text-amber-800")}>
         {value}
       </div>
     </div>

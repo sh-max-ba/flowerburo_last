@@ -75,10 +75,10 @@ export function CustomersPage({
         </Button>
       </div>
 
-      <Card className="rounded-lg border-zinc-200 bg-white">
+      <Card className="rounded-2xl border-zinc-200 bg-white">
         <CardHeader>
-          <CardTitle className="text-zinc-950">Клиенты</CardTitle>
-          <CardDescription>{customers.length} в списке</CardDescription>
+          <CardTitle className="font-semibold text-zinc-950">Клиенты</CardTitle>
+          <CardDescription className="text-zinc-500">{customers.length} в списке</CardDescription>
         </CardHeader>
         <CardContent>
           {customers.length ? (
@@ -89,6 +89,7 @@ export function CustomersPage({
                     <TableHead>Имя</TableHead>
                     <TableHead>Телефон</TableHead>
                     <TableHead>Скидка</TableHead>
+                    <TableHead>Активность</TableHead>
                     <TableHead>Источник</TableHead>
                     <TableHead>Комментарий</TableHead>
                     <TableHead>Создан</TableHead>
@@ -112,7 +113,14 @@ export function CustomersPage({
                       <TableCell>
                         <span className="font-semibold">{customer.defaultDiscountPercent}%</span>
                       </TableCell>
-                      <TableCell>{customer.source || "-"}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1.5">
+                          <Badge variant="secondary">{customer.dealsCount ?? 0} сделок</Badge>
+                          <Badge variant="outline">{customer.ordersCount ?? 0} заказов</Badge>
+                          <Badge variant="outline">{customer.salesCount ?? 0} продаж</Badge>
+                        </div>
+                      </TableCell>
+                      <TableCell>{sourceLabel(customer.source)}</TableCell>
                       <TableCell className="max-w-72 truncate">{customer.comment || "-"}</TableCell>
                       <TableCell>{formatDate(customer.createdAt)}</TableCell>
                       <TableCell className="text-right">
@@ -224,4 +232,16 @@ function formatDate(value: string) {
     month: "2-digit",
     year: "numeric",
   }).format(new Date(value))
+}
+
+export function sourceLabel(value: string) {
+  const labels: Record<string, string> = {
+    manual: "Ручная",
+    whatsapp: "WhatsApp",
+    instagram: "Instagram",
+    site: "Сайт",
+    phone: "Телефон",
+  }
+
+  return labels[value] ?? (value || "-")
 }

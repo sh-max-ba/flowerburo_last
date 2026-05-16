@@ -1,8 +1,10 @@
 import Link from "next/link"
 import { AccessDenied } from "@/components/access-denied"
+import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -15,6 +17,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { listStockDocuments, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
+import { stockDocumentStatusLabel, stockDocumentTypeLabel } from "@/lib/labels"
 
 export const dynamic = "force-dynamic"
 
@@ -32,16 +35,16 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
 
   return (
     <main className="min-h-screen bg-zinc-50 p-4 md:p-6">
-      <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Акты склада</h1>
-            <p className="text-sm text-muted-foreground">Проведенные пополнения и списания склада.</p>
-          </div>
-          <Link href="/stock" className={buttonVariants({ variant: "outline" })}>
-            Вернуться на склад
-          </Link>
-        </div>
+      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
+        <PageHeader
+          title="Акты склада"
+          description="Черновики, проведения и отмены складских актов"
+          actions={
+            <Link href="/stock" className={buttonVariants({ variant: "outline" })}>
+              Вернуться на склад
+            </Link>
+          }
+        />
 
         <Card className="rounded-2xl border bg-white">
           <CardHeader>
@@ -101,7 +104,14 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
               </Link>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border">
+            {documents.length === 0 ? (
+              <Empty className="min-h-56">
+                <EmptyHeader>
+                  <EmptyTitle>Акты склада не найдены</EmptyTitle>
+                  <EmptyDescription>Измените фильтры или создайте акт со страницы склада.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -119,14 +129,7 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {documents.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
-                        Акты склада не найдены
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    documents.map((document) => (
+                  {documents.map((document) => (
                       <TableRow key={document.id}>
                         <TableCell className="font-medium">{document.number}</TableCell>
                         <TableCell>
@@ -151,20 +154,15 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
                           </Link>
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
+                    ))}
                 </TableBody>
               </Table>
-            </div>
+            )}
           </CardContent>
         </Card>
       </div>
     </main>
   )
-}
-
-function stockDocumentTypeLabel(type: StockDocumentType) {
-  return type === "stock_in" ? "Пополнение" : "Списание"
 }
 
 function StockDocumentTypeBadge({ type }: { type: StockDocumentType }) {
@@ -181,11 +179,6 @@ function StockDocumentTypeBadge({ type }: { type: StockDocumentType }) {
 }
 
 function StockDocumentStatusBadge({ status }: { status: StockDocumentStatus }) {
-  const labels: Record<StockDocumentStatus, string> = {
-    draft: "Черновик",
-    posted: "Проведен",
-    cancelled: "Отменен",
-  }
   const className =
     status === "posted"
       ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-50"
@@ -195,7 +188,7 @@ function StockDocumentStatusBadge({ status }: { status: StockDocumentStatus }) {
 
   return (
     <Badge variant={status === "cancelled" ? "destructive" : "outline"} className={className}>
-      {labels[status]}
+      {stockDocumentStatusLabel(status)}
     </Badge>
   )
 }

@@ -22,10 +22,10 @@ export function LoginForm() {
   const hasError = Boolean(state.error)
 
   return (
-    <Card className="w-full max-w-sm border bg-white">
-      <CardHeader>
-        <CardTitle>Вход</CardTitle>
-        <CardDescription>Flower Ops</CardDescription>
+    <Card className="w-full max-w-md border-zinc-200 bg-white shadow-sm">
+      <CardHeader className="text-center">
+        <CardTitle className="text-2xl">Вход</CardTitle>
+        <CardDescription>Flower Buro backoffice</CardDescription>
       </CardHeader>
       <CardContent>
         <form action={action}>

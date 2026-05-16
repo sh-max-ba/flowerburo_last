@@ -9,6 +9,7 @@ import { closeShiftAction } from "@/app/actions"
 import type { DashboardData, ShiftDetails } from "@/lib/db"
 import { cashTransactionTypeLabel, getPaymentMethodLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
+import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
@@ -38,16 +39,17 @@ export function ShiftsPage({ data }: { data: DashboardData }) {
 
   return (
     <main className="min-h-screen bg-zinc-50 px-4 py-5 md:px-6">
-      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4">
-        <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-          <div>
-            <h1 className="text-2xl font-semibold">Смены</h1>
-          </div>
-          <Link className={buttonVariants({ variant: "outline" })} href="/">
-            <ArrowLeftIcon data-icon="inline-start" />
-            В backoffice
-          </Link>
-        </div>
+      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
+        <PageHeader
+          title="Смены"
+          description="Открытие, закрытие и сверка кассовых смен"
+          actions={
+            <Link className={buttonVariants({ variant: "outline" })} href="/">
+              <ArrowLeftIcon data-icon="inline-start" />
+              В backoffice
+            </Link>
+          }
+        />
 
         <Card className="rounded-2xl border bg-white">
           <CardHeader>
@@ -133,27 +135,26 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
 
   return (
     <main className="min-h-screen bg-zinc-50 px-4 py-5 md:px-6">
-      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4">
-        <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-semibold">Смена #{shift.id}</h1>
+      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
+        <PageHeader
+          title={`Смена #${shift.id}`}
+          description={
+            <>
+              Ответственный: {detail.cashier} · Открыта: {dateTime(shift.openedAt)}
+              {shift.closedAt ? ` · Закрыта: ${dateTime(shift.closedAt)}` : ""}
+            </>
+          }
+          actions={
+            <>
               <ShiftStatusBadge status={shift.status} />
-            </div>
-            <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
-              <span>Ответственный: {detail.cashier}</span>
-              <span>Открыта: {dateTime(shift.openedAt)}</span>
-              {shift.closedAt && <span>Закрыта: {dateTime(shift.closedAt)}</span>}
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link className={buttonVariants({ variant: "outline" })} href="/shifts">
-              <ArrowLeftIcon data-icon="inline-start" />
-              Назад к сменам
-            </Link>
-            {shift.status === "open" && <ShiftCloseDialog detail={detail} />}
-          </div>
-        </div>
+              <Link className={buttonVariants({ variant: "outline" })} href="/shifts">
+                <ArrowLeftIcon data-icon="inline-start" />
+                Назад к сменам
+              </Link>
+              {shift.status === "open" && <ShiftCloseDialog detail={detail} />}
+            </>
+          }
+        />
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <ShiftStat title="Выручка до скидок" value={formatMoney(detail.summary.revenueBeforeDiscount)} />

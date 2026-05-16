@@ -79,7 +79,8 @@ import type {
 import { toDatetimeLocalValue } from "@/lib/datetime"
 import { getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import { calculateCommercialTotals, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
-import { formatMoney } from "@/lib/utils"
+import { cn, formatMoney } from "@/lib/utils"
+import { PageHeader } from "@/components/page-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -212,16 +213,35 @@ const uncategorizedValue = "__uncategorized__"
 const uncategorizedLabel = "Без категории"
 
 const sections: Array<{ id: Section; label: string; icon: typeof BoxesIcon; href: string }> = [
-  { id: "stock", label: "Склад", icon: BoxesIcon, href: "/stock" },
-  { id: "sales", label: "Касса", icon: ReceiptTextIcon, href: "/cash" },
-  { id: "ready-orders", label: "Готовые заказы", icon: PackageCheckIcon, href: "/ready-orders" },
-  { id: "shifts", label: "Смены", icon: BanknoteIcon, href: "/shifts" },
-  { id: "orders", label: "Стол заказов", icon: ClipboardListIcon, href: "/orders" },
-  { id: "clients", label: "Клиенты", icon: UserCheckIcon, href: "/clients" },
   { id: "deals", label: "Сделки", icon: TagsIcon, href: "/deals" },
+  { id: "clients", label: "Клиенты", icon: UserCheckIcon, href: "/clients" },
+  { id: "sales", label: "Касса", icon: ReceiptTextIcon, href: "/cash" },
+  { id: "orders", label: "Стол заказов", icon: ClipboardListIcon, href: "/orders" },
+  { id: "ready-orders", label: "Готовые заказы", icon: PackageCheckIcon, href: "/ready-orders" },
+  { id: "stock", label: "Склад", icon: BoxesIcon, href: "/stock" },
+  { id: "shifts", label: "Смены", icon: BanknoteIcon, href: "/shifts" },
   { id: "history", label: "История", icon: HistoryIcon, href: "/history" },
   { id: "settings", label: "Настройки", icon: SettingsIcon, href: "/settings" },
 ]
+
+const sectionGroups: Array<{ label: string; ids: Section[] }> = [
+  { label: "CRM", ids: ["deals", "clients"] },
+  { label: "Работа", ids: ["sales", "orders", "ready-orders"] },
+  { label: "Склад", ids: ["stock", "history"] },
+  { label: "Администрирование", ids: ["shifts", "settings"] },
+]
+
+const sectionDescriptions: Record<Section, string> = {
+  stock: "Остатки, акты, импорт и движение товаров",
+  sales: "Продажи, заказы и денежные операции смены",
+  "ready-orders": "Выдача, доставка и финальная оплата готовых заказов",
+  shifts: "Открытие, закрытие и сверка кассовых смен",
+  orders: "Состав, сроки и статусы заказов в работе",
+  clients: "База клиентов, скидки и история заказов",
+  deals: "Воронка продаж и обработка заявок",
+  history: "Операции системы, продажи и движение товаров",
+  settings: "Пользователи, поставщики и административные справочники",
+}
 
 const roleLabels: Record<UserRole, string> = {
   owner: "Управляющий",
@@ -232,8 +252,8 @@ const roleLabels: Record<UserRole, string> = {
 const userRoleOptions: UserRole[] = ["owner", "manager", "florist"]
 
 const roleSectionIds: Record<UserRole, Section[]> = {
-  owner: ["stock", "sales", "ready-orders", "shifts", "orders", "clients", "deals", "history", "settings"],
-  manager: ["sales", "ready-orders", "orders", "clients", "deals"],
+  owner: ["deals", "clients", "sales", "orders", "ready-orders", "stock", "shifts", "history", "settings"],
+  manager: ["deals", "clients", "sales", "orders", "ready-orders"],
   florist: ["orders"],
 }
 
@@ -443,37 +463,46 @@ export function Backoffice({
           </div>
         </SidebarHeader>
         <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupLabel>Разделы</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {visibleSections.map((item) => {
-                  const Icon = item.icon
+          {sectionGroups.map((group) => {
+            const items = visibleSections.filter((item) => group.ids.includes(item.id))
+            if (items.length === 0) {
+              return null
+            }
 
-                  return (
-                    <SidebarMenuItem key={item.id}>
-                      <SidebarMenuButton
-                        isActive={displayedSection === item.id}
-                        tooltip={item.label}
-                        onClick={() => {
-                          setSection(item.id)
-                          router.push(item.href)
-                        }}
-                      >
-                        <Icon />
-                        <span>{item.label}</span>
-                        {item.id === "ready-orders" && readyOrdersCount > 0 && (
-                          <Badge className="ml-auto h-5 min-w-5 rounded-full px-1.5 text-xs group-data-[collapsible=icon]:hidden">
-                            {readyOrdersCount}
-                          </Badge>
-                        )}
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  )
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+            return (
+              <SidebarGroup key={group.label}>
+                <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {items.map((item) => {
+                      const Icon = item.icon
+
+                      return (
+                        <SidebarMenuItem key={item.id}>
+                          <SidebarMenuButton
+                            isActive={displayedSection === item.id}
+                            tooltip={item.label}
+                            onClick={() => {
+                              setSection(item.id)
+                              router.push(item.href)
+                            }}
+                          >
+                            <Icon />
+                            <span>{item.label}</span>
+                            {item.id === "ready-orders" && readyOrdersCount > 0 && (
+                              <Badge className="ml-auto h-5 min-w-5 rounded-full px-1.5 text-xs group-data-[collapsible=icon]:hidden">
+                                {readyOrdersCount}
+                              </Badge>
+                            )}
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      )
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )
+          })}
         </SidebarContent>
         <SidebarFooter>
           <div className="flex flex-col gap-2 rounded-lg border bg-background p-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-0">
@@ -511,43 +540,49 @@ export function Backoffice({
       </Sidebar>
 
       <SidebarInset className="bg-zinc-50">
-        <header className="sticky top-0 z-30 flex min-h-14 items-center justify-between gap-3 border-b border-border bg-background px-4 shadow-sm md:px-5">
-          <div className="flex items-center gap-3">
+        <header className="sticky top-0 z-30 flex min-h-14 items-center gap-3 border-b border-zinc-200 bg-white px-4 shadow-sm md:px-5">
+          <div className="flex min-w-0 items-center gap-3">
             <SidebarTrigger variant="ghost" size="icon-sm">
               <MenuIcon />
             </SidebarTrigger>
-            <div>
-              <h1 className="text-lg font-semibold">{activeSection?.label}</h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge variant={data.stats.openShift ? "secondary" : "outline"}>
-              {displayedSection === "sales" && data.stats.openShift
-                ? "Смена открыта"
-                : data.stats.openShift
-                ? `Смена #${data.stats.openShift.id} · ${data.stats.openShift.cashierName || "ответственный не указан"}`
-                : "Смена закрыта"}
-            </Badge>
-            {displayedSection === "sales" && data.stats.openShift?.type === "night" && (
-              <Badge variant="outline">Ночная смена</Badge>
-            )}
-            {canManageShift && (
-              <Button
-                variant={data.stats.openShift ? "outline" : "default"}
-                onClick={() => {
-                  setSection(canAccessCash ? "sales" : displayedSection)
-                  setShiftSheet(true)
-                }}
-              >
-                <BanknoteIcon data-icon="inline-start" />
-                {data.stats.openShift ? "Закрыть смену" : "Открыть смену"}
-              </Button>
-            )}
+            <span className="truncate text-sm font-medium text-zinc-500">Flower Buro</span>
           </div>
         </header>
 
         <main className="flex flex-1 flex-col p-4 md:p-5">
           <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
+            <PageHeader
+              title={activeSection?.label ?? ""}
+              description={sectionDescriptions[displayedSection]}
+              actions={
+                <>
+                  <Badge variant={data.stats.openShift ? "secondary" : "outline"}>
+                    {displayedSection === "sales" && data.stats.openShift
+                      ? "Смена открыта"
+                      : data.stats.openShift
+                        ? `Смена #${data.stats.openShift.id} · ${
+                            data.stats.openShift.cashierName || "ответственный не указан"
+                          }`
+                        : "Смена закрыта"}
+                  </Badge>
+                  {displayedSection === "sales" && data.stats.openShift?.type === "night" && (
+                    <Badge variant="outline">Ночная смена</Badge>
+                  )}
+                  {canManageShift && (
+                    <Button
+                      variant={data.stats.openShift ? "outline" : "default"}
+                      onClick={() => {
+                        setSection(canAccessCash ? "sales" : displayedSection)
+                        setShiftSheet(true)
+                      }}
+                    >
+                      <BanknoteIcon data-icon="inline-start" />
+                      {data.stats.openShift ? "Закрыть смену" : "Открыть смену"}
+                    </Button>
+                  )}
+                </>
+              }
+            />
             {displayedSection === "stock" && <StatsGrid data={data} />}
 
             {displayedSection === "stock" && (
@@ -1196,8 +1231,8 @@ function CustomerSelector({
           <Button
             type="button"
             variant="outline"
-            className="w-full justify-between"
             disabled={disabled}
+            className="h-10 w-full justify-between border-zinc-300 bg-white"
           />
         }
       >
@@ -1206,7 +1241,7 @@ function CustomerSelector({
               ? `${selectedCustomer.name}${selectedCustomer.phone ? ` · ${selectedCustomer.phone}` : ""}`
               : "Без клиента"}
           </span>
-          <ChevronsUpDownIcon className="size-4 opacity-60" />
+          <ChevronsUpDownIcon className="opacity-60" />
       </PopoverTrigger>
       <PopoverContent className="w-(--anchor-width) p-0" align="start">
         <Command>
@@ -1326,10 +1361,10 @@ function QuickSaleForm({
     <div className="flex flex-col gap-5 pt-3">
       <form onSubmit={handleSubmit}>
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <Card className="min-w-0 rounded-2xl border bg-white">
+          <Card className="min-w-0 rounded-2xl border-zinc-200 bg-white">
             <CardHeader>
-              <CardTitle>Быстрая продажа</CardTitle>
-              <CardDescription>Поиск товара и компактная корзина продажи</CardDescription>
+              <CardTitle className="font-semibold text-zinc-950">Быстрая продажа</CardTitle>
+              <CardDescription className="text-zinc-500">Поиск товара и компактная корзина продажи</CardDescription>
             </CardHeader>
             <CardContent className="flex min-w-0 flex-col gap-4">
               <ProductCombobox products={products} disabled={pending} onSelect={addProduct} />
@@ -1346,10 +1381,10 @@ function QuickSaleForm({
             </CardContent>
           </Card>
 
-          <Card className="min-w-0 rounded-2xl border bg-white xl:sticky xl:top-20 xl:self-start">
+          <Card className="min-w-0 rounded-2xl border-zinc-200 bg-white xl:sticky xl:top-20 xl:self-start">
             <CardHeader>
-              <CardTitle>Оплата</CardTitle>
-              <CardDescription>Итог и комментарий к чеку</CardDescription>
+              <CardTitle className="font-semibold text-zinc-950">Оплата</CardTitle>
+              <CardDescription className="text-zinc-500">Клиент, скидка и итог к чеку</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <FieldGroup>
@@ -1364,10 +1399,12 @@ function QuickSaleForm({
                     disabled={disabled || pending}
                     onValueChange={handleCustomerChange}
                   />
-                  {selectedCustomer ? (
-                    <div className="text-xs text-muted-foreground">
-                      Скидка клиента: {selectedCustomer.defaultDiscountPercent}%
-                    </div>
+                  {selectedCustomer?.defaultDiscountPercent ? (
+                    <Badge className="w-fit bg-emerald-100 text-emerald-900">
+                      Скидка клиента {selectedCustomer.defaultDiscountPercent}%
+                    </Badge>
+                  ) : selectedCustomer ? (
+                    <Badge variant="outline" className="w-fit">Без персональной скидки</Badge>
                   ) : (
                     <Link href="/clients" className="text-xs font-medium text-primary hover:underline">
                       Создать клиента
@@ -1432,16 +1469,16 @@ function QuickSaleForm({
                   </Field>
                 </div>
               </FieldSet>
-              <div className="grid gap-2 rounded-xl border bg-muted/40 p-4">
+              <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
                 <Info label="Товары до скидки" value={formatMoney(saleTotals.itemsTotalBeforeDiscount)} />
                 <Info label="Скидка по позициям" value={formatMoney(saleTotals.itemsDiscountTotal)} />
                 <Info label="Скидка на чек" value={formatMoney(saleTotals.dealDiscountAmount)} />
                 <div>
-                  <div className="text-xs text-muted-foreground">Итого после скидок</div>
-                  <div className="text-3xl font-semibold">{formatMoney(saleTotal)}</div>
+                  <div className="text-xs text-zinc-500">Итого после скидок</div>
+                  <div className="text-3xl font-semibold text-zinc-950">{formatMoney(saleTotal)}</div>
                 </div>
               </div>
-              <Button className="w-full" type="submit" disabled={pending || disabled || items.length === 0}>
+              <Button className="h-10 w-full bg-zinc-950 text-white hover:bg-zinc-800" type="submit" disabled={pending || disabled || items.length === 0}>
                 <ReceiptTextIcon data-icon="inline-start" />
                 Провести продажу
               </Button>
@@ -1552,7 +1589,7 @@ function CashShiftBlock({
 
 function CashMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border bg-muted/30 p-3">
+    <div className="rounded-2xl border bg-muted/30 p-3">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 font-semibold">{value}</div>
     </div>
@@ -1690,10 +1727,10 @@ function NewOrderForm({
     <form onSubmit={handleSubmit} className="pt-3">
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex min-w-0 flex-col gap-4">
-          <Card className="rounded-2xl border bg-white">
+          <Card className="rounded-2xl border-zinc-200 bg-white">
             <CardHeader>
-              <CardTitle>Клиент</CardTitle>
-              <CardDescription>Основные контакты для менеджера</CardDescription>
+              <CardTitle className="font-semibold text-zinc-950">Клиент</CardTitle>
+              <CardDescription className="text-zinc-500">Основные контакты для менеджера</CardDescription>
             </CardHeader>
             <CardContent>
               <FieldGroup>
@@ -1708,10 +1745,12 @@ function NewOrderForm({
                     disabled={pending}
                     onValueChange={handleCustomerChange}
                   />
-                  {selectedCustomer ? (
-                    <div className="text-xs text-muted-foreground">
-                      Скидка клиента: {selectedCustomer.defaultDiscountPercent}%
-                    </div>
+                  {selectedCustomer?.defaultDiscountPercent ? (
+                    <Badge className="w-fit bg-emerald-100 text-emerald-900">
+                      Скидка клиента {selectedCustomer.defaultDiscountPercent}%
+                    </Badge>
+                  ) : selectedCustomer ? (
+                    <Badge variant="outline" className="w-fit">Без персональной скидки</Badge>
                   ) : (
                     <Link href="/clients" className="text-xs font-medium text-primary hover:underline">
                       Создать клиента
@@ -1738,10 +1777,10 @@ function NewOrderForm({
             </CardContent>
           </Card>
 
-          <Card className="rounded-2xl border bg-white">
+          <Card className="rounded-2xl border-zinc-200 bg-white">
             <CardHeader>
-              <CardTitle>Получение</CardTitle>
-              <CardDescription>Срок, самовывоз или доставка</CardDescription>
+              <CardTitle className="font-semibold text-zinc-950">Получение</CardTitle>
+              <CardDescription className="text-zinc-500">Срок, самовывоз или доставка</CardDescription>
             </CardHeader>
             <CardContent>
               <FieldGroup>
@@ -1806,10 +1845,10 @@ function NewOrderForm({
             </CardContent>
           </Card>
 
-          <Card className="min-w-0 rounded-2xl border bg-white">
+          <Card className="min-w-0 rounded-2xl border-zinc-200 bg-white">
             <CardHeader>
-              <CardTitle>Состав заказа</CardTitle>
-              <CardDescription>Добавляйте товары из products через поиск.</CardDescription>
+              <CardTitle className="font-semibold text-zinc-950">Состав заказа</CardTitle>
+              <CardDescription className="text-zinc-500">Добавляйте товары через поиск.</CardDescription>
             </CardHeader>
             <CardContent className="flex min-w-0 flex-col gap-4">
               <ProductCombobox products={products} disabled={pending} onSelect={addProduct} />
@@ -1824,14 +1863,17 @@ function NewOrderForm({
           </Card>
         </div>
 
-        <Card className="min-w-0 rounded-2xl border bg-white xl:sticky xl:top-20 xl:self-start">
+        <Card className="min-w-0 rounded-2xl border-zinc-200 bg-white xl:sticky xl:top-20 xl:self-start">
           <CardHeader>
-            <CardTitle>Заказ</CardTitle>
-            <CardDescription>Доставка, оплата и итог</CardDescription>
+            <CardTitle className="font-semibold text-zinc-950">Заказ</CardTitle>
+            <CardDescription className="text-zinc-500">Доставка, оплата и итог</CardDescription>
           </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col gap-5">
             <FieldSet>
               <FieldLegend>Доставка</FieldLegend>
+              <div className="text-xs text-zinc-500">
+                Доставка прибавляется к итогу заказа. Выплата курьеру не входит в total и проводится отдельной кассовой операцией.
+              </div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
                 <Field>
                   <FieldLabel htmlFor="deliveryPrice">Платит клиент за доставку</FieldLabel>
@@ -1942,21 +1984,27 @@ function NewOrderForm({
                   <AlertDescription>Уменьшите предоплату до суммы заказа после скидок.</AlertDescription>
                 </Alert>
               )}
-              <div className="grid gap-3 rounded-lg border bg-muted/40 p-3">
+              <div className="grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
                 <Info label="До скидки" value={formatMoney(orderTotals.itemsTotalBeforeDiscount)} />
                 <Info label="Скидка по позициям" value={formatMoney(orderTotals.itemsDiscountTotal)} />
                 <Info label="Скидка на чек" value={formatMoney(orderTotals.dealDiscountAmount)} />
                 <Info label="Доставка" value={formatMoney(deliveryPrice)} />
                 <Info label="Итого после скидок" value={formatMoney(total)} />
                 <div>
-                  <div className="text-xs text-muted-foreground">Остаток</div>
-                  <div className="text-3xl font-semibold">{formatMoney(balance)}</div>
+                  <div className="text-xs text-zinc-500">Остаток</div>
+                  <div className={cn("text-3xl font-semibold", balance > 0 ? "text-amber-800" : "text-emerald-800")}>
+                    {formatMoney(balance)}
+                  </div>
                 </div>
               </div>
             </FieldSet>
 
             <div className="mt-auto border-t pt-3">
-              <Button className="w-full" type="submit" disabled={pending || needsShift || prepaidTooHigh || items.length === 0}>
+              <Button
+                className="h-10 w-full bg-zinc-950 text-white hover:bg-zinc-800"
+                type="submit"
+                disabled={pending || needsShift || prepaidTooHigh || items.length === 0}
+              >
                 Провести заказ
               </Button>
             </div>
@@ -1992,7 +2040,7 @@ function ReadyOrdersSection({
       </div>
 
       {!orders.length ? (
-        <Empty className="min-h-36 rounded-lg border bg-white py-6">
+        <Empty className="min-h-36 rounded-2xl border bg-white py-6">
           <EmptyHeader>
             <EmptyTitle>Готовых заказов пока нет</EmptyTitle>
             <EmptyDescription>Заказы появятся здесь после отметки “Букет готов”.</EmptyDescription>
@@ -2036,7 +2084,7 @@ function ReadyOrderCard({
   const needsPayment = balance > 0
 
   return (
-    <Card className="min-w-0 rounded-lg border bg-white">
+    <Card className="min-w-0 rounded-2xl border bg-white">
       <CardHeader className="gap-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -2077,7 +2125,7 @@ function ReadyOrderCard({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/30 p-3 text-sm md:grid-cols-3">
+        <div className="grid grid-cols-2 gap-2 rounded-2xl border bg-muted/30 p-3 text-sm md:grid-cols-3">
           <Info label="До скидки" value={formatMoney(order.totalBeforeDiscount)} />
           <Info
             label="Скидка"
@@ -2088,7 +2136,7 @@ function ReadyOrderCard({
           <Info label="Остаток" value={formatMoney(balance)} />
         </div>
 
-        <div className="grid grid-cols-3 gap-2 rounded-lg border bg-muted/30 p-3 text-sm">
+        <div className="grid grid-cols-3 gap-2 rounded-2xl border bg-muted/30 p-3 text-sm">
           <Info label="Доставка" value={formatMoney(order.deliveryPrice)} />
           <Info label="Курьеру" value={formatMoney(order.courierPayout)} />
           <Info label="Выплата" value={order.deliveryPayoutPaid ? "выдана" : "не выдана"} />
@@ -3147,7 +3195,7 @@ function CategoriesDialog({
               onRename(event)
               setEditing(null)
             }}
-            className="rounded-lg border bg-muted/30 p-3"
+            className="rounded-2xl border bg-muted/30 p-3"
           >
             <FieldGroup>
               <input type="hidden" name="oldName" value={editing.path} />
@@ -3617,7 +3665,7 @@ function WarehouseImportDialog({
             </Link>
           </div>
 
-          <form onSubmit={onPreview} className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3 sm:flex-row sm:items-end">
+          <form onSubmit={onPreview} className="flex flex-col gap-3 rounded-2xl border bg-muted/30 p-3 sm:flex-row sm:items-end">
             <Field className="flex-1">
               <FieldLabel htmlFor="warehouse-import-file">Файл XLSX</FieldLabel>
               <Input id="warehouse-import-file" name="file" type="file" accept=".xlsx" required disabled={pending} />
@@ -3861,7 +3909,7 @@ function StockDocumentDialog({
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
                 <div className="flex min-w-0 flex-col gap-4">
-                <Card className="rounded-lg">
+                <Card className="rounded-2xl">
                   <CardHeader>
                     <CardTitle className="text-base">Основная информация</CardTitle>
                   </CardHeader>
@@ -3912,7 +3960,7 @@ function StockDocumentDialog({
                   </CardContent>
                 </Card>
 
-                <Card className="rounded-lg">
+                <Card className="rounded-2xl">
                   <CardHeader>
                     <CardTitle className="text-base">Поиск товара</CardTitle>
                   </CardHeader>
@@ -4184,8 +4232,8 @@ function ReadyStatusBadge({ status }: { status: OrderStatus }) {
 function Info({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="font-medium">{value}</div>
+      <div className="text-xs text-zinc-500">{label}</div>
+      <div className="font-semibold text-zinc-950">{value}</div>
     </div>
   )
 }

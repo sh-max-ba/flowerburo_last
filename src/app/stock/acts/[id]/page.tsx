@@ -1,13 +1,15 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
-import { cancelStockDocumentAction, postStockDocumentAction } from "@/app/actions"
 import { AccessDenied } from "@/components/access-denied"
+import { PageHeader } from "@/components/page-header"
+import { StockDocumentActions } from "@/components/stock/stock-document-actions"
 import { Badge } from "@/components/ui/badge"
-import { Button, buttonVariants } from "@/components/ui/button"
+import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getStockDocument, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
+import { stockDocumentStatusLabel, stockDocumentTypeLabel } from "@/lib/labels"
 
 export const dynamic = "force-dynamic"
 
@@ -30,18 +32,16 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
 
   return (
     <main className="min-h-screen bg-zinc-50 p-4 md:p-6">
-      <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Акт {document.number}</h1>
-            <p className="text-sm text-muted-foreground">
-              {stockDocumentTypeLabel(document.type)} · {formatDateTime(document.createdAt)}
-            </p>
-          </div>
-          <Link href="/stock/acts" className={buttonVariants({ variant: "outline" })}>
-            Все акты
-          </Link>
-        </div>
+      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
+        <PageHeader
+          title={`Акт ${document.number}`}
+          description={`${stockDocumentTypeLabel(document.type)} · ${formatDateTime(document.createdAt)}`}
+          actions={
+            <Link href="/stock/acts" className={buttonVariants({ variant: "outline" })}>
+              Все акты
+            </Link>
+          }
+        />
 
         <Card className="rounded-2xl border bg-white">
           <CardHeader>
@@ -81,24 +81,7 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
             <Link href={`/stock/acts/${document.id}/edit`} className={buttonVariants({ variant: "outline" })}>
               Редактировать
             </Link>
-            <form
-              action={async () => {
-                "use server"
-                await postStockDocumentAction(document.id)
-              }}
-            >
-              <Button type="submit">Провести</Button>
-            </form>
-            <form
-              action={async () => {
-                "use server"
-                await cancelStockDocumentAction(document.id)
-              }}
-            >
-              <Button type="submit" variant="outline">
-                Отменить
-              </Button>
-            </form>
+            <StockDocumentActions documentId={document.id} />
           </div>
         )}
 
@@ -113,7 +96,7 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
                 <TableHeader>
                   <TableRow>
                     <TableHead>Товар</TableHead>
-                    <TableHead>Qty</TableHead>
+                    <TableHead>Кол-во</TableHead>
                     <TableHead>Изменение</TableHead>
                     <TableHead>Было</TableHead>
                     <TableHead>Стало</TableHead>
@@ -163,10 +146,6 @@ function getStockDocumentOrNull(documentId: number) {
   } catch {
     return null
   }
-}
-
-function stockDocumentTypeLabel(type: StockDocumentType) {
-  return type === "stock_in" ? "Пополнение" : "Списание"
 }
 
 function stockDocumentOperationDateLabel(type: StockDocumentType) {
@@ -230,11 +209,6 @@ function DeltaBadge({ value }: { value: number }) {
 }
 
 function StockDocumentStatusBadge({ status }: { status: StockDocumentStatus }) {
-  const labels: Record<StockDocumentStatus, string> = {
-    draft: "Черновик",
-    posted: "Проведен",
-    cancelled: "Отменен",
-  }
   const className =
     status === "posted"
       ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-50"
@@ -242,7 +216,11 @@ function StockDocumentStatusBadge({ status }: { status: StockDocumentStatus }) {
         ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-50"
         : ""
 
-  return <Badge variant={status === "cancelled" ? "destructive" : "outline"} className={className}>{labels[status]}</Badge>
+  return (
+    <Badge variant={status === "cancelled" ? "destructive" : "outline"} className={className}>
+      {stockDocumentStatusLabel(status)}
+    </Badge>
+  )
 }
 
 function Info({ label, value }: { label: string; value: string }) {
