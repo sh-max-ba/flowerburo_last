@@ -7,8 +7,9 @@ import { useRouter } from "next/navigation"
 import { ArrowLeftIcon, ArrowRightIcon, ExternalLinkIcon, MoreHorizontalIcon, PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 import { createDealAction, updateDealStageAction } from "@/app/actions"
-import type { Customer, Deal, DealBoardData, DealSource, DealStage } from "@/lib/crm"
+import type { Customer, Deal, DealBoardData, DealStage } from "@/lib/crm"
 import type { CurrentUser } from "@/lib/db"
+import { sourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -40,14 +41,6 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 
 type ActionResult = Awaited<ReturnType<typeof createDealAction>>
-
-const sourceLabels: Record<DealSource, string> = {
-  manual: "Ручная",
-  whatsapp: "WhatsApp",
-  instagram: "Instagram",
-  site: "Сайт",
-  phone: "Телефон",
-}
 
 export function DealsKanban({
   board,
@@ -263,6 +256,7 @@ export function DealsKanban({
                         <SelectItem value="manual">Ручная</SelectItem>
                         <SelectItem value="whatsapp">WhatsApp</SelectItem>
                         <SelectItem value="instagram">Instagram</SelectItem>
+                        <SelectItem value="telegram">Telegram</SelectItem>
                         <SelectItem value="site">Сайт</SelectItem>
                         <SelectItem value="phone">Телефон</SelectItem>
                       </SelectContent>
@@ -369,8 +363,13 @@ function DealCard({
           {deal.dealDiscountType === "percent" && deal.dealDiscountValue > 0 && (
             <Badge className="bg-green-100 text-green-900">Клиентская скидка</Badge>
           )}
-          <Badge className="bg-slate-100 text-slate-900">{sourceLabels[deal.source]}</Badge>
+          <Badge className="bg-slate-100 text-slate-900">{sourceLabel(deal.source)}</Badge>
         </div>
+        {deal.lastMessageText ? (
+          <div className="line-clamp-2 rounded-md bg-zinc-50 px-2 py-1 text-xs text-zinc-600">
+            {deal.lastMessageText}
+          </div>
+        ) : null}
         <div className="text-xs text-zinc-600">
           Готовность: {deal.dueAt ? formatDateTime(deal.dueAt) : "не указана"} ·{" "}
           {deal.responsibleUserName || "Без ответственного"}

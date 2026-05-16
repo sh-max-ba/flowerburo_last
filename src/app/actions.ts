@@ -14,6 +14,25 @@ import {
   updateDealStage,
 } from "@/lib/crm"
 import {
+  connectWazzupWebhookSubscriptions,
+  clearWazzupApiKey,
+  generateAndSaveWazzupCrmKey,
+  getWazzupWebhookSubscriptions,
+  getSecureWazzupWebhookUrlForOwner,
+  linkDealToWazzupByCustomer,
+  listWazzupChannels,
+  maskWazzupWebhookUrl,
+  saveWazzupSettings,
+  syncWazzupAll,
+  syncWazzupContacts,
+  syncWazzupDeals,
+  syncWazzupPipelines,
+  syncWazzupUsers,
+  testLocalWazzupWebhook,
+  testWazzupApiKey,
+  type WazzupWebhookConfig,
+} from "@/lib/wazzup"
+import {
   cancelOrder,
   cancelStockDocument,
   acceptDealPayment,
@@ -169,6 +188,220 @@ export async function saveProductAction(formData: FormData) {
   return runRoleAction(["owner"], (user) => upsertProduct(formData, user), "Товар сохранен.")
 }
 
+export async function saveWazzupSettingsAction(formData: FormData) {
+  return runRoleAction(["owner"], () => {
+    saveWazzupSettings({
+      apiKey: String(formData.get("apiKey") ?? ""),
+      crmKey: String(formData.get("crmKey") ?? ""),
+      isEnabled: formData.get("isEnabled") === "on",
+      webhookAuthRequired: formData.get("webhookAuthRequired") === "on",
+    })
+  }, "Настройки Wazzup сохранены.")
+}
+
+export async function getSecureWazzupWebhookUrlAction(): Promise<DataActionResult<{ url: string }>> {
+  try {
+    await requireActionRole(["owner"])
+    const url = getSecureWazzupWebhookUrlForOwner()
+    if (!url.includes("?key=")) {
+      return { ok: false, message: "CRM key не настроен." }
+    }
+
+    return { ok: true, message: "Защищенный webhook URL скопирован.", data: { url } }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Защищенный webhook URL не получен.",
+    }
+  }
+}
+
+export async function generateWazzupCrmKeyAction() {
+  return runRoleAction(["owner"], () => {
+    generateAndSaveWazzupCrmKey()
+  }, "CRM key обновлен.")
+}
+
+export async function clearWazzupApiKeyAction() {
+  return runRoleAction(["owner"], () => {
+    clearWazzupApiKey()
+  }, "API key очищен.")
+}
+
+export async function testWazzupApiKeyAction(): Promise<ActionResult> {
+  try {
+    await requireActionRole(["owner"])
+    const result = await testWazzupApiKey()
+    revalidatePath("/settings")
+    return result
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "API key не проверен.",
+    }
+  }
+}
+
+export async function testLocalWazzupWebhookAction(): Promise<ActionResult> {
+  try {
+    await requireActionRole(["owner"])
+    const result = testLocalWazzupWebhook()
+    revalidatePath("/settings")
+    return result
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Webhook endpoint не проверен.",
+    }
+  }
+}
+
+export async function checkWazzupWebhookSubscriptionsAction(): Promise<ActionResult> {
+  try {
+    await requireActionRole(["owner"])
+    const config = await getWazzupWebhookSubscriptions()
+    const messages = webhookConfigMessages("Текущие подписки Wazzup", config)
+    revalidatePath("/settings")
+    return { ok: true, message: messages.join("\n"), messages }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Подписки Wazzup не проверены.",
+    }
+  }
+}
+
+export async function connectWazzupWebhookAction(): Promise<ActionResult> {
+  try {
+    await requireActionRole(["owner"])
+    const result = await connectWazzupWebhookSubscriptions()
+    const messages = [
+      "Webhook subscriptions обновлены в Wazzup.",
+      ...webhookConfigMessages("До PATCH", result.before),
+      `PATCH: HTTP ${result.patch.status}, body: ${result.patch.body}`,
+      ...webhookConfigMessages("После PATCH", result.after),
+    ]
+    revalidatePath("/settings")
+    return { ok: true, message: messages.join("\n"), messages }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Webhook subscriptions не подключены.",
+    }
+  }
+}
+
+export async function checkWazzupChannelsAction(): Promise<ActionResult> {
+  try {
+    await requireActionRole(["owner"])
+    const channels = await listWazzupChannels()
+    const activeWhatsappChannels = channels.filter((channel) => channel.transport === "whatsapp" && channel.state === "active")
+    const messages = channels.length
+      ? channels.map(
+          (channel) =>
+            `${channel.channelId || "-"} · ${channel.transport || "-"} · ${channel.plainId || "-"} · ${
+              channel.state || "-"
+            }${channel.state && channel.state !== "active" ? " · warning: channel is not active" : ""}`
+        )
+      : ["Каналы Wazzup не найдены."]
+    if (activeWhatsappChannels.length > 1) {
+      messages.push("warning: для iframe будет использован первый active whatsapp channel")
+    }
+    return { ok: true, message: messages.join("\n"), messages }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Каналы Wazzup не проверены.",
+    }
+  }
+}
+
+export async function syncWazzupUsersAction(): Promise<ActionResult> {
+  try {
+    await requireActionRole(["owner"])
+    const result = await syncWazzupUsers()
+    revalidatePath("/settings")
+    return {
+      ok: result.ok,
+      message: result.message,
+      messages: result.messages,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Пользователи Wazzup не синхронизированы.",
+    }
+  }
+}
+
+export async function syncWazzupPipelinesAction(): Promise<ActionResult> {
+  try {
+    await requireActionRole(["owner"])
+    const result = await syncWazzupPipelines()
+    revalidatePath("/settings")
+    return { ok: result.ok, message: result.message, messages: result.messages }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Воронки Wazzup не синхронизированы.",
+    }
+  }
+}
+
+export async function syncWazzupContactsAction(): Promise<ActionResult> {
+  try {
+    await requireActionRole(["owner"])
+    const result = await syncWazzupContacts()
+    revalidatePath("/settings")
+    return { ok: result.ok, message: result.message, messages: result.messages }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Клиенты Wazzup не синхронизированы.",
+    }
+  }
+}
+
+export async function syncWazzupDealsAction(): Promise<ActionResult> {
+  try {
+    await requireActionRole(["owner"])
+    const result = await syncWazzupDeals()
+    revalidatePath("/settings")
+    return { ok: result.ok, message: result.message, messages: result.messages }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Сделки Wazzup не синхронизированы.",
+    }
+  }
+}
+
+export async function syncWazzupAllAction(): Promise<ActionResult> {
+  try {
+    await requireActionRole(["owner"])
+    const result = await syncWazzupAll()
+    revalidatePath("/settings")
+    return { ok: result.ok, message: result.message, messages: result.messages }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Полная синхронизация Wazzup не выполнена.",
+    }
+  }
+}
+
+function webhookConfigMessages(title: string, config: WazzupWebhookConfig) {
+  return [
+    title,
+    `webhooksUri: ${config.webhooksUri ? maskWazzupWebhookUrl(config.webhooksUri) : "-"}`,
+    `targetUri: ${maskWazzupWebhookUrl(getSecureWazzupWebhookUrlForOwner())}`,
+    `messagesAndStatuses: ${String(config.subscriptions.messagesAndStatuses)}`,
+    `contactsAndDealsCreation: ${String(config.subscriptions.contactsAndDealsCreation)}`,
+    `channelsUpdates: ${String(config.subscriptions.channelsUpdates)}`,
+    `templateStatus: ${String(config.subscriptions.templateStatus)}`,
+  ]
+}
+
 function revalidateCrm(customerId?: number | null, dealId?: number | null) {
   revalidatePath("/clients")
   revalidatePath("/deals")
@@ -178,6 +411,13 @@ function revalidateCrm(customerId?: number | null, dealId?: number | null) {
   if (dealId) {
     revalidatePath(`/deals/${dealId}`)
   }
+}
+
+export async function linkDealToWazzupByCustomerAction(dealId: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    linkDealToWazzupByCustomer(dealId)
+    revalidateCrm(null, dealId)
+  }, "Wazzup чат привязан к сделке.")
 }
 
 export async function createCustomerAction(formData: FormData) {

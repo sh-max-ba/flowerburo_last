@@ -48,12 +48,23 @@ export const sourceOptions = [
   { value: "manual", label: "Ручная" },
   { value: "whatsapp", label: "WhatsApp" },
   { value: "instagram", label: "Instagram" },
+  { value: "telegram", label: "Telegram" },
   { value: "site", label: "Сайт" },
   { value: "phone", label: "Телефон" },
 ] as const
 
 export function sourceLabel(value: string) {
   return sourceOptions.find((option) => option.value === value)?.label ?? (value || "-")
+}
+
+export function wazzupChatTypeLabel(value: string) {
+  const labels: Record<string, string> = {
+    whatsapp: "WhatsApp",
+    instagram: "Instagram",
+    telegram: "Telegram",
+  }
+
+  return labels[value] ?? (value || "-")
 }
 
 export function stockDocumentTypeLabel(value: string) {

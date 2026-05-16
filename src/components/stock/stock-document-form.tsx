@@ -79,14 +79,18 @@ export function StockDocumentForm({
     setItems((current) => {
       const existing = current.find((item) => item.product.code === freshProduct.code)
       if (existing) {
-        return current.map((item) =>
-          item.product.code === freshProduct.code
-            ? { ...item, product: freshProduct, qty: String(Number(item.qty || 0) + 1) }
-            : item
-        )
+        const updated = {
+          ...existing,
+          product: freshProduct,
+          qty: String(incrementWholeQty(existing.qty)),
+        }
+        return [
+          updated,
+          ...current.filter((item) => item.product.code !== freshProduct.code),
+        ]
       }
 
-      return [...current, { product: freshProduct, qty: "1", comment: "" }]
+      return [{ product: freshProduct, qty: "1", comment: "" }, ...current]
     })
   }
 
@@ -335,4 +339,13 @@ function Info({ label, value }: { label: string; value: string }) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value)
+}
+
+function incrementWholeQty(value: string) {
+  const next = Number(value || 0) + 1
+  if (!Number.isFinite(next)) {
+    return 1
+  }
+
+  return Math.max(1, Math.round(next))
 }

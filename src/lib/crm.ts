@@ -8,7 +8,7 @@ import {
 } from "@/lib/pricing"
 
 export type DealStatus = "open" | "won" | "lost" | "cancelled"
-export type DealSource = "manual" | "whatsapp" | "instagram" | "site" | "phone"
+export type DealSource = "manual" | "whatsapp" | "instagram" | "telegram" | "site" | "phone" | string
 
 export type Customer = {
   id: number
@@ -17,6 +17,9 @@ export type Customer = {
   normalizedPhone: string | null
   instagram: string
   source: string
+  wazzupChatType: string
+  wazzupChatId: string
+  wazzupChannelId: string
   defaultDiscountPercent: number
   comment: string
   createdAt: string
@@ -94,6 +97,8 @@ export type Deal = {
   wazzupChatType: string
   wazzupChatId: string
   wazzupChannelId: string
+  lastMessageText: string
+  lastMessageAt: string
   createdAt: string
   updatedAt: string
   items: DealItem[]
@@ -197,24 +202,51 @@ export function updateCustomer(formData: FormData) {
     throw new Error("Укажите клиента и имя.")
   }
 
-  db()
-    .prepare(
-      `UPDATE customers
-       SET name = @name, phone = @phone, normalized_phone = @normalizedPhone,
-        instagram = @instagram, source = @source, default_discount_percent = @defaultDiscountPercent,
-        comment = @comment, updated_at = CURRENT_TIMESTAMP
-       WHERE id = @id`
-    )
-    .run({
-      id,
-      name,
-      phone: clean(formData.get("phone")),
-      normalizedPhone: normalizePhone(String(formData.get("phone") ?? "")),
-      instagram: clean(formData.get("instagram")),
-      source: clean(formData.get("source")),
-      defaultDiscountPercent: clampPercent(toNumber(formData.get("defaultDiscountPercent"))),
-      comment: clean(formData.get("comment")),
-    })
+  const client = db()
+  const update = client.transaction(() => {
+    const existing = client.prepare("SELECT name, phone FROM customers WHERE id = ?").get(id) as
+      | { name: string | null; phone: string | null }
+      | undefined
+    if (!existing) {
+      throw new Error("Клиент не найден.")
+    }
+
+    const phone = clean(formData.get("phone"))
+    const customerChanged = clean(existing.name) !== name || clean(existing.phone) !== phone
+
+    client
+      .prepare(
+        `UPDATE customers
+         SET name = @name, phone = @phone, normalized_phone = @normalizedPhone,
+          instagram = @instagram, source = @source, default_discount_percent = @defaultDiscountPercent,
+          comment = @comment, updated_at = CURRENT_TIMESTAMP
+         WHERE id = @id`
+      )
+      .run({
+        id,
+        name,
+        phone,
+        normalizedPhone: normalizePhone(phone),
+        instagram: clean(formData.get("instagram")),
+        source: clean(formData.get("source")),
+        defaultDiscountPercent: clampPercent(toNumber(formData.get("defaultDiscountPercent"))),
+        comment: clean(formData.get("comment")),
+      })
+
+    if (customerChanged) {
+      client
+        .prepare(
+          `UPDATE deals
+           SET customer_name = @name,
+            customer_phone = @phone,
+            updated_at = CURRENT_TIMESTAMP
+           WHERE customer_id = @id`
+        )
+        .run({ id, name, phone })
+    }
+  })
+
+  update()
 }
 
 export function listCustomerOrders(customerId: number): Order[] {
@@ -362,6 +394,8 @@ export function listDeals(options: { customerId?: number } = {}) {
   const rows = db()
     .prepare(
       `SELECT deals.*, deal_stages.name as stageName, deal_stages.position as stagePosition,
+        COALESCE(NULLIF(customers.name, ''), deals.customer_name, '') as display_customer_name,
+        COALESCE(NULLIF(customers.phone, ''), deals.customer_phone, '') as display_customer_phone,
         COALESCE(customers.default_discount_percent, 0) as customerDefaultDiscountPercent,
         orders.number as orderNumber, orders.status as orderStatus
        FROM deals
@@ -380,6 +414,8 @@ export function getDeal(dealId: number) {
   const row = db()
     .prepare(
       `SELECT deals.*, deal_stages.name as stageName, deal_stages.position as stagePosition,
+        COALESCE(NULLIF(customers.name, ''), deals.customer_name, '') as display_customer_name,
+        COALESCE(NULLIF(customers.phone, ''), deals.customer_phone, '') as display_customer_phone,
         COALESCE(customers.default_discount_percent, 0) as customerDefaultDiscountPercent,
         orders.number as orderNumber, orders.status as orderStatus
        FROM deals
@@ -881,6 +917,9 @@ function mapCustomer(row: Record<string, unknown>): Customer {
     normalizedPhone: row.normalized_phone === null ? null : String(row.normalized_phone ?? ""),
     instagram: String(row.instagram ?? ""),
     source: String(row.source ?? ""),
+    wazzupChatType: String(row.wazzup_chat_type ?? ""),
+    wazzupChatId: String(row.wazzup_chat_id ?? ""),
+    wazzupChannelId: String(row.wazzup_channel_id ?? ""),
     defaultDiscountPercent: clampPercent(toNumber(row.default_discount_percent)),
     comment: String(row.comment ?? ""),
     createdAt: String(row.created_at ?? ""),
@@ -896,8 +935,8 @@ function mapDeal(row: Record<string, unknown>, items: DealItem[]): Deal {
     id: toNumber(row.id),
     number: row.number === null ? null : String(row.number ?? ""),
     customerId: row.customer_id === null || row.customer_id === undefined ? null : toNumber(row.customer_id),
-    customerName: String(row.customer_name ?? ""),
-    customerPhone: String(row.customer_phone ?? ""),
+    customerName: String(row.display_customer_name ?? row.customer_name ?? ""),
+    customerPhone: String(row.display_customer_phone ?? row.customer_phone ?? ""),
     customerDefaultDiscountPercent: clampPercent(toNumber(row.customerDefaultDiscountPercent)),
     responsibleUserId:
       row.responsible_user_id === null || row.responsible_user_id === undefined
@@ -928,6 +967,8 @@ function mapDeal(row: Record<string, unknown>, items: DealItem[]): Deal {
     wazzupChatType: String(row.wazzup_chat_type ?? ""),
     wazzupChatId: String(row.wazzup_chat_id ?? ""),
     wazzupChannelId: String(row.wazzup_channel_id ?? ""),
+    lastMessageText: String(row.last_message_text ?? ""),
+    lastMessageAt: String(row.last_message_at ?? ""),
     createdAt: String(row.created_at ?? ""),
     updatedAt: String(row.updated_at ?? ""),
     items,
@@ -939,9 +980,7 @@ function normalizeDealStatus(value: string): DealStatus {
 }
 
 function normalizeDealSource(value: string): DealSource {
-  return value === "whatsapp" || value === "instagram" || value === "site" || value === "phone"
-    ? value
-    : "manual"
+  return clean(value) || "manual"
 }
 
 function clean(value: FormDataEntryValue | string | null | undefined) {

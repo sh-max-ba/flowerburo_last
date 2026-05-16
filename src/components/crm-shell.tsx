@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import type React from "react"
 import Link from "next/link"
 import {
@@ -28,6 +29,7 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
@@ -131,6 +133,7 @@ export function CrmShell({ user, active, title, actions, children }: CrmShellPro
                             <Icon />
                             <span>{item.label}</span>
                           </SidebarMenuButton>
+                          {item.id === "deals" ? <IncomingDealsSidebarBadge /> : null}
                         </SidebarMenuItem>
                       )
                     })}
@@ -179,4 +182,56 @@ export function CrmShell({ user, active, title, actions, children }: CrmShellPro
       </SidebarInset>
     </SidebarProvider>
   )
+}
+
+function IncomingDealsSidebarBadge() {
+  const [count, setCount] = useState(0)
+
+  useEffect(() => {
+    let disposed = false
+    let controller: AbortController | null = null
+
+    async function loadCount() {
+      if (document.visibilityState !== "visible") {
+        return
+      }
+
+      controller?.abort()
+      controller = new AbortController()
+
+      try {
+        const response = await fetch("/api/deals/incoming-count", {
+          cache: "no-store",
+          signal: controller.signal,
+        })
+        if (!response.ok) {
+          return
+        }
+
+        const data = (await response.json()) as { count?: unknown }
+        if (!disposed) {
+          setCount(Number(data.count ?? 0))
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return
+        }
+      }
+    }
+
+    void loadCount()
+    const intervalId = window.setInterval(loadCount, 5000)
+
+    return () => {
+      disposed = true
+      controller?.abort()
+      window.clearInterval(intervalId)
+    }
+  }, [])
+
+  if (count <= 0) {
+    return null
+  }
+
+  return <SidebarMenuBadge>{count > 99 ? "99+" : count}</SidebarMenuBadge>
 }

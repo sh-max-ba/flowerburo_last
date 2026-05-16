@@ -7,6 +7,7 @@
     "start": "next start",
     "dev": "next dev",
     "lint": "eslint",
+    "smoke:wazzup": "tsx scripts/wazzup-smoke.ts",
     "reset-database-for-launch": "tsx scripts/reset-database-for-launch.ts"
   },
   "dependencies": {

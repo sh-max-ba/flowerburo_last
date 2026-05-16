@@ -2,6 +2,7 @@ import { AccessDenied } from "@/components/access-denied"
 import { Backoffice, type Section } from "@/components/backoffice"
 import { canUseCash, getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getActiveFlorists, getDashboardData } from "@/lib/db"
+import { getWazzupSettingsStatus } from "@/lib/wazzup"
 
 type BackofficeRouteProps = {
   section?: Section
@@ -26,6 +27,7 @@ export async function BackofficeRoute({ section }: BackofficeRouteProps) {
       initialSection={initialSection}
       canAccessCash={canAccessCash}
       activeFlorists={activeFlorists}
+      wazzupStatus={getWazzupSettingsStatus()}
     />
   )
 }

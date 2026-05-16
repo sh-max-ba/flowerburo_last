@@ -17,8 +17,9 @@ import {
 import type { Customer, Deal, DealItem, DealSource, DealStage } from "@/lib/crm"
 import { calculateCommercialTotals, calculateLineTotal, type DiscountType } from "@/lib/pricing"
 import type { CurrentUser, PaymentMethod, Product } from "@/lib/db"
-import { getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
+import { getPaymentMethodLabel, paymentMethodOptions, sourceLabel as getSourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
+import { WazzupDealFrame } from "@/components/deals/wazzup-deal-frame"
 import { ProductCombobox } from "@/components/products/product-combobox"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -76,6 +77,7 @@ const sourceOptions: Array<{ value: DealSource; label: string }> = [
   { value: "manual", label: "Ручная" },
   { value: "whatsapp", label: "WhatsApp" },
   { value: "instagram", label: "Instagram" },
+  { value: "telegram", label: "Telegram" },
   { value: "site", label: "Сайт" },
   { value: "phone", label: "Телефон" },
 ]
@@ -387,14 +389,16 @@ export function DealDetailPage({
     setItems((current) => {
       const existing = current.find((item) => item.productCode === product.code)
       if (existing) {
-        return current.map((item) =>
-          item.id === existing.id ? { ...item, qty: String(normalizedQty(item.qty) + 1) } : item
-        )
+        const updated = { ...existing, qty: String(normalizedQty(existing.qty) + 1) }
+        return [
+          updated,
+          ...current.filter((item) => item.id !== existing.id),
+        ]
       }
 
       return [
-        ...current,
         createTemporaryItem(deal.id, product, temporaryItemIdRef.current--),
+        ...current,
       ]
     })
 
@@ -526,33 +530,12 @@ export function DealDetailPage({
     <div className="h-auto overflow-visible xl:h-[calc(100vh-10rem)] xl:overflow-hidden">
       <div className="grid h-full grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)] 2xl:grid-cols-[minmax(640px,1fr)_minmax(560px,680px)]">
         <section className="min-w-0 xl:min-h-0">
-          <Card className="h-full min-h-[520px] overflow-hidden rounded-2xl border-zinc-200 bg-white shadow-sm">
-            <CardHeader>
-              <CardTitle className="text-zinc-950">Workflow сделки</CardTitle>
-              <CardDescription>Клиент → Сделка → Состав → Скидки → Оплата → Заказ</CardDescription>
-            </CardHeader>
-            <CardContent className="flex h-[calc(100%-5rem)] min-h-[420px] flex-col gap-3 overflow-hidden">
-              <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-                <div className="text-sm font-semibold text-zinc-950">{deal.number || `Сделка #${deal.id}`}</div>
-                <div className="mt-1 text-sm text-zinc-500">
-                  {deal.customerName || "Клиент не указан"} · {sourceLabel(draft.source)}
-                </div>
-              </div>
-              <div className="grid gap-2 text-sm">
-                <WorkflowStep label="Клиент" done={Boolean(selectedCustomer || deal.customerName)} />
-                <WorkflowStep label="Состав" done={hasItems} />
-                <WorkflowStep label="Скидки" done={totals.itemsDiscountTotal > 0 || totals.dealDiscountAmount > 0} />
-                <WorkflowStep label="Оплата" done={balance <= 0 && totals.total > 0} />
-                <WorkflowStep label="Заказ" done={Boolean(deal.orderId)} />
-              </div>
-              <Alert className="mt-auto border-zinc-200 bg-white">
-                <AlertTitle className="text-zinc-950">Рабочая карточка менеджера</AlertTitle>
-                <AlertDescription className="text-zinc-500">
-                  Заполните состав и скидку, примите оплату при открытой смене и создайте заказ из сделки.
-                </AlertDescription>
-              </Alert>
-            </CardContent>
-          </Card>
+          <div className="h-full min-h-[520px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+            <WazzupDealFrame
+              key={`${deal.id}:${deal.wazzupChatType}:${deal.wazzupChatId}:${deal.wazzupChannelId}`}
+              dealId={deal.id}
+            />
+          </div>
         </section>
 
         <aside className="flex min-w-0 flex-col gap-4 overflow-visible xl:min-h-0 xl:overflow-y-auto xl:pr-2">
@@ -674,7 +657,7 @@ export function DealDetailPage({
                       }
                     >
                       <SelectTrigger className="h-10 w-full bg-white">
-                        <SelectValue>{(value) => sourceLabel(String(value ?? "manual"))}</SelectValue>
+                        <SelectValue>{(value) => getSourceLabel(String(value ?? "manual"))}</SelectValue>
                       </SelectTrigger>
                       <SelectContent align="start" className="z-[9999]">
                         {sourceOptions.map((option) => (
@@ -1166,17 +1149,6 @@ export function DealDetailPage({
   )
 }
 
-function WorkflowStep({ label, done }: { label: string; done: boolean }) {
-  return (
-    <div className="flex items-center justify-between rounded-2xl border border-zinc-200 bg-white px-3 py-2">
-      <span className="font-medium text-zinc-950">{label}</span>
-      <Badge className={done ? "bg-emerald-100 text-emerald-900" : "bg-zinc-100 text-zinc-600"}>
-        {done ? "Готово" : "Ожидает"}
-      </Badge>
-    </div>
-  )
-}
-
 function SaveIndicator({ status, error }: { status: SaveStatus; error: string }) {
   const label = status === "saving" ? "Сохраняем..." : status === "error" ? "Ошибка сохранения" : "Сохранено"
 
@@ -1349,16 +1321,12 @@ function responsibleLabel(value: string, usersById: Map<string, CurrentUser>, de
     : "") || `Пользователь #${value}`
 }
 
-function sourceLabel(value: string) {
-  return sourceOptions.find((option) => option.value === value)?.label ?? "Ручная"
-}
-
 function discountLabel(value: string) {
   return discountOptions.find((option) => option.value === value)?.label ?? "Без скидки"
 }
 
 function normalizeSourceValue(value: string | null): DealSource {
-  return value === "whatsapp" || value === "instagram" || value === "site" || value === "phone" ? value : "manual"
+  return value || "manual"
 }
 
 function normalizeDiscountValue(value: string | null): DiscountType {

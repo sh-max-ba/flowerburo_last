@@ -5,17 +5,22 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
   AlertTriangleIcon,
+  ArrowLeftIcon,
+  ArrowRightIcon,
   BanknoteIcon,
   BoxesIcon,
+  CalendarDaysIcon,
   ChevronsUpDownIcon,
   CheckCircle2Icon,
   ClipboardListIcon,
+  CopyIcon,
   PackageCheckIcon,
   DownloadIcon,
   EyeIcon,
   FileSpreadsheetIcon,
   HistoryIcon,
   KeyRoundIcon,
+  ListIcon,
   LogOutIcon,
   MenuIcon,
   MinusCircleIcon,
@@ -39,9 +44,13 @@ import {
   cashInAction,
   cashOutAction,
   changeUserPasswordAction,
+  checkWazzupChannelsAction,
+  checkWazzupWebhookSubscriptionsAction,
   clearProductCategoryAction,
+  clearWazzupApiKeyAction,
   closeDeliveredOrderAction,
   closeShiftAction,
+  connectWazzupWebhookAction,
   completePickupOrderAction,
   createCashCustomerAction,
   createOrderAction,
@@ -49,17 +58,27 @@ import {
   createStockDocumentAction,
   createUserAction,
   deleteProductAction,
+  generateWazzupCrmKeyAction,
+  getSecureWazzupWebhookUrlAction,
   handOrderToCourierAction,
   markOrderReadyAction,
   openShiftAction,
   previewWarehouseImportAction,
   renameProductCategoryAction,
   saveStockDocumentDraftAction,
+  saveWazzupSettingsAction,
   saveProductAction,
   saveSupplierAction,
   setSupplierActiveAction,
   setUserActiveAction,
   startOrderWorkAction,
+  syncWazzupAllAction,
+  syncWazzupContactsAction,
+  syncWazzupDealsAction,
+  syncWazzupPipelinesAction,
+  syncWazzupUsersAction,
+  testLocalWazzupWebhookAction,
+  testWazzupApiKeyAction,
   updateUserAction,
 } from "@/app/actions"
 import { logoutAction } from "@/app/auth-actions"
@@ -81,6 +100,7 @@ import { toDatetimeLocalValue } from "@/lib/datetime"
 import { getPaymentMethodLabel, paymentMethodOptions, sourceOptions } from "@/lib/labels"
 import { calculateCommercialTotals, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
 import { cn, formatMoney } from "@/lib/utils"
+import type { WazzupSettingsStatus } from "@/lib/wazzup"
 import { PageHeader } from "@/components/page-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -200,6 +220,8 @@ type CustomerCreateResult = Awaited<ReturnType<typeof createCashCustomerAction>>
 type CashOperation = "cashIn" | "cashOut"
 type StockDocumentDialogType = StockDocumentType | null
 type CategorySummary = { path: string; label: string; count: number }
+type OrderSortMode = "default" | "due" | "new"
+type OrderViewMode = "list" | "calendar"
 
 const initialOpenShiftForm = {
   openingCash: "",
@@ -215,6 +237,13 @@ const orderRealtimeRefreshMs = 5000
 const allCategoriesValue = "__all__"
 const uncategorizedValue = "__uncategorized__"
 const uncategorizedLabel = "Без категории"
+const noDueDateKey = "__no_due_at__"
+
+const orderSortOptions: Array<{ label: string; value: OrderSortMode }> = [
+  { label: "По умолчанию", value: "default" },
+  { label: "Сначала ближайшие", value: "due" },
+  { label: "Сначала новые", value: "new" },
+]
 
 const sections: Array<{ id: Section; label: string; icon: typeof BoxesIcon; href: string }> = [
   { id: "deals", label: "Сделки", icon: TagsIcon, href: "/deals" },
@@ -281,6 +310,156 @@ function dateInputValue(date: Date) {
   return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`
 }
 
+function startOfLocalDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function addDays(date: Date, days: number) {
+  const nextDate = new Date(date)
+  nextDate.setDate(nextDate.getDate() + days)
+  return nextDate
+}
+
+function dateKey(date: Date) {
+  return dateInputValue(startOfLocalDay(date))
+}
+
+function dateKeyFromValue(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return noDueDateKey
+  }
+
+  return dateKey(date)
+}
+
+function timeValue(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return "-"
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
+}
+
+function dayLabel(date: Date) {
+  return new Intl.DateTimeFormat("ru-RU", {
+    weekday: "short",
+    day: "2-digit",
+    month: "2-digit",
+  }).format(date)
+}
+
+function weekRangeLabel(startDate: Date) {
+  const endDate = addDays(startDate, 6)
+  const formatter = new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "long",
+  })
+  return `${formatter.format(startDate)} - ${formatter.format(endDate)}`
+}
+
+function timestamp(value: string | null | undefined) {
+  if (!value) {
+    return Number.POSITIVE_INFINITY
+  }
+
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? Number.POSITIVE_INFINITY : date.getTime()
+}
+
+function newestTimestamp(value: string | null | undefined) {
+  const parsed = timestamp(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function compareDueAt(left: Order, right: Order) {
+  const leftDue = timestamp(left.dueAt)
+  const rightDue = timestamp(right.dueAt)
+  const dueCompare = leftDue === rightDue ? 0 : leftDue - rightDue
+  if (dueCompare !== 0) {
+    return dueCompare
+  }
+
+  return newestTimestamp(right.createdAt) - newestTimestamp(left.createdAt)
+}
+
+function compareCreatedAtDesc(left: Order, right: Order) {
+  return newestTimestamp(right.createdAt) - newestTimestamp(left.createdAt)
+}
+
+function workOrderStatusRank(status: OrderStatus) {
+  const ranks: Partial<Record<OrderStatus, number>> = {
+    "Новый": 0,
+    "В работе": 1,
+    "Готов": 2,
+  }
+
+  return ranks[status] ?? 99
+}
+
+function readyOrderStatusRank(status: OrderStatus) {
+  const ranks: Partial<Record<OrderStatus, number>> = {
+    "Готов": 0,
+    "Передан курьеру": 1,
+  }
+
+  return ranks[status] ?? 99
+}
+
+function sortWorkOrders(orders: Order[], sortMode: OrderSortMode) {
+  return [...orders].sort((left, right) => {
+    if (sortMode === "new") {
+      return compareCreatedAtDesc(left, right)
+    }
+
+    if (sortMode === "due") {
+      return compareDueAt(left, right)
+    }
+
+    const statusCompare = workOrderStatusRank(left.status) - workOrderStatusRank(right.status)
+    if (statusCompare !== 0) {
+      return statusCompare
+    }
+
+    return compareDueAt(left, right)
+  })
+}
+
+function sortReadyOrders(orders: Order[], sortMode: OrderSortMode) {
+  return [...orders].sort((left, right) => {
+    if (sortMode === "new") {
+      return newestTimestamp(right.readyAt ?? right.createdAt) - newestTimestamp(left.readyAt ?? left.createdAt)
+    }
+
+    if (sortMode === "due") {
+      const dueCompare = compareDueAt(left, right)
+      if (dueCompare !== 0) {
+        return dueCompare
+      }
+
+      return newestTimestamp(right.readyAt ?? right.createdAt) - newestTimestamp(left.readyAt ?? left.createdAt)
+    }
+
+    const statusCompare = readyOrderStatusRank(left.status) - readyOrderStatusRank(right.status)
+    if (statusCompare !== 0) {
+      return statusCompare
+    }
+
+    const leftDue = timestamp(left.dueAt)
+    const rightDue = timestamp(right.dueAt)
+    const dueCompare = leftDue === rightDue ? 0 : leftDue - rightDue
+    if (dueCompare !== 0) {
+      return dueCompare
+    }
+
+    return newestTimestamp(right.readyAt ?? right.createdAt) - newestTimestamp(left.readyAt ?? left.createdAt)
+  })
+}
+
 function buildCategorySummaries(products: Product[]) {
   const counts = new Map<string, number>()
 
@@ -313,12 +492,14 @@ export function Backoffice({
   initialSection,
   canAccessCash,
   activeFlorists,
+  wazzupStatus,
 }: {
   data: DashboardData
   user: CurrentUser
   initialSection: Section
   canAccessCash: boolean
   activeFlorists: CurrentUser[]
+  wazzupStatus: WazzupSettingsStatus
 }) {
   const router = useRouter()
   const visibleSectionIds = useMemo(() => {
@@ -348,6 +529,7 @@ export function Backoffice({
   const [readyOrdersCount, setReadyOrdersCount] = useState(
     data.orders.filter((order) => order.status === "Готов").length
   )
+  const [incomingDealsCount, setIncomingDealsCount] = useState(0)
   const [userSheet, setUserSheet] = useState(false)
   const [editingUser, setEditingUser] = useState<CurrentUser | null>(null)
   const [passwordUser, setPasswordUser] = useState<CurrentUser | null>(null)
@@ -400,6 +582,41 @@ export function Backoffice({
     }
 
     loadCount()
+    const interval = window.setInterval(loadCount, orderRealtimeRefreshMs)
+
+    return () => {
+      mounted = false
+      window.clearInterval(interval)
+    }
+  }, [visibleSectionIds])
+
+  useEffect(() => {
+    if (!visibleSectionIds.includes("deals")) {
+      return
+    }
+
+    let mounted = true
+
+    async function loadCount() {
+      if (document.visibilityState !== "visible") {
+        return
+      }
+
+      try {
+        const response = await fetch("/api/deals/incoming-count", { cache: "no-store" })
+        if (!response.ok) {
+          return
+        }
+        const payload = (await response.json()) as { count?: number }
+        if (mounted) {
+          setIncomingDealsCount(payload.count ?? 0)
+        }
+      } catch {
+        // Polling should never break the sidebar.
+      }
+    }
+
+    void loadCount()
     const interval = window.setInterval(loadCount, orderRealtimeRefreshMs)
 
     return () => {
@@ -496,6 +713,11 @@ export function Backoffice({
                             {item.id === "ready-orders" && readyOrdersCount > 0 && (
                               <Badge className="ml-auto h-5 min-w-5 rounded-full px-1.5 text-xs group-data-[collapsible=icon]:hidden">
                                 {readyOrdersCount}
+                              </Badge>
+                            )}
+                            {item.id === "deals" && incomingDealsCount > 0 && (
+                              <Badge className="ml-auto h-5 min-w-5 rounded-full px-1.5 text-xs group-data-[collapsible=icon]:hidden">
+                                {incomingDealsCount > 99 ? "99+" : incomingDealsCount}
                               </Badge>
                             )}
                           </SidebarMenuButton>
@@ -653,6 +875,7 @@ export function Backoffice({
                 users={data.users}
                 suppliers={data.suppliers}
                 currentUserId={user.id}
+                wazzupStatus={wazzupStatus}
                 pending={isPending}
                 onCreateUser={() => {
                   setEditingUser(null)
@@ -2147,15 +2370,27 @@ function ReadyOrdersSection({
   onHandover: (order: Order) => void
   onCloseDelivery: (order: Order) => void
 }) {
-  const orders = data.orders.filter((order) => ["Готов", "Передан курьеру"].includes(order.status))
+  const [sortMode, setSortMode] = useState<OrderSortMode>("default")
+  const [viewMode, setViewMode] = useState<OrderViewMode>("list")
+  const [weekStart, setWeekStart] = useState(() => startOfLocalDay(new Date()))
+  const orders = sortReadyOrders(
+    data.orders.filter((order) => ["Готов", "Передан курьеру"].includes(order.status)),
+    sortMode
+  )
   const actionCount = orders.filter((order) => order.status === "Готов").length
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex justify-end">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <Badge className="w-fit bg-amber-100 text-amber-900 hover:bg-amber-100">
           {actionCount} ожидают действия
         </Badge>
+        <OrderToolbar
+          sortMode={sortMode}
+          viewMode={viewMode}
+          onSortModeChange={setSortMode}
+          onViewModeChange={setViewMode}
+        />
       </div>
 
       {!orders.length ? (
@@ -2165,6 +2400,16 @@ function ReadyOrdersSection({
             <EmptyDescription>Заказы появятся здесь после отметки “Букет готов”.</EmptyDescription>
           </EmptyHeader>
         </Empty>
+      ) : viewMode === "calendar" ? (
+        <OrderCalendarView
+          orders={orders}
+          weekStart={weekStart}
+          showMoney
+          onToday={() => setWeekStart(startOfLocalDay(new Date()))}
+          onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
+          onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
+          onOpenOrder={() => setViewMode("list")}
+        />
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
           {orders.map((order) => (
@@ -2329,15 +2574,27 @@ function OrdersSection({
   onReady: (order: Order) => void
   onCancel: (order: Order) => void
 }) {
-  const orders = data.orders
-    .filter((order) => ["Новый", "В работе", "Готов"].includes(order.status))
-    .sort((left, right) => (left.dueAt || "").localeCompare(right.dueAt || ""))
+  const [sortMode, setSortMode] = useState<OrderSortMode>("default")
+  const [viewMode, setViewMode] = useState<OrderViewMode>("list")
+  const [weekStart, setWeekStart] = useState(() => startOfLocalDay(new Date()))
+  const orders = sortWorkOrders(
+    data.orders.filter((order) => ["Новый", "В работе", "Готов"].includes(order.status)),
+    sortMode
+  )
 
   return (
     <Card className="rounded-2xl border bg-white">
-      <CardHeader>
-        <CardTitle>Стол заказов</CardTitle>
-        <CardDescription>Рабочий экран флористов без кассовых данных</CardDescription>
+      <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <CardTitle>Стол заказов</CardTitle>
+          <CardDescription>Рабочий экран флористов без кассовых данных</CardDescription>
+        </div>
+        <OrderToolbar
+          sortMode={sortMode}
+          viewMode={viewMode}
+          onSortModeChange={setSortMode}
+          onViewModeChange={setViewMode}
+        />
       </CardHeader>
       <CardContent>
         {!orders.length ? (
@@ -2347,64 +2604,328 @@ function OrdersSection({
               <EmptyDescription>Новые заказы появятся после создания на кассе.</EmptyDescription>
             </EmptyHeader>
           </Empty>
+        ) : viewMode === "calendar" ? (
+          <OrderCalendarView
+            orders={orders}
+            weekStart={weekStart}
+            showMoney={false}
+            onToday={() => setWeekStart(startOfLocalDay(new Date()))}
+            onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
+            onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
+            onOpenOrder={() => setViewMode("list")}
+          />
         ) : (
           <div className="grid gap-3 lg:grid-cols-2">
             {orders.map((order) => (
-              <div key={order.id} className="flex flex-col gap-4 rounded-2xl border bg-white p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm text-muted-foreground">{order.number || `#${order.id}`}</div>
-                    <div className="text-2xl font-semibold">{order.dueAt ? dateTime(order.dueAt) : "Без срока"}</div>
-                  </div>
-                  <OrderBadge status={order.status} />
-                </div>
-                <div className="flex flex-col gap-1 text-sm">
-                  <div className="font-medium">{order.customer}</div>
-                  <div>{deliveryTypeLabel(order.deliveryType)}</div>
-                  {order.address && <div>{order.address}</div>}
-                  {order.note && <div className="text-muted-foreground">{order.note}</div>}
-                </div>
-                <div className="flex flex-col gap-1 rounded-lg bg-muted p-3 text-sm">
-                  {order.items.map((item) => (
-                    <div key={item.id} className="flex items-center justify-between gap-3">
-                      <span className="flex min-w-0 items-center gap-2">
-                        <ProductThumbnail name={item.name} imagePath={item.imagePath} size="xs" />
-                        <span className="truncate">{item.name}</span>
-                      </span>
-                      <span>{number(item.qty)} шт</span>
-                    </div>
-                  ))}
-                </div>
-                {(order.status === "Готов" || order.status === "Передан курьеру") && (
-                  <Alert>
-                    <AlertTriangleIcon />
-                    <AlertTitle>Букет уже собран, склад автоматически не восстанавливается</AlertTitle>
-                  </Alert>
-                )}
-                <div className="flex flex-wrap justify-end gap-2">
-                  {order.status === "Новый" && (
-                    <Button size="sm" onClick={() => onStart(order)} disabled={pending}>
-                      В работу
-                    </Button>
-                  )}
-                  {["Новый", "В работе"].includes(order.status) && (
-                    <Button size="sm" variant="default" onClick={() => onReady(order)} disabled={pending}>
-                      Букет готов
-                    </Button>
-                  )}
-                  {["Новый", "В работе", "Готов"].includes(order.status) && (
-                    <Button size="sm" variant="outline" onClick={() => onCancel(order)} disabled={pending}>
-                      Отменить
-                    </Button>
-                  )}
-                </div>
-              </div>
+              <WorkOrderCard
+                key={order.id}
+                order={order}
+                pending={pending}
+                onStart={onStart}
+                onReady={onReady}
+                onCancel={onCancel}
+              />
             ))}
           </div>
         )}
       </CardContent>
     </Card>
   )
+}
+
+function WorkOrderCard({
+  order,
+  pending,
+  onStart,
+  onReady,
+  onCancel,
+}: {
+  order: Order
+  pending: boolean
+  onStart: (order: Order) => void
+  onReady: (order: Order) => void
+  onCancel: (order: Order) => void
+}) {
+  return (
+    <div className="flex flex-col gap-4 rounded-2xl border bg-white p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm text-muted-foreground">{order.number || `#${order.id}`}</div>
+          <div className="text-2xl font-semibold">{order.dueAt ? dateTime(order.dueAt) : "Без срока"}</div>
+        </div>
+        <OrderBadge status={order.status} />
+      </div>
+      <div className="flex flex-col gap-1 text-sm">
+        <div className="font-medium">{order.customer}</div>
+        <div>{deliveryTypeLabel(order.deliveryType)}</div>
+        {order.address && <div>{order.address}</div>}
+        {order.note && <div className="text-muted-foreground">{order.note}</div>}
+      </div>
+      <div className="flex flex-col gap-1 rounded-lg bg-muted p-3 text-sm">
+        {order.items.map((item) => (
+          <div key={item.id} className="flex items-center justify-between gap-3">
+            <span className="flex min-w-0 items-center gap-2">
+              <ProductThumbnail name={item.name} imagePath={item.imagePath} size="xs" />
+              <span className="truncate">{item.name}</span>
+            </span>
+            <span>{number(item.qty)} шт</span>
+          </div>
+        ))}
+      </div>
+      {(order.status === "Готов" || order.status === "Передан курьеру") && (
+        <Alert>
+          <AlertTriangleIcon />
+          <AlertTitle>Букет уже собран, склад автоматически не восстанавливается</AlertTitle>
+        </Alert>
+      )}
+      <div className="flex flex-wrap justify-end gap-2">
+        {order.status === "Новый" && (
+          <Button size="sm" onClick={() => onStart(order)} disabled={pending}>
+            В работу
+          </Button>
+        )}
+        {["Новый", "В работе"].includes(order.status) && (
+          <Button size="sm" variant="default" onClick={() => onReady(order)} disabled={pending}>
+            Букет готов
+          </Button>
+        )}
+        {["Новый", "В работе", "Готов"].includes(order.status) && (
+          <Button size="sm" variant="outline" onClick={() => onCancel(order)} disabled={pending}>
+            Отменить
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function OrderToolbar({
+  sortMode,
+  viewMode,
+  onSortModeChange,
+  onViewModeChange,
+}: {
+  sortMode: OrderSortMode
+  viewMode: OrderViewMode
+  onSortModeChange: (value: OrderSortMode) => void
+  onViewModeChange: (value: OrderViewMode) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-muted-foreground">Сортировка</span>
+        <Select
+          value={sortMode}
+          onValueChange={(value) => onSortModeChange((value ?? "default") as OrderSortMode)}
+        >
+          <SelectTrigger size="sm" className="min-w-44">
+            <SelectValue placeholder="Сортировка" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {orderSortOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </div>
+      <Tabs
+        value={viewMode}
+        onValueChange={(value) => onViewModeChange((value ?? "list") as OrderViewMode)}
+      >
+        <TabsList>
+          <TabsTrigger value="list">
+            <ListIcon data-icon="inline-start" />
+            Список
+          </TabsTrigger>
+          <TabsTrigger value="calendar">
+            <CalendarDaysIcon data-icon="inline-start" />
+            Календарь
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+    </div>
+  )
+}
+
+function OrderCalendarView({
+  orders,
+  weekStart,
+  showMoney,
+  onToday,
+  onPreviousWeek,
+  onNextWeek,
+  onOpenOrder,
+}: {
+  orders: Order[]
+  weekStart: Date
+  showMoney: boolean
+  onToday: () => void
+  onPreviousWeek: () => void
+  onNextWeek: () => void
+  onOpenOrder: (order: Order) => void
+}) {
+  const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index))
+  const dayKeys = new Set(days.map(dateKey))
+  const ordersByDate = new Map<string, Order[]>()
+  const ordersWithoutDate: Order[] = []
+
+  for (const order of orders) {
+    const key = order.dueAt ? dateKeyFromValue(order.dueAt) : noDueDateKey
+    if (key === noDueDateKey) {
+      ordersWithoutDate.push(order)
+      continue
+    }
+
+    if (!dayKeys.has(key)) {
+      continue
+    }
+
+    ordersByDate.set(key, [...(ordersByDate.get(key) ?? []), order])
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="text-sm font-medium">Неделя</div>
+          <div className="text-sm text-muted-foreground">{weekRangeLabel(weekStart)}</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={onToday}>
+            Сегодня
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={onPreviousWeek}>
+            <ArrowLeftIcon data-icon="inline-start" />
+            Неделя
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={onNextWeek}>
+            Неделя
+            <ArrowRightIcon data-icon="inline-end" />
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-7">
+        {days.map((day) => {
+          const key = dateKey(day)
+          const dayOrders = ordersByDate.get(key) ?? []
+
+          return (
+            <div key={key} className="flex min-h-40 flex-col gap-2 rounded-lg border bg-background p-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium capitalize">{dayLabel(day)}</div>
+                <Badge variant="outline">{dayOrders.length}</Badge>
+              </div>
+              {dayOrders.length ? (
+                <div className="flex flex-col gap-2">
+                  {dayOrders.map((order) => (
+                    <OrderCalendarCard
+                      key={order.id}
+                      order={order}
+                      showMoney={showMoney}
+                      onOpenOrder={onOpenOrder}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <Empty className="min-h-24 rounded-lg border py-3">
+                  <EmptyHeader>
+                    <EmptyTitle className="text-sm">На этот день заказов нет</EmptyTitle>
+                  </EmptyHeader>
+                </Empty>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {ordersWithoutDate.length > 0 && (
+        <div className="flex flex-col gap-2 rounded-lg border bg-background p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-medium">Без даты</div>
+            <Badge variant="outline">{ordersWithoutDate.length}</Badge>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {ordersWithoutDate.map((order) => (
+              <OrderCalendarCard
+                key={order.id}
+                order={order}
+                showMoney={showMoney}
+                onOpenOrder={onOpenOrder}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function OrderCalendarCard({
+  order,
+  showMoney,
+  onOpenOrder,
+}: {
+  order: Order
+  showMoney: boolean
+  onOpenOrder: (order: Order) => void
+}) {
+  const balance = order.total - order.paid
+
+  return (
+    <div className={cn("flex flex-col gap-2 rounded-lg border bg-white p-3 text-xs", orderUrgencyClass(order))}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate font-medium">{order.number || `#${order.id}`}</div>
+          <div className="text-muted-foreground">{order.dueAt ? timeValue(order.dueAt) : "Без срока"}</div>
+        </div>
+        {order.status === "Готов" || order.status === "Передан курьеру" ? (
+          <ReadyStatusBadge status={order.status} />
+        ) : (
+          <OrderBadge status={order.status} />
+        )}
+      </div>
+      <div className="min-w-0">
+        <div className="truncate font-medium">{order.customer || "Клиент не указан"}</div>
+        <div className="truncate text-muted-foreground">{deliveryTypeLabel(order.deliveryType)}</div>
+      </div>
+      {showMoney && (
+        <div className="grid grid-cols-2 gap-2 rounded-md bg-muted p-2">
+          <Info label="Сумма" value={formatMoney(order.total)} />
+          <Info label="Остаток" value={formatMoney(balance)} />
+        </div>
+      )}
+      <Button type="button" size="sm" variant="outline" className="mt-auto" onClick={() => onOpenOrder(order)}>
+        К списку
+      </Button>
+    </div>
+  )
+}
+
+function orderUrgencyClass(order: Order) {
+  if (!order.dueAt) {
+    return ""
+  }
+
+  const dueAt = new Date(order.dueAt)
+  if (Number.isNaN(dueAt.getTime())) {
+    return ""
+  }
+
+  const now = new Date()
+  if (dueAt.getTime() < now.getTime()) {
+    return "border-destructive bg-destructive/5"
+  }
+
+  if (dateKey(dueAt) === dateKey(now)) {
+    return "border-amber-300 bg-amber-50"
+  }
+
+  return ""
 }
 
 function ShiftsSection({
@@ -2557,6 +3078,7 @@ function SettingsSection({
   users,
   suppliers,
   currentUserId,
+  wazzupStatus,
   pending,
   onCreateUser,
   onEditUser,
@@ -2569,6 +3091,7 @@ function SettingsSection({
   users: CurrentUser[]
   suppliers: Supplier[]
   currentUserId: number
+  wazzupStatus: WazzupSettingsStatus
   pending: boolean
   onCreateUser: () => void
   onEditUser: (user: CurrentUser) => void
@@ -2583,6 +3106,7 @@ function SettingsSection({
       <TabsList className="h-10 w-full justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit">
         <TabsTrigger value="users">Пользователи</TabsTrigger>
         <TabsTrigger value="suppliers">Поставщики</TabsTrigger>
+        <TabsTrigger value="wazzup">Wazzup</TabsTrigger>
       </TabsList>
       <TabsContent value="users">
         <UsersSection
@@ -2604,8 +3128,630 @@ function SettingsSection({
           onToggleActive={onToggleSupplierActive}
         />
       </TabsContent>
+      <TabsContent value="wazzup">
+        <WazzupSettingsBlock status={wazzupStatus} />
+      </TabsContent>
     </Tabs>
   )
+}
+
+function WazzupSettingsBlock({
+  status,
+}: {
+  status: WazzupSettingsStatus
+}) {
+  const router = useRouter()
+  const [apiKey, setApiKey] = useState("")
+  const [isEnabled, setIsEnabled] = useState(status.isEnabled)
+  const [webhookAuthRequired, setWebhookAuthRequired] = useState(status.webhookAuthRequired)
+  const [clearDialogOpen, setClearDialogOpen] = useState(false)
+  const [wazzupApiResult, setWazzupApiResult] = useState<string[]>([])
+  const [pending, startTransition] = useTransition()
+  const connectionState = getWazzupConnectionState(status)
+
+  function copyWebhookUrl() {
+    void navigator.clipboard.writeText(status.webhookUrl)
+    toast.success("Webhook URL скопирован")
+  }
+
+  function copySecureWebhookUrl() {
+    startTransition(async () => {
+      const result = await getSecureWazzupWebhookUrlAction()
+      if (result.ok) {
+        await navigator.clipboard.writeText(result.data.url)
+        toast.success(result.message)
+      } else {
+        toast.error(result.message)
+      }
+    })
+  }
+
+  function run(action: () => Promise<{ ok: boolean; message: string }>, after?: () => void) {
+    startTransition(async () => {
+      const result = await action()
+      if (result.ok) {
+        toast.success(result.message)
+        after?.()
+        router.refresh()
+      } else {
+        toast.error(result.message)
+        router.refresh()
+      }
+    })
+  }
+
+  function runWazzupApi(action: () => Promise<{ ok: boolean; message: string; messages?: string[] }>) {
+    startTransition(async () => {
+      const result = await action()
+      setWazzupApiResult(result.messages ?? [result.message])
+      if (result.ok) {
+        toast.success(result.message)
+        router.refresh()
+      } else {
+        toast.error(result.message)
+      }
+    })
+  }
+
+  function submitSettings(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const formData = new FormData()
+    formData.set("apiKey", apiKey)
+    if (isEnabled) {
+      formData.set("isEnabled", "on")
+    }
+    if (webhookAuthRequired) {
+      formData.set("webhookAuthRequired", "on")
+    }
+
+    run(() => saveWazzupSettingsAction(formData), () => setApiKey(""))
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card className="rounded-2xl border bg-white">
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>Статус подключения</CardTitle>
+              <CardDescription>Без показа полных ключей в интерфейсе</CardDescription>
+            </div>
+            <Badge variant={connectionState.variant}>{connectionState.label}</Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {!status.appUrlConfigured ? (
+            <Alert>
+              <AlertTriangleIcon />
+              <AlertTitle>NEXT_PUBLIC_APP_URL не задан</AlertTitle>
+              <AlertDescription>Укажите NEXT_PUBLIC_APP_URL для корректного webhook URL.</AlertDescription>
+            </Alert>
+          ) : null}
+          <div className="grid gap-3 md:grid-cols-3">
+            <StatusTile label="API key" value={status.apiKeyConfigured ? "Настроен" : "Не настроен"} />
+            <StatusTile label="CRM key" value={status.crmKeyConfigured ? "Настроен" : "Не настроен"} />
+            <StatusTile label="Webhook auth" value={status.webhookAuthRequired ? "Обязателен" : "Гибкий"} />
+            <StatusTile label="Последняя проверка" value={lastCheckLabel(status)} />
+          </div>
+          {status.lastCheckMessage ? (
+            <Alert variant={status.lastCheckStatus === "error" ? "destructive" : "default"}>
+              <AlertTitle>{status.lastCheckStatus === "error" ? "Ошибка проверки" : "Проверка выполнена"}</AlertTitle>
+              <AlertDescription>{status.lastCheckMessage}</AlertDescription>
+            </Alert>
+          ) : null}
+          <WebhookUrlRow label="Public webhook URL" webhookUrl={status.webhookUrl} onCopy={copyWebhookUrl} />
+          <WebhookUrlRow
+            label="Secure webhook URL"
+            webhookUrl={status.secureWebhookUrlMasked}
+            onCopy={copySecureWebhookUrl}
+            copyLabel="Скопировать защищенный URL"
+            disabled={!status.crmKeyConfigured || pending}
+          />
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border bg-white">
+        <CardHeader>
+          <CardTitle>Ключи</CardTitle>
+          <CardDescription>Ключи сохраняются server-side и показываются только в маске</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="flex flex-col gap-4" onSubmit={submitSettings}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="wazzup-api-key">Wazzup API key</FieldLabel>
+                <Input
+                  id="wazzup-api-key"
+                  type="password"
+                  value={apiKey}
+                  placeholder={status.apiKeyConfigured ? "Ключ сохранен" : "Вставьте API key"}
+                  autoComplete="off"
+                  onChange={(event) => setApiKey(event.target.value)}
+                  disabled={pending}
+                />
+                <FieldDescription>
+                  Текущий ключ: {status.apiKeyMasked ?? "не настроен"}. Пустое поле не затирает сохраненный ключ.
+                </FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="wazzup-crm-key">CRM key</FieldLabel>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    id="wazzup-crm-key"
+                    type="password"
+                    readOnly
+                    value={status.crmKeyMasked ?? ""}
+                    placeholder="CRM key не настроен"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={pending}
+                    onClick={() => run(generateWazzupCrmKeyAction)}
+                  >
+                    <KeyRoundIcon data-icon="inline-start" />
+                    Сгенерировать новый
+                  </Button>
+                </div>
+                <FieldDescription>CRM key проверяется по Authorization Bearer или query key в защищенном webhook URL.</FieldDescription>
+              </Field>
+              <Field orientation="horizontal">
+                <Checkbox
+                  id="wazzup-is-enabled"
+                  checked={isEnabled}
+                  onCheckedChange={(checked) => setIsEnabled(checked === true)}
+                  disabled={pending}
+                />
+                <FieldContent>
+                  <FieldLabel htmlFor="wazzup-is-enabled">Интеграция включена</FieldLabel>
+                  <FieldDescription>Если выключить, реальные webhooks будут сохранены как ignored.</FieldDescription>
+                </FieldContent>
+              </Field>
+              <Field orientation="horizontal">
+                <Checkbox
+                  id="wazzup-webhook-auth-required"
+                  checked={webhookAuthRequired}
+                  onCheckedChange={(checked) => setWebhookAuthRequired(checked === true)}
+                  disabled={pending}
+                />
+                <FieldContent>
+                  <FieldLabel htmlFor="wazzup-webhook-auth-required">Требовать CRM key для webhook</FieldLabel>
+                  <FieldDescription>
+                    Если выключено, сообщения без Authorization принимаются и помечаются предупреждением в диагностике.
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+            </FieldGroup>
+            <div className="flex flex-wrap gap-2">
+              <Button type="submit" disabled={pending}>
+                Сохранить настройки
+              </Button>
+              <Button type="button" variant="outline" disabled={pending} onClick={() => run(testWazzupApiKeyAction)}>
+                Проверить API key
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending || !status.apiKeyConfigured}
+                onClick={() => setClearDialogOpen(true)}
+              >
+                Очистить API key
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border bg-white">
+        <CardHeader>
+          <CardTitle>Подключение webhook</CardTitle>
+          <CardDescription>Что включить в Wazzup</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <WebhookUrlRow label="Public webhook URL" webhookUrl={status.webhookUrl} onCopy={copyWebhookUrl} />
+          <WebhookUrlRow
+            label="Secure webhook URL"
+            webhookUrl={status.secureWebhookUrlMasked}
+            onCopy={copySecureWebhookUrl}
+            copyLabel="Скопировать защищенный URL"
+            disabled={!status.crmKeyConfigured || pending}
+          />
+          <ol className="grid gap-2 text-sm text-muted-foreground">
+            <li>1. В Wazzup откройте Интеграция с CRM / API.</li>
+            <li>2. Укажите защищенный Webhook URL или нажмите “Подключить webhook в Wazzup”.</li>
+            <li>3. Включите подписки: messagesAndStatuses и contactsAndDealsCreation.</li>
+            <li>4. При тестовом POST CRM должна вернуть 200 OK.</li>
+          </ol>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border bg-white">
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>Пользователи Wazzup</CardTitle>
+              <CardDescription>
+                Синхронизируйте пользователей CRM в Wazzup. После этого администратор Wazzup сможет назначить им роли и доступ в личном кабинете Wazzup.
+              </CardDescription>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || !status.apiKeyConfigured}
+              onClick={() => runWazzupApi(syncWazzupUsersAction)}
+            >
+              <UserCheckIcon data-icon="inline-start" />
+              Синхронизировать пользователей
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <Alert>
+            <AlertTriangleIcon />
+            <AlertTitle>Роли назначаются в Wazzup</AlertTitle>
+            <AlertDescription>
+              Если iframe пишет “Нет доступа к приложению”, пользователь уже может быть отправлен из CRM, но ему нужно назначить роль в личном кабинете Wazzup.
+            </AlertDescription>
+          </Alert>
+          {status.userSync.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Пользователь CRM</TableHead>
+                  <TableHead>Роль CRM</TableHead>
+                  <TableHead>Wazzup ID</TableHead>
+                  <TableHead>Статус</TableHead>
+                  <TableHead>Последний sync</TableHead>
+                  <TableHead>Ошибка</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {status.userSync.map((user) => (
+                  <TableRow key={user.userId}>
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
+                        <span className="font-medium">{user.crmName || user.crmLogin || `User ${user.userId}`}</span>
+                        <span className="text-xs text-muted-foreground">{user.crmLogin || "-"}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell>{roleLabels[user.crmRole]}</TableCell>
+                    <TableCell>{user.wazzupUserId || String(user.userId)}</TableCell>
+                    <TableCell>
+                      <Badge variant={wazzupUserSyncBadgeVariant(user.syncStatus)}>
+                        {wazzupUserSyncLabel(user.syncStatus)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{user.lastSyncedAt ? dateTime(user.lastSyncedAt) : "-"}</TableCell>
+                    <TableCell className="max-w-80 truncate">
+                      {user.lastError || (!user.isActive ? "Пользователь отключен в CRM" : "-")}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <Empty className="min-h-36">
+              <EmptyHeader>
+                <EmptyTitle>Пользователей CRM нет</EmptyTitle>
+                <EmptyDescription>Создайте активного пользователя CRM, чтобы отправить его в Wazzup.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border bg-white">
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>Синхронизация CRM</CardTitle>
+              <CardDescription>Воронки, клиенты и сделки для списка “Сделки” внутри Wazzup iframe</CardDescription>
+            </div>
+            <Button
+              type="button"
+              disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
+              onClick={() => runWazzupApi(syncWazzupAllAction)}
+            >
+              <UserCheckIcon data-icon="inline-start" />
+              Синхронизировать всё
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {!status.isEnabled || !status.apiKeyConfigured ? (
+            <Alert>
+              <AlertTriangleIcon />
+              <AlertTitle>Синхронизация недоступна</AlertTitle>
+              <AlertDescription>Включите интеграцию Wazzup и сохраните API key, чтобы отправлять данные CRM.</AlertDescription>
+            </Alert>
+          ) : null}
+          {!status.appUrlConfigured ? (
+            <Alert>
+              <AlertTriangleIcon />
+              <AlertTitle>NEXT_PUBLIC_APP_URL не задан</AlertTitle>
+              <AlertDescription>Контакты и сделки будут отправлены с относительными ссылками. Для Wazzup лучше задать публичный URL.</AlertDescription>
+            </Alert>
+          ) : null}
+          <div className="grid gap-3 md:grid-cols-3">
+            <StatusTile label="Воронки" value={wazzupSyncValue(status.entitySync.pipelines)} />
+            <StatusTile label="Этапы" value={wazzupSyncValue(status.entitySync.stages)} />
+            <StatusTile label="Клиенты" value={wazzupSyncValue(status.entitySync.contacts)} />
+            <StatusTile label="Сделки" value={wazzupSyncValue(status.entitySync.deals)} />
+            <StatusTile label="Ошибки клиентов" value={String(status.entitySync.contacts.failed)} />
+            <StatusTile label="Ошибки сделок" value={String(status.entitySync.deals.failed)} />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
+              onClick={() => runWazzupApi(syncWazzupPipelinesAction)}
+            >
+              Синхронизировать воронки
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
+              onClick={() => runWazzupApi(syncWazzupContactsAction)}
+            >
+              Синхронизировать клиентов
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
+              onClick={() => runWazzupApi(syncWazzupDealsAction)}
+            >
+              Синхронизировать сделки
+            </Button>
+          </div>
+          {status.entitySync.pipelines.lastError ||
+          status.entitySync.contacts.lastError ||
+          status.entitySync.deals.lastError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Последняя ошибка синхронизации</AlertTitle>
+              <AlertDescription>
+                {status.entitySync.deals.lastError ||
+                  status.entitySync.contacts.lastError ||
+                  status.entitySync.pipelines.lastError}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border bg-white">
+        <CardHeader>
+          <CardTitle>Диагностика</CardTitle>
+          <CardDescription>Последние Wazzup события без raw payload и секретов</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <StatusTile label="Webhook events" value={String(status.diagnostics.webhookEventsCount)} />
+            <StatusTile label="Wazzup messages" value={String(status.diagnostics.wazzupMessagesCount)} />
+            <StatusTile label="Auth failed" value={String(status.diagnostics.failedAuthEventsCount)} />
+            <StatusTile label="Последний event_type" value={status.diagnostics.latestEventType || "-"} />
+            <StatusTile
+              label="Последнее сообщение"
+              value={
+                status.diagnostics.latestMessage
+                  ? `${status.diagnostics.latestMessage.chatType} · ${status.diagnostics.latestMessage.chatId}`
+                  : "Нет сообщений"
+              }
+            />
+          </div>
+          {status.diagnostics.onlyTestWebhooks ? (
+            <Alert>
+              <AlertTriangleIcon />
+              <AlertTitle>Получены только test webhooks</AlertTitle>
+              <AlertDescription>Реальных сообщений или createDeal еще не было.</AlertDescription>
+            </Alert>
+          ) : null}
+          {status.diagnostics.latestError.includes("unauthorized webhook:") ? (
+            <Alert variant="destructive">
+              <AlertTriangleIcon />
+              <AlertTitle>Webhook отклонен по CRM key</AlertTitle>
+              <AlertDescription>
+                Wazzup отправил webhook без ожидаемого CRM key. Используйте защищенный webhook URL с key или выключите обязательную проверку.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {status.diagnostics.latestMessage ? (
+            <div className="text-sm text-muted-foreground">
+              Последнее сообщение Wazzup: {dateTime(status.diagnostics.latestMessage.createdAt)}
+            </div>
+          ) : null}
+          {status.diagnostics.recentWebhookEvents.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>event_type</TableHead>
+                  <TableHead>status</TableHead>
+                  <TableHead>created_at</TableHead>
+                  <TableHead>error</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {status.diagnostics.recentWebhookEvents.map((event, index) => (
+                  <TableRow key={`${event.createdAt}-${event.eventType}-${index}`}>
+                    <TableCell>{event.eventType || "unknown"}</TableCell>
+                    <TableCell>
+                      <Badge variant={event.status === "failed" ? "destructive" : "secondary"}>
+                        {event.status || "unknown"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{dateTime(event.createdAt)}</TableCell>
+                    <TableCell className="max-w-80 truncate">{event.error || "-"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <Empty className="min-h-36">
+              <EmptyHeader>
+                <EmptyTitle>Webhook events еще нет</EmptyTitle>
+                <EmptyDescription>После теста или реального события Wazzup они появятся здесь.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border bg-white">
+        <CardHeader>
+          <CardTitle>Проверка</CardTitle>
+          <CardDescription>Быстрые проверки без показа ключей</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" disabled={pending} onClick={() => run(testWazzupApiKeyAction)}>
+            Проверить API key
+          </Button>
+          <Button type="button" variant="outline" disabled={pending} onClick={() => run(testLocalWazzupWebhookAction)}>
+            Проверить webhook endpoint
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending || !status.apiKeyConfigured}
+            onClick={() => runWazzupApi(checkWazzupWebhookSubscriptionsAction)}
+          >
+            Проверить подписки
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending || !status.apiKeyConfigured}
+            onClick={() => runWazzupApi(connectWazzupWebhookAction)}
+          >
+            Подключить webhook в Wazzup
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending || !status.apiKeyConfigured}
+            onClick={() => runWazzupApi(checkWazzupChannelsAction)}
+          >
+            Проверить каналы
+          </Button>
+        </CardContent>
+      </Card>
+
+      {wazzupApiResult.length ? (
+        <Alert>
+          <AlertTitle>Ответ Wazzup API</AlertTitle>
+          <AlertDescription>
+            <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">{wazzupApiResult.join("\n")}</pre>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      <AlertDialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Очистить Wazzup API key?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Сохраненный в базе API key будет удален. Если ключ задан в .env, он останется fallback на сервере.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              render={<Button variant="destructive" disabled={pending} />}
+              onClick={() => run(clearWazzupApiKeyAction, () => setClearDialogOpen(false))}
+            >
+              Очистить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+function StatusTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border p-3">
+      <div className="text-sm text-muted-foreground">{label}</div>
+      <div className="mt-1 font-medium">{value}</div>
+    </div>
+  )
+}
+
+function WebhookUrlRow({
+  label,
+  webhookUrl,
+  onCopy,
+  copyLabel = "Копировать",
+  disabled = false,
+}: {
+  label: string
+  webhookUrl: string
+  onCopy: () => void
+  copyLabel?: string
+  disabled?: boolean
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-sm text-muted-foreground">{label}</div>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <Input readOnly value={webhookUrl} />
+        <Button type="button" variant="outline" onClick={onCopy} disabled={disabled}>
+          <CopyIcon data-icon="inline-start" />
+          {copyLabel}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function getWazzupConnectionState(status: WazzupSettingsStatus) {
+  if (status.lastCheckStatus === "error") {
+    return { label: "Ошибка", variant: "destructive" as const }
+  }
+
+  if (status.isEnabled && status.apiKeyConfigured && status.crmKeyConfigured) {
+    return { label: "Подключено", variant: "secondary" as const }
+  }
+
+  return { label: "Не настроено", variant: "outline" as const }
+}
+
+function lastCheckLabel(status: WazzupSettingsStatus) {
+  if (!status.lastCheckAt) {
+    return "Не выполнялась"
+  }
+
+  return `${status.lastCheckStatus || "unknown"} · ${dateTime(status.lastCheckAt)}`
+}
+
+function wazzupSyncValue(summary: WazzupSettingsStatus["entitySync"]["contacts"]) {
+  return `${summary.synced}/${summary.total}${summary.failed ? ` · failed ${summary.failed}` : ""}`
+}
+
+function wazzupUserSyncLabel(status: WazzupSettingsStatus["userSync"][number]["syncStatus"]) {
+  if (status === "synced") {
+    return "synced"
+  }
+  if (status === "failed") {
+    return "failed"
+  }
+  if (status === "skipped") {
+    return "skipped"
+  }
+
+  return "pending"
+}
+
+function wazzupUserSyncBadgeVariant(status: WazzupSettingsStatus["userSync"][number]["syncStatus"]) {
+  if (status === "synced") {
+    return "secondary" as const
+  }
+  if (status === "failed") {
+    return "destructive" as const
+  }
+
+  return "outline" as const
 }
 
 function SuppliersSection({
@@ -4023,14 +5169,18 @@ function StockDocumentDialog({
     setItems((current) => {
       const existing = current.find((item) => item.product.code === freshProduct.code)
       if (existing) {
-        return current.map((item) =>
-          item.product.code === freshProduct.code
-            ? { ...item, product: freshProduct, qty: String(Number(item.qty || 0) + 1) }
-            : item
-        )
+        const updated = {
+          ...existing,
+          product: freshProduct,
+          qty: String(incrementWholeQty(existing.qty)),
+        }
+        return [
+          updated,
+          ...current.filter((item) => item.product.code !== freshProduct.code),
+        ]
       }
 
-      return [...current, { product: freshProduct, qty: "1" }]
+      return [{ product: freshProduct, qty: "1" }, ...current]
     })
   }
 
@@ -4507,6 +5657,15 @@ function getShiftCashSummary(detail: DashboardData["shiftDetails"][number]) {
 
 function number(value: number) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value)
+}
+
+function incrementWholeQty(value: string) {
+  const next = Number(value || 0) + 1
+  if (!Number.isFinite(next)) {
+    return 1
+  }
+
+  return Math.max(1, Math.round(next))
 }
 
 function dateTime(value: string) {

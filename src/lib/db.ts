@@ -732,6 +732,9 @@ function migrate(client: Database.Database) {
       normalized_phone TEXT,
       instagram TEXT,
       source TEXT,
+      wazzup_chat_type TEXT,
+      wazzup_chat_id TEXT,
+      wazzup_channel_id TEXT,
       default_discount_percent REAL DEFAULT 0,
       comment TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -784,6 +787,94 @@ function migrate(client: Database.Database) {
       wazzup_chat_type TEXT,
       wazzup_chat_id TEXT,
       wazzup_channel_id TEXT,
+      last_message_text TEXT,
+      last_message_at TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS wazzup_webhook_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_hash TEXT UNIQUE,
+      event_type TEXT,
+      status TEXT DEFAULT 'received',
+      raw_payload TEXT NOT NULL,
+      error TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      processed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS wazzup_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id TEXT UNIQUE,
+      deal_id INTEGER,
+      customer_id INTEGER,
+      channel_id TEXT,
+      chat_type TEXT,
+      chat_id TEXT,
+      direction TEXT,
+      message_type TEXT,
+      text TEXT,
+      content_uri TEXT,
+      status TEXT,
+      is_echo INTEGER DEFAULT 0,
+      date_time TEXT,
+      raw_payload TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS wazzup_user_sync (
+      user_id INTEGER PRIMARY KEY,
+      wazzup_user_id TEXT,
+      name TEXT,
+      status TEXT,
+      last_synced_at TEXT,
+      last_error TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS wazzup_pipeline_sync (
+      pipeline_id INTEGER PRIMARY KEY,
+      wazzup_pipeline_id TEXT,
+      status TEXT,
+      last_synced_at TEXT,
+      last_error TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS wazzup_stage_sync (
+      stage_id INTEGER PRIMARY KEY,
+      wazzup_stage_id TEXT,
+      status TEXT,
+      last_synced_at TEXT,
+      last_error TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS wazzup_contact_sync (
+      customer_id INTEGER PRIMARY KEY,
+      wazzup_contact_id TEXT,
+      status TEXT,
+      last_synced_at TEXT,
+      last_error TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS wazzup_deal_sync (
+      deal_id INTEGER PRIMARY KEY,
+      wazzup_deal_id TEXT,
+      status TEXT,
+      last_synced_at TEXT,
+      last_error TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS integration_settings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL UNIQUE,
+      api_key TEXT,
+      crm_key TEXT,
+      webhook_url TEXT,
+      webhook_auth_required INTEGER DEFAULT 0,
+      is_enabled INTEGER DEFAULT 0,
+      last_check_status TEXT,
+      last_check_message TEXT,
+      last_check_at TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
@@ -810,6 +901,9 @@ function migrate(client: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_deals_customer_id ON deals(customer_id);
     CREATE INDEX IF NOT EXISTS idx_deals_stage_id ON deals(stage_id);
     CREATE INDEX IF NOT EXISTS idx_deal_items_deal_id ON deal_items(deal_id);
+    CREATE INDEX IF NOT EXISTS idx_wazzup_webhook_events_hash ON wazzup_webhook_events(event_hash);
+    CREATE INDEX IF NOT EXISTS idx_wazzup_messages_chat ON wazzup_messages(chat_type, chat_id);
+    CREATE INDEX IF NOT EXISTS idx_integration_settings_provider ON integration_settings(provider);
   `)
 
   ensureColumn("products", "image_path", "ALTER TABLE products ADD COLUMN image_path TEXT", client)
@@ -993,6 +1087,24 @@ function migrate(client: Database.Database) {
     "ALTER TABLE warehouse_import_items ADD COLUMN category_path TEXT NOT NULL DEFAULT ''",
     client
   )
+  ensureColumn("customers", "wazzup_chat_type", "ALTER TABLE customers ADD COLUMN wazzup_chat_type TEXT", client)
+  ensureColumn("customers", "wazzup_chat_id", "ALTER TABLE customers ADD COLUMN wazzup_chat_id TEXT", client)
+  ensureColumn("customers", "wazzup_channel_id", "ALTER TABLE customers ADD COLUMN wazzup_channel_id TEXT", client)
+  ensureColumn("deals", "wazzup_chat_type", "ALTER TABLE deals ADD COLUMN wazzup_chat_type TEXT", client)
+  ensureColumn("deals", "wazzup_chat_id", "ALTER TABLE deals ADD COLUMN wazzup_chat_id TEXT", client)
+  ensureColumn("deals", "wazzup_channel_id", "ALTER TABLE deals ADD COLUMN wazzup_channel_id TEXT", client)
+  ensureColumn("deals", "last_message_text", "ALTER TABLE deals ADD COLUMN last_message_text TEXT", client)
+  ensureColumn("deals", "last_message_at", "ALTER TABLE deals ADD COLUMN last_message_at TEXT", client)
+  ensureColumn(
+    "integration_settings",
+    "webhook_auth_required",
+    "ALTER TABLE integration_settings ADD COLUMN webhook_auth_required INTEGER DEFAULT 0",
+    client
+  )
+  client.exec(`
+    CREATE INDEX IF NOT EXISTS idx_customers_wazzup_chat ON customers(wazzup_chat_type, wazzup_chat_id);
+    CREATE INDEX IF NOT EXISTS idx_deals_wazzup_chat ON deals(wazzup_chat_type, wazzup_chat_id, status);
+  `)
 
   seedDefaultDealPipeline(client)
 }

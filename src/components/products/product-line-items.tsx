@@ -268,12 +268,14 @@ export function ProductLineItems({
 export function addProductToLineItems(items: ProductLineItem[], product: Product, qty = 1) {
   const existing = items.find((item) => item.productCode === product.code)
   if (existing) {
-    return items.map((item) =>
-      item.productCode === product.code ? { ...item, qty: clampQty(item.qty + qty) } : item
-    )
+    const updated = { ...existing, qty: clampQty(existing.qty + qty) }
+    return [
+      updated,
+      ...items.filter((item) => item.productCode !== product.code),
+    ]
   }
 
-  return [...items, lineFromProduct(product)]
+  return [{ ...lineFromProduct(product), qty: clampQty(qty) }, ...items]
 }
 
 export function getLineItemsTotal(items: ProductLineItem[]) {
