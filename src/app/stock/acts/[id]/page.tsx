@@ -29,6 +29,7 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
   if (!document) {
     notFound()
   }
+  const quantityHeaders = stockDocumentQuantityHeaders(document.status)
 
   return (
     <main className="min-h-screen bg-zinc-50 p-4 md:p-6">
@@ -98,8 +99,8 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
                     <TableHead>Товар</TableHead>
                     <TableHead>Кол-во</TableHead>
                     <TableHead>Изменение</TableHead>
-                    <TableHead>Было</TableHead>
-                    <TableHead>Стало</TableHead>
+                    <TableHead>{quantityHeaders.before}</TableHead>
+                    <TableHead>{quantityHeaders.after}</TableHead>
                     <TableHead>Комментарий</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -162,6 +163,14 @@ function stockDocumentItemsDescription(status: StockDocumentStatus) {
   }
 
   return "Для черновика значения рассчитаны по текущему остатку. При проведении акт пересчитает остатки заново."
+}
+
+function stockDocumentQuantityHeaders(status: StockDocumentStatus) {
+  if (status === "posted") {
+    return { before: "Было", after: "Стало" }
+  }
+
+  return { before: "Сейчас", after: "Ожидается" }
 }
 
 function stockDocumentItemDisplay(

@@ -43,6 +43,7 @@ import {
   closeDeliveredOrderAction,
   closeShiftAction,
   completePickupOrderAction,
+  createCashCustomerAction,
   createOrderAction,
   createSaleAction,
   createStockDocumentAction,
@@ -77,7 +78,7 @@ import type {
   WarehouseImportPreview,
 } from "@/lib/db"
 import { toDatetimeLocalValue } from "@/lib/datetime"
-import { getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
+import { getPaymentMethodLabel, paymentMethodOptions, sourceOptions } from "@/lib/labels"
 import { calculateCommercialTotals, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
 import { cn, formatMoney } from "@/lib/utils"
 import { PageHeader } from "@/components/page-header"
@@ -175,6 +176,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { ShiftCloseSummary } from "@/components/shifts/shift-pages"
 import { StockActProductPicker } from "@/components/stock/stock-act-product-picker"
 import { ProductCombobox } from "@/components/products/product-combobox"
+import { CustomerCombobox } from "@/components/customers/customer-combobox"
 import {
   addProductToLineItems,
   ProductLineItems,
@@ -193,6 +195,7 @@ export type Section =
   | "history"
   | "settings"
 type Result = Awaited<ReturnType<typeof saveProductAction>>
+type CustomerCreateResult = Awaited<ReturnType<typeof createCashCustomerAction>>
 type CashOperation = "cashIn" | "cashOut"
 type StockDocumentDialogType = StockDocumentType | null
 type CategorySummary = { path: string; label: string; count: number }
@@ -1208,81 +1211,113 @@ function SalesSection({
   )
 }
 
-function CustomerSelector({
-  customers,
-  value,
-  disabled,
-  onValueChange,
+function upsertCustomerOption(customers: CustomerOption[], customer: CustomerOption) {
+  const next = [customer, ...customers.filter((item) => item.id !== customer.id)]
+  return next.sort((left, right) => left.name.localeCompare(right.name, "ru"))
+}
+
+function CustomerCreateDialog({
+  open,
+  pending,
+  onOpenChange,
+  onCreated,
 }: {
-  customers: CustomerOption[]
-  value: string
-  disabled?: boolean
-  onValueChange: (value: string) => void
+  open: boolean
+  pending: boolean
+  onOpenChange: (open: boolean) => void
+  onCreated: (customer: CustomerOption) => void
 }) {
-  const [open, setOpen] = useState(false)
-  const selectedCustomer = value === "none"
-    ? null
-    : customers.find((customer) => String(customer.id) === value) ?? null
+  const [isCreating, startTransition] = useTransition()
+  const disabled = pending || isCreating
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const formData = new FormData(form)
+    startTransition(async () => {
+      const result: CustomerCreateResult = await createCashCustomerAction(formData)
+      if (result.ok) {
+        toast.success(result.message)
+        onCreated(result.data)
+        form.reset()
+        onOpenChange(false)
+      } else {
+        toast.error(result.message)
+      }
+    })
+  }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        render={
-          <Button
-            type="button"
-            variant="outline"
-            disabled={disabled}
-            className="h-10 w-full justify-between border-zinc-300 bg-white"
-          />
-        }
-      >
-          <span className="truncate">
-            {selectedCustomer
-              ? `${selectedCustomer.name}${selectedCustomer.phone ? ` · ${selectedCustomer.phone}` : ""}`
-              : "Без клиента"}
-          </span>
-          <ChevronsUpDownIcon className="opacity-60" />
-      </PopoverTrigger>
-      <PopoverContent className="w-(--anchor-width) p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Поиск клиента" />
-          <CommandList>
-            <CommandEmpty>Клиент не найден</CommandEmpty>
-            <CommandGroup>
-              <CommandItem
-                value="Без клиента"
-                data-checked={value === "none"}
-                onSelect={() => {
-                  onValueChange("none")
-                  setOpen(false)
-                }}
-              >
-                Без клиента
-              </CommandItem>
-              {customers.map((customer) => (
-                <CommandItem
-                  key={customer.id}
-                  value={`${customer.name} ${customer.phone}`}
-                  data-checked={value === String(customer.id)}
-                  onSelect={() => {
-                    onValueChange(String(customer.id))
-                    setOpen(false)
-                  }}
-                >
-                  <span className="min-w-0 flex-1 truncate">
-                    {customer.name}
-                    {customer.phone ? ` · ${customer.phone}` : ""}
-                  </span>
-                  {customer.defaultDiscountPercent > 0 && (
-                    <span className="text-xs text-muted-foreground">{customer.defaultDiscountPercent}%</span>
-                  )}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>Новый клиент</DialogTitle>
+            <DialogDescription>Клиент будет сразу выбран в текущей продаже или заказе.</DialogDescription>
+          </DialogHeader>
+          <FieldGroup className="py-4">
+            <Field>
+              <FieldLabel htmlFor="cash-customer-name">Имя</FieldLabel>
+              <Input id="cash-customer-name" name="name" disabled={disabled} required />
+            </Field>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="cash-customer-phone">Телефон</FieldLabel>
+                <Input id="cash-customer-phone" name="phone" disabled={disabled} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="cash-customer-instagram">Instagram</FieldLabel>
+                <Input id="cash-customer-instagram" name="instagram" disabled={disabled} />
+              </Field>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="cash-customer-source">Источник</FieldLabel>
+                <Select name="source" defaultValue="manual">
+                  <SelectTrigger id="cash-customer-source" className="w-full" disabled={disabled}>
+                    <SelectValue placeholder="Источник" />
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    <SelectGroup>
+                      {sourceOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="cash-customer-discount">Скидка клиента, %</FieldLabel>
+                <Input
+                  id="cash-customer-discount"
+                  name="defaultDiscountPercent"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  defaultValue="0"
+                  disabled={disabled}
+                />
+              </Field>
+            </div>
+            <Field>
+              <FieldLabel htmlFor="cash-customer-comment">Комментарий</FieldLabel>
+              <Textarea id="cash-customer-comment" name="comment" disabled={disabled} rows={3} />
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
+              Отмена
+            </Button>
+            <Button type="submit" disabled={disabled}>
+              Создать клиента
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1301,13 +1336,19 @@ function QuickSaleForm({
 }) {
   const [items, setItems] = useState<ProductLineItem[]>([])
   const [paymentMethod, setPaymentMethod] = useState("cash")
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("none")
+  const [createdCustomers, setCreatedCustomers] = useState<CustomerOption[]>([])
+  const [customerDialogOpen, setCustomerDialogOpen] = useState(false)
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null)
   const [saleDiscountType, setSaleDiscountType] = useState<DiscountType>("none")
   const [saleDiscountValue, setSaleDiscountValue] = useState(0)
   const [saleDiscountTouched, setSaleDiscountTouched] = useState(false)
-  const selectedCustomer = selectedCustomerId === "none"
+  const availableCustomers = useMemo(
+    () => createdCustomers.reduce((current, customer) => upsertCustomerOption(current, customer), customers),
+    [createdCustomers, customers]
+  )
+  const selectedCustomer = selectedCustomerId === null
     ? null
-    : customers.find((customer) => String(customer.id) === selectedCustomerId) ?? null
+    : availableCustomers.find((customer) => customer.id === selectedCustomerId) ?? null
   const saleTotals = calculateCommercialTotals(items, saleDiscountType, saleDiscountValue)
   const saleTotal = saleTotals.total
 
@@ -1317,15 +1358,14 @@ function QuickSaleForm({
 
   function resetForm() {
     setItems([])
-    setSelectedCustomerId("none")
+    setSelectedCustomerId(null)
     setSaleDiscountType("none")
     setSaleDiscountValue(0)
     setSaleDiscountTouched(false)
   }
 
-  function handleCustomerChange(value: string) {
-    const customer = value === "none" ? null : customers.find((current) => String(current.id) === value) ?? null
-    setSelectedCustomerId(value)
+  function applySaleCustomer(customer: CustomerOption | null) {
+    setSelectedCustomerId(customer?.id ?? null)
     if (!saleDiscountTouched) {
       if (customer && customer.defaultDiscountPercent > 0) {
         setSaleDiscountType("percent")
@@ -1335,6 +1375,11 @@ function QuickSaleForm({
         setSaleDiscountValue(0)
       }
     }
+  }
+
+  function handleCustomerCreated(customer: CustomerOption) {
+    setCreatedCustomers((current) => upsertCustomerOption(current, customer))
+    applySaleCustomer(customer)
   }
 
   function handleSaleDiscountTypeChange(value: string) {
@@ -1358,135 +1403,165 @@ function QuickSaleForm({
   }
 
   return (
-    <div className="flex flex-col gap-5 pt-3">
-      <form onSubmit={handleSubmit}>
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <Card className="min-w-0 rounded-2xl border-zinc-200 bg-white">
-            <CardHeader>
-              <CardTitle className="font-semibold text-zinc-950">Быстрая продажа</CardTitle>
-              <CardDescription className="text-zinc-500">Поиск товара и компактная корзина продажи</CardDescription>
-            </CardHeader>
-            <CardContent className="flex min-w-0 flex-col gap-4">
-              <ProductCombobox products={products} disabled={pending} onSelect={addProduct} />
-              <div className="min-w-0">
-                <div className="mb-2 text-sm font-medium">Корзина</div>
-                <ProductLineItems
-                  products={products}
-                  items={items}
-                  disabled={pending}
-                  emptyTitle="Корзина пуста"
-                  onItemsChange={setItems}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="min-w-0 rounded-2xl border-zinc-200 bg-white xl:sticky xl:top-20 xl:self-start">
-            <CardHeader>
-              <CardTitle className="font-semibold text-zinc-950">Оплата</CardTitle>
-              <CardDescription className="text-zinc-500">Клиент, скидка и итог к чеку</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <FieldGroup>
-                <input type="hidden" name="customerId" value={selectedCustomer?.id ?? ""} />
-                <input type="hidden" name="saleDiscountType" value={saleDiscountType} />
-                <input type="hidden" name="saleDiscountValue" value={saleDiscountValue} />
-                <Field>
-                  <FieldLabel>Клиент</FieldLabel>
-                  <CustomerSelector
-                    customers={customers}
-                    value={selectedCustomerId}
-                    disabled={disabled || pending}
-                    onValueChange={handleCustomerChange}
+    <>
+      <CustomerCreateDialog
+        open={customerDialogOpen}
+        pending={pending || disabled}
+        onOpenChange={setCustomerDialogOpen}
+        onCreated={handleCustomerCreated}
+      />
+      <div className="flex flex-col gap-5 pt-3">
+        <form onSubmit={handleSubmit}>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <Card className="min-w-0 rounded-2xl border-zinc-200 bg-white">
+              <CardHeader>
+                <CardTitle className="font-semibold text-zinc-950">Быстрая продажа</CardTitle>
+                <CardDescription className="text-zinc-500">Поиск товара и компактная корзина продажи</CardDescription>
+              </CardHeader>
+              <CardContent className="flex min-w-0 flex-col gap-4">
+                <ProductCombobox products={products} disabled={pending} onSelect={addProduct} />
+                <div className="min-w-0">
+                  <div className="mb-2 text-sm font-medium">Корзина</div>
+                  <ProductLineItems
+                    products={products}
+                    items={items}
+                    disabled={pending}
+                    emptyTitle="Корзина пуста"
+                    onItemsChange={setItems}
                   />
-                  {selectedCustomer?.defaultDiscountPercent ? (
-                    <Badge className="w-fit bg-emerald-100 text-emerald-900">
-                      Скидка клиента {selectedCustomer.defaultDiscountPercent}%
-                    </Badge>
-                  ) : selectedCustomer ? (
-                    <Badge variant="outline" className="w-fit">Без персональной скидки</Badge>
-                  ) : (
-                    <Link href="/clients" className="text-xs font-medium text-primary hover:underline">
-                      Создать клиента
-                    </Link>
-                  )}
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="salePaymentMethod">Оплата</FieldLabel>
-                  <select
-                    id="salePaymentMethod"
-                    name="paymentMethod"
-                    className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
-                    value={paymentMethod}
-                    disabled={disabled || pending}
-                    onChange={(event) => setPaymentMethod(event.target.value)}
-                  >
-                    {paymentMethodOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="sale-note">Комментарий</FieldLabel>
-                  <Textarea id="sale-note" name="note" disabled={disabled || pending} />
-                </Field>
-              </FieldGroup>
-              <FieldSet>
-                <FieldLegend>Скидка на чек</FieldLegend>
-                <div className="flex items-end gap-2">
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="min-w-0 rounded-2xl border-zinc-200 bg-white xl:sticky xl:top-20 xl:self-start">
+              <CardHeader>
+                <CardTitle className="font-semibold text-zinc-950">Оплата</CardTitle>
+                <CardDescription className="text-zinc-500">Клиент, скидка и итог к чеку</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                <FieldGroup>
+                  <input type="hidden" name="customerId" value={selectedCustomer?.id ?? ""} />
+                  <input type="hidden" name="saleDiscountType" value={saleDiscountType} />
+                  <input type="hidden" name="saleDiscountValue" value={saleDiscountValue} />
                   <Field>
-                    <FieldLabel htmlFor="saleDiscountType">Тип</FieldLabel>
+                    <FieldLabel>Клиент</FieldLabel>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <CustomerCombobox
+                        customers={availableCustomers}
+                        value={selectedCustomerId}
+                        disabled={disabled || pending}
+                        onChange={applySaleCustomer}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={disabled || pending}
+                        onClick={() => setCustomerDialogOpen(true)}
+                      >
+                        Новый клиент
+                      </Button>
+                    </div>
+                    {selectedCustomer?.defaultDiscountPercent ? (
+                      <Badge className="w-fit bg-emerald-100 text-emerald-900">
+                        Скидка клиента {selectedCustomer.defaultDiscountPercent}%
+                      </Badge>
+                    ) : selectedCustomer ? (
+                      <Badge variant="outline" className="w-fit">Без персональной скидки</Badge>
+                    ) : (
+                      <FieldDescription>Продажу можно провести без привязки к клиенту.</FieldDescription>
+                    )}
+                    {selectedCustomer && (
+                      <div className="flex items-center justify-between gap-2 text-xs text-zinc-500">
+                        <span className="min-w-0 truncate">{selectedCustomer.phone || "Телефон не указан"}</span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={disabled || pending}
+                          onClick={() => applySaleCustomer(null)}
+                        >
+                          Очистить
+                        </Button>
+                      </div>
+                    )}
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="salePaymentMethod">Оплата</FieldLabel>
                     <select
-                      id="saleDiscountType"
-                      className="h-8 w-28 rounded-lg border border-input bg-background px-2 text-sm"
-                      value={saleDiscountType}
+                      id="salePaymentMethod"
+                      name="paymentMethod"
+                      className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
+                      value={paymentMethod}
                       disabled={disabled || pending}
-                      onChange={(event) => handleSaleDiscountTypeChange(event.target.value)}
+                      onChange={(event) => setPaymentMethod(event.target.value)}
                     >
-                      <option value="none">Без скидки</option>
-                      <option value="percent">%</option>
-                      <option value="amount">Сумма</option>
+                      {paymentMethodOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
                     </select>
                   </Field>
                   <Field>
-                    <FieldLabel htmlFor="saleDiscountValue">Значение</FieldLabel>
-                    <Input
-                      id="saleDiscountValue"
-                      type="number"
-                      step="1"
-                      min="0"
-                      value={saleDiscountValue}
-                      disabled={disabled || pending}
-                      readOnly={saleDiscountType === "none"}
-                      className="w-24 text-right"
-                      onChange={(event) => {
-                        setSaleDiscountTouched(true)
-                        setSaleDiscountValue(Number(event.target.value) || 0)
-                      }}
-                    />
+                    <FieldLabel htmlFor="sale-note">Комментарий</FieldLabel>
+                    <Textarea id="sale-note" name="note" disabled={disabled || pending} />
                   </Field>
+                </FieldGroup>
+                <FieldSet>
+                  <FieldLegend>Скидка на чек</FieldLegend>
+                  <div className="flex items-end gap-2">
+                    <Field>
+                      <FieldLabel htmlFor="saleDiscountType">Тип</FieldLabel>
+                      <select
+                        id="saleDiscountType"
+                        className="h-8 w-28 rounded-lg border border-input bg-background px-2 text-sm"
+                        value={saleDiscountType}
+                        disabled={disabled || pending}
+                        onChange={(event) => handleSaleDiscountTypeChange(event.target.value)}
+                      >
+                        <option value="none">Без скидки</option>
+                        <option value="percent">%</option>
+                        <option value="amount">Сумма</option>
+                      </select>
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="saleDiscountValue">Значение</FieldLabel>
+                      <Input
+                        id="saleDiscountValue"
+                        type="number"
+                        step="1"
+                        min="0"
+                        value={saleDiscountValue}
+                        disabled={disabled || pending}
+                        readOnly={saleDiscountType === "none"}
+                        className="w-24 text-right"
+                        onChange={(event) => {
+                          setSaleDiscountTouched(true)
+                          setSaleDiscountValue(Number(event.target.value) || 0)
+                        }}
+                      />
+                    </Field>
+                  </div>
+                </FieldSet>
+                <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+                  <Info label="Товары до скидки" value={formatMoney(saleTotals.itemsTotalBeforeDiscount)} />
+                  <Info label="Скидка по позициям" value={formatMoney(saleTotals.itemsDiscountTotal)} />
+                  <Info label="Скидка на чек" value={formatMoney(saleTotals.dealDiscountAmount)} />
+                  <div>
+                    <div className="text-xs text-zinc-500">Итого после скидок</div>
+                    <div className="text-3xl font-semibold text-zinc-950">{formatMoney(saleTotal)}</div>
+                  </div>
                 </div>
-              </FieldSet>
-              <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-                <Info label="Товары до скидки" value={formatMoney(saleTotals.itemsTotalBeforeDiscount)} />
-                <Info label="Скидка по позициям" value={formatMoney(saleTotals.itemsDiscountTotal)} />
-                <Info label="Скидка на чек" value={formatMoney(saleTotals.dealDiscountAmount)} />
-                <div>
-                  <div className="text-xs text-zinc-500">Итого после скидок</div>
-                  <div className="text-3xl font-semibold text-zinc-950">{formatMoney(saleTotal)}</div>
-                </div>
-              </div>
-              <Button className="h-10 w-full bg-zinc-950 text-white hover:bg-zinc-800" type="submit" disabled={pending || disabled || items.length === 0}>
-                <ReceiptTextIcon data-icon="inline-start" />
-                Провести продажу
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </form>
-    </div>
+                <Button className="h-10 w-full bg-zinc-950 text-white hover:bg-zinc-800" type="submit" disabled={pending || disabled || items.length === 0}>
+                  <ReceiptTextIcon data-icon="inline-start" />
+                  Провести продажу
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </form>
+      </div>
+    </>
   )
 }
 
@@ -1616,7 +1691,9 @@ function NewOrderForm({
   const [items, setItems] = useState<ProductLineItem[]>([])
   const [customer, setCustomer] = useState("")
   const [phone, setPhone] = useState("")
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("none")
+  const [createdCustomers, setCreatedCustomers] = useState<CustomerOption[]>([])
+  const [customerDialogOpen, setCustomerDialogOpen] = useState(false)
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null)
   const [orderDiscountType, setOrderDiscountType] = useState<DiscountType>("none")
   const [orderDiscountValue, setOrderDiscountValue] = useState(0)
   const [orderDiscountTouched, setOrderDiscountTouched] = useState(false)
@@ -1626,9 +1703,13 @@ function NewOrderForm({
   const [note, setNote] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("cash")
 
-  const selectedCustomer = selectedCustomerId === "none"
+  const availableCustomers = useMemo(
+    () => createdCustomers.reduce((current, customerOption) => upsertCustomerOption(current, customerOption), customers),
+    [createdCustomers, customers]
+  )
+  const selectedCustomer = selectedCustomerId === null
     ? null
-    : customers.find((current) => String(current.id) === selectedCustomerId) ?? null
+    : availableCustomers.find((current) => current.id === selectedCustomerId) ?? null
   const orderTotals = calculateCommercialTotals(items, orderDiscountType, orderDiscountValue)
   const itemsTotal = orderTotals.total
   const total = itemsTotal + deliveryPrice
@@ -1643,7 +1724,7 @@ function NewOrderForm({
 
   function resetForm() {
     setItems([])
-    setSelectedCustomerId("none")
+    setSelectedCustomerId(null)
     setCustomer("")
     setPhone("")
     setOrderDiscountType("none")
@@ -1660,9 +1741,8 @@ function NewOrderForm({
     setPaymentMethod("cash")
   }
 
-  function handleCustomerChange(value: string) {
-    const nextCustomer = value === "none" ? null : customers.find((current) => String(current.id) === value) ?? null
-    setSelectedCustomerId(value)
+  function applyOrderCustomer(nextCustomer: CustomerOption | null) {
+    setSelectedCustomerId(nextCustomer?.id ?? null)
     setCustomer(nextCustomer?.name ?? "")
     setPhone(nextCustomer?.phone ?? "")
     if (!orderDiscountTouched) {
@@ -1674,6 +1754,11 @@ function NewOrderForm({
         setOrderDiscountValue(0)
       }
     }
+  }
+
+  function handleCustomerCreated(nextCustomer: CustomerOption) {
+    setCreatedCustomers((current) => upsertCustomerOption(current, nextCustomer))
+    applyOrderCustomer(nextCustomer)
   }
 
   function handleOrderDiscountTypeChange(value: string) {
@@ -1724,58 +1809,87 @@ function NewOrderForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="pt-3">
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="flex min-w-0 flex-col gap-4">
-          <Card className="rounded-2xl border-zinc-200 bg-white">
-            <CardHeader>
-              <CardTitle className="font-semibold text-zinc-950">Клиент</CardTitle>
-              <CardDescription className="text-zinc-500">Основные контакты для менеджера</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <FieldGroup>
-                <input type="hidden" name="customerId" value={selectedCustomer?.id ?? ""} />
-                <input type="hidden" name="orderDiscountType" value={orderDiscountType} />
-                <input type="hidden" name="orderDiscountValue" value={orderDiscountValue} />
-                <Field>
-                  <FieldLabel>Выбор клиента</FieldLabel>
-                  <CustomerSelector
-                    customers={customers}
-                    value={selectedCustomerId}
-                    disabled={pending}
-                    onValueChange={handleCustomerChange}
-                  />
-                  {selectedCustomer?.defaultDiscountPercent ? (
-                    <Badge className="w-fit bg-emerald-100 text-emerald-900">
-                      Скидка клиента {selectedCustomer.defaultDiscountPercent}%
-                    </Badge>
-                  ) : selectedCustomer ? (
-                    <Badge variant="outline" className="w-fit">Без персональной скидки</Badge>
-                  ) : (
-                    <Link href="/clients" className="text-xs font-medium text-primary hover:underline">
-                      Создать клиента
-                    </Link>
-                  )}
-                </Field>
-                <div className="grid gap-4 md:grid-cols-2">
+    <>
+      <CustomerCreateDialog
+        open={customerDialogOpen}
+        pending={pending}
+        onOpenChange={setCustomerDialogOpen}
+        onCreated={handleCustomerCreated}
+      />
+      <form onSubmit={handleSubmit} className="pt-3">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="flex min-w-0 flex-col gap-4">
+            <Card className="rounded-2xl border-zinc-200 bg-white">
+              <CardHeader>
+                <CardTitle className="font-semibold text-zinc-950">Клиент</CardTitle>
+                <CardDescription className="text-zinc-500">Основные контакты для менеджера</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <FieldGroup>
+                  <input type="hidden" name="customerId" value={selectedCustomer?.id ?? ""} />
+                  <input type="hidden" name="orderDiscountType" value={orderDiscountType} />
+                  <input type="hidden" name="orderDiscountValue" value={orderDiscountValue} />
                   <Field>
-                    <FieldLabel htmlFor="customer">Имя клиента</FieldLabel>
-                    <Input
-                      id="customer"
-                      name="customer"
-                      value={customer}
-                      onChange={(event) => setCustomer(event.target.value)}
-                      required
-                    />
+                    <FieldLabel>Выбор клиента</FieldLabel>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <CustomerCombobox
+                        customers={availableCustomers}
+                        value={selectedCustomerId}
+                        disabled={pending}
+                        onChange={applyOrderCustomer}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={pending}
+                        onClick={() => setCustomerDialogOpen(true)}
+                      >
+                        Новый клиент
+                      </Button>
+                    </div>
+                    {selectedCustomer?.defaultDiscountPercent ? (
+                      <Badge className="w-fit bg-emerald-100 text-emerald-900">
+                        Скидка клиента {selectedCustomer.defaultDiscountPercent}%
+                      </Badge>
+                    ) : selectedCustomer ? (
+                      <Badge variant="outline" className="w-fit">Без персональной скидки</Badge>
+                    ) : (
+                      <FieldDescription>Можно выбрать клиента или заполнить контакты вручную.</FieldDescription>
+                    )}
+                    {selectedCustomer && (
+                      <div className="flex items-center justify-between gap-2 text-xs text-zinc-500">
+                        <span className="min-w-0 truncate">{selectedCustomer.phone || "Телефон не указан"}</span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={pending}
+                          onClick={() => applyOrderCustomer(null)}
+                        >
+                          Очистить
+                        </Button>
+                      </div>
+                    )}
                   </Field>
-                  <Field>
-                    <FieldLabel htmlFor="phone">Телефон</FieldLabel>
-                    <Input id="phone" name="phone" value={phone} onChange={(event) => setPhone(event.target.value)} />
-                  </Field>
-                </div>
-              </FieldGroup>
-            </CardContent>
-          </Card>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field>
+                      <FieldLabel htmlFor="customer">Имя клиента</FieldLabel>
+                      <Input
+                        id="customer"
+                        name="customer"
+                        value={customer}
+                        onChange={(event) => setCustomer(event.target.value)}
+                        required
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="phone">Телефон</FieldLabel>
+                      <Input id="phone" name="phone" value={phone} onChange={(event) => setPhone(event.target.value)} />
+                    </Field>
+                  </div>
+                </FieldGroup>
+              </CardContent>
+            </Card>
 
           <Card className="rounded-2xl border-zinc-200 bg-white">
             <CardHeader>
@@ -2011,7 +2125,8 @@ function NewOrderForm({
           </CardContent>
         </Card>
       </div>
-    </form>
+        </form>
+    </>
   )
 }
 
@@ -3986,7 +4101,7 @@ function StockDocumentDialog({
                             <TableRow>
                               <TableHead className="min-w-64">Товар</TableHead>
                               <TableHead className="w-28">Остаток</TableHead>
-                              <TableHead className="w-32">Qty</TableHead>
+                              <TableHead className="w-32">Кол-во</TableHead>
                               <TableHead className="w-36">После</TableHead>
                               <TableHead className="min-w-44">Комментарий</TableHead>
                               <TableHead className="w-12" />

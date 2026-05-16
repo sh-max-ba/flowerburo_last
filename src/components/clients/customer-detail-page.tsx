@@ -9,14 +9,14 @@ import { toast } from "sonner"
 import { updateCustomerAction } from "@/app/actions"
 import type { Customer, Deal } from "@/lib/crm"
 import type { Order, Sale } from "@/lib/db"
-import { getPaymentMethodLabel } from "@/lib/labels"
+import { getPaymentMethodLabel, sourceLabel } from "@/lib/labels"
 import { formatMoney } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { CustomerFields, sourceLabel } from "@/components/clients/customers-page"
+import { CustomerFields } from "@/components/clients/customers-page"
 
 type ActionResult = Awaited<ReturnType<typeof updateCustomerAction>>
 
@@ -145,6 +145,7 @@ export function CustomerDetailPage({
                     <TableHead>Статус</TableHead>
                     <TableHead className="text-right">Сумма</TableHead>
                     <TableHead className="text-right">Оплачено</TableHead>
+                    <TableHead className="text-right">Остаток</TableHead>
                     <TableHead>К сроку</TableHead>
                     <TableHead>Связь</TableHead>
                   </TableRow>
@@ -158,6 +159,9 @@ export function CustomerDetailPage({
                       </TableCell>
                       <TableCell className="text-right font-semibold">{formatMoney(order.total)}</TableCell>
                       <TableCell className="text-right">{formatMoney(order.paid)}</TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {formatMoney(Math.max(0, order.total - order.paid))}
+                      </TableCell>
                       <TableCell>{dateOnly(order.dueAt)}</TableCell>
                       <TableCell>
                         {order.dealId ? (
@@ -193,19 +197,21 @@ export function CustomerDetailPage({
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>ID</TableHead>
-                    <TableHead className="text-right">Сумма</TableHead>
-                    <TableHead>Способ оплаты</TableHead>
                     <TableHead>Дата</TableHead>
+                    <TableHead className="text-right">До скидки</TableHead>
+                    <TableHead className="text-right">Скидка</TableHead>
+                    <TableHead className="text-right">Итог</TableHead>
+                    <TableHead>Способ оплаты</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {sales.map((sale) => (
                     <TableRow key={sale.id}>
-                      <TableCell className="font-medium">#{sale.id}</TableCell>
+                      <TableCell>{dateOnly(sale.createdAt)}</TableCell>
+                      <TableCell className="text-right">{formatMoney(sale.totalBeforeDiscount)}</TableCell>
+                      <TableCell className="text-right">{formatMoney(sale.discountTotal)}</TableCell>
                       <TableCell className="text-right font-semibold">{formatMoney(sale.total)}</TableCell>
                       <TableCell>{getPaymentMethodLabel(sale.paymentMethod)}</TableCell>
-                      <TableCell>{dateOnly(sale.createdAt)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

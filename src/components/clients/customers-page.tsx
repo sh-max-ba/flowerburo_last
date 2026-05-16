@@ -8,6 +8,7 @@ import { AlertTriangleIcon, ExternalLinkIcon, PlusIcon, SearchIcon } from "lucid
 import { toast } from "sonner"
 import { createCustomerAction } from "@/app/actions"
 import type { Customer } from "@/lib/crm"
+import { sourceLabel, sourceOptions } from "@/lib/labels"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -27,6 +28,14 @@ import {
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldContent, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -168,6 +177,9 @@ export function CustomersPage({
 }
 
 export function CustomerFields({ customer }: { customer?: Customer }) {
+  const sourceValue = customer?.source ?? ""
+  const hasCustomSource = Boolean(sourceValue) && !sourceOptions.some((option) => option.value === sourceValue)
+
   return (
     <div className="grid gap-4 py-4">
       <Field>
@@ -194,7 +206,24 @@ export function CustomerFields({ customer }: { customer?: Customer }) {
         <Field>
           <FieldLabel htmlFor="source">Источник</FieldLabel>
           <FieldContent>
-            <Input id="source" name="source" defaultValue={customer?.source ?? ""} />
+            <Select name="source" defaultValue={sourceValue}>
+              <SelectTrigger id="source" className="w-full">
+                <SelectValue placeholder="Источник" />
+              </SelectTrigger>
+              <SelectContent align="start">
+                <SelectGroup>
+                  <SelectItem value="">Не указан</SelectItem>
+                  {sourceOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                  {hasCustomSource && (
+                    <SelectItem value={sourceValue}>{sourceLabel(sourceValue)}</SelectItem>
+                  )}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           </FieldContent>
         </Field>
         <Field>
@@ -232,16 +261,4 @@ function formatDate(value: string) {
     month: "2-digit",
     year: "numeric",
   }).format(new Date(value))
-}
-
-export function sourceLabel(value: string) {
-  const labels: Record<string, string> = {
-    manual: "Ручная",
-    whatsapp: "WhatsApp",
-    instagram: "Instagram",
-    site: "Сайт",
-    phone: "Телефон",
-  }
-
-  return labels[value] ?? (value || "-")
 }

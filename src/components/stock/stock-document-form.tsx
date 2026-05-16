@@ -223,7 +223,7 @@ export function StockDocumentForm({
                     <TableRow>
                       <TableHead className="min-w-64">Товар</TableHead>
                       <TableHead className="w-28">Остаток</TableHead>
-                      <TableHead className="w-32">Qty</TableHead>
+                      <TableHead className="w-32">Кол-во</TableHead>
                       <TableHead className="w-36">После</TableHead>
                       <TableHead className="min-w-44">Комментарий</TableHead>
                       <TableHead className="w-12" />

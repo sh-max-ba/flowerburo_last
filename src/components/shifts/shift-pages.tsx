@@ -179,7 +179,7 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
         <Card className="rounded-2xl border bg-white">
           <CardHeader>
             <CardTitle>Денежные операции</CardTitle>
-            <CardDescription>Операции cash_transactions по этой смене</CardDescription>
+            <CardDescription>Продажи, оплаты, внесения и изъятия по этой смене</CardDescription>
           </CardHeader>
           <CardContent>
             {!detail.cashTransactions.length ? (

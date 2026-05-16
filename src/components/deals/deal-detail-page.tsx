@@ -522,8 +522,8 @@ export function DealDetailPage({
   }
 
   return (
-    <div className="h-auto overflow-visible xl:h-[calc(100vh-6rem)] xl:overflow-hidden">
-      <div className="grid h-full grid-cols-1 gap-5 xl:grid-cols-[minmax(640px,1fr)_minmax(620px,720px)] 2xl:grid-cols-[minmax(720px,1fr)_minmax(680px,760px)]">
+    <div className="h-auto overflow-visible xl:h-[calc(100vh-10rem)] xl:overflow-hidden">
+      <div className="grid h-full grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)] 2xl:grid-cols-[minmax(640px,1fr)_minmax(560px,680px)]">
         <section className="min-w-0 xl:min-h-0">
           <Card className="h-full min-h-[520px] overflow-hidden rounded-2xl border-zinc-200 bg-white shadow-sm">
             <CardHeader>
@@ -1032,7 +1032,7 @@ export function DealDetailPage({
           <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm xl:sticky xl:bottom-4">
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Итог</CardTitle>
-              <CardDescription>Суммы считаются текущим pricing engine</CardDescription>
+              <CardDescription>Суммы считаются текущими правилами расчета</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-2 overflow-visible text-sm">
               <SummaryRow label="Товары до скидки" value={formatMoney(totals.itemsTotalBeforeDiscount)} />

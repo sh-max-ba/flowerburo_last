@@ -102,7 +102,7 @@ function DialogFooter({
     <div
       data-slot="dialog-footer"
       className={cn(
-        "-mx-5 -mb-5 flex flex-col-reverse gap-2 rounded-b-2xl border-t border-zinc-200 bg-zinc-50 p-5 sm:flex-row sm:justify-end",
+        "sticky bottom-0 -mx-5 -mb-5 flex flex-col-reverse gap-2 rounded-b-2xl border-t border-zinc-200 bg-zinc-50 p-5 sm:flex-row sm:justify-end",
         className
       )}
       {...props}

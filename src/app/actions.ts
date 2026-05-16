@@ -6,6 +6,7 @@ import {
   addDealItem,
   createCustomer,
   createDeal,
+  getCustomer,
   removeDealItem,
   updateCustomer,
   updateDealFields,
@@ -48,6 +49,7 @@ import {
   type StockDocumentType,
   type UserRole,
   type CurrentUser,
+  type CustomerOption,
 } from "@/lib/db"
 
 type ActionResult = {
@@ -183,6 +185,37 @@ export async function createCustomerAction(formData: FormData) {
     const customerId = createCustomer(formData)
     revalidateCrm(customerId, null)
   }, "Клиент создан.")
+}
+
+export async function createCashCustomerAction(formData: FormData): Promise<DataActionResult<CustomerOption>> {
+  try {
+    await requireActionRole(["owner", "manager"])
+    const customerId = createCustomer(formData)
+    const customer = getCustomer(customerId)
+    if (!customer) {
+      throw new Error("Клиент создан, но не найден.")
+    }
+
+    revalidateCrm(customerId, null)
+    revalidatePath("/cash")
+    revalidatePath("/orders")
+
+    return {
+      ok: true,
+      message: "Клиент создан",
+      data: {
+        id: customer.id,
+        name: customer.name,
+        phone: customer.phone,
+        defaultDiscountPercent: customer.defaultDiscountPercent,
+      },
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Клиент не создан.",
+    }
+  }
 }
 
 export async function updateCustomerAction(formData: FormData) {
