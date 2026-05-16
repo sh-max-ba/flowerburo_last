@@ -20,6 +20,7 @@ import type { CurrentUser, PaymentMethod, Product } from "@/lib/db"
 import { getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { ProductCombobox } from "@/components/products/product-combobox"
+import { ProductThumbnail } from "@/components/products/product-thumbnail"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -792,10 +793,19 @@ export function DealDetailPage({
                     {pricedItems.map((item) => (
                       <TableRow key={item.id}>
                         <TableCell className="min-w-[180px] max-w-[240px]">
-                          <div className="truncate font-medium text-zinc-950" title={item.productName}>
-                            {item.productName}
+                          <div className="flex min-w-0 items-center gap-2">
+                            <ProductThumbnail
+                              name={item.productName}
+                              imagePath={item.imagePath}
+                              size="sm"
+                            />
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-zinc-950" title={item.productName}>
+                                {item.productName}
+                              </div>
+                              <div className="truncate text-xs text-muted-foreground">{item.productCode}</div>
+                            </div>
                           </div>
-                          <div className="truncate text-xs text-muted-foreground">{item.productCode}</div>
                         </TableCell>
                         <TableCell className="w-16">
                           <Input
@@ -1260,6 +1270,7 @@ function createTemporaryItem(dealId: number, product: Product, itemId: number): 
     dealId,
     productCode: product.code,
     productName: product.name,
+    imagePath: product.imagePath,
     qty: "1",
     price: String(product.salePrice ?? 0),
     discountType: "none",

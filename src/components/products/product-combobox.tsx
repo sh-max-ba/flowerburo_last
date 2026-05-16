@@ -9,27 +9,31 @@ import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { ProductThumbnail } from "@/components/products/product-thumbnail"
 
 type ProductComboboxProps = {
   products: Product[]
   disabled?: boolean
   placeholder?: string
   portalDropdown?: boolean
+  maxResults?: number
   onSelect: (product: Product) => void
 }
 
-const maxResults = 10
+const defaultMaxResults = 10
 
 export function ProductCombobox({
   products,
   disabled,
   placeholder = "Найти товар по названию, коду или артикулу",
   portalDropdown = false,
+  maxResults = defaultMaxResults,
   onSelect,
 }: ProductComboboxProps) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const blurTimeoutRef = useRef<number | null>(null)
   const [query, setQuery] = useState("")
-  const [focused, setFocused] = useState(false)
+  const [open, setOpen] = useState(false)
   const [dropdownRect, setDropdownRect] = useState<DOMRect | null>(null)
 
   const normalizedQuery = query.trim().toLowerCase()
@@ -46,14 +50,37 @@ export function ProductCombobox({
           .includes(normalizedQuery)
       )
       .slice(0, maxResults)
-  }, [normalizedQuery, products])
+  }, [maxResults, normalizedQuery, products])
 
-  const dropdownOpen = focused && normalizedQuery.length > 0
+  const dropdownOpen = open && normalizedQuery.length > 0
 
   const updateDropdownRect = useCallback(() => {
     const rect = inputRef.current?.getBoundingClientRect()
     setDropdownRect(rect ?? null)
   }, [])
+
+  const clearBlurTimeout = useCallback(() => {
+    if (blurTimeoutRef.current === null) {
+      return
+    }
+
+    window.clearTimeout(blurTimeoutRef.current)
+    blurTimeoutRef.current = null
+  }, [])
+
+  const closeDropdownSoon = useCallback(() => {
+    clearBlurTimeout()
+    blurTimeoutRef.current = window.setTimeout(() => {
+      setOpen(false)
+      blurTimeoutRef.current = null
+    }, 120)
+  }, [clearBlurTimeout])
+
+  useEffect(() => {
+    return () => {
+      clearBlurTimeout()
+    }
+  }, [clearBlurTimeout])
 
   useEffect(() => {
     if (!portalDropdown || !dropdownOpen) {
@@ -71,20 +98,23 @@ export function ProductCombobox({
   }, [dropdownOpen, portalDropdown, updateDropdownRect])
 
   function selectProduct(product: Product) {
+    clearBlurTimeout()
     onSelect(product)
     setQuery("")
-    setFocused(false)
-    window.setTimeout(() => inputRef.current?.focus(), 0)
+    setOpen(false)
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus()
+    })
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Escape") {
       event.preventDefault()
-      setFocused(false)
+      setOpen(false)
       return
     }
 
-    if (event.key !== "Enter") {
+    if (event.key !== "Enter" || !dropdownOpen) {
       return
     }
 
@@ -102,15 +132,18 @@ export function ProductCombobox({
         ref={inputRef}
         className="h-10 pl-9"
         placeholder={placeholder}
-        value={query}
+        value={query ?? ""}
         disabled={disabled}
-        onBlur={() => window.setTimeout(() => setFocused(false), 120)}
+        onBlur={closeDropdownSoon}
         onChange={(event) => {
-          setQuery(event.target.value)
+          const nextQuery = event.target.value
+          setQuery(nextQuery)
+          setOpen(nextQuery.trim().length > 0)
           updateDropdownRect()
         }}
         onFocus={() => {
-          setFocused(true)
+          clearBlurTimeout()
+          setOpen(query.trim().length > 0)
           updateDropdownRect()
         }}
         onKeyDown={handleKeyDown}
@@ -159,7 +192,7 @@ function ProductComboboxDropdown({
       style={style}
     >
       {results.length > 0 ? (
-        <ScrollArea style={{ height: Math.min(results.length * 66, 320) }}>
+        <ScrollArea style={{ height: Math.min(results.length * 72, 336) }}>
           <div className="flex flex-col gap-1">
             {results.map((product) => (
               <ProductComboboxRow
@@ -194,13 +227,13 @@ function ProductComboboxRow({
   return (
     <button
       type="button"
-      className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md px-2 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-2 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
       onMouseDown={(event) => {
         event.preventDefault()
-        onSelect()
       }}
       onClick={onSelect}
     >
+      <ProductThumbnail name={product.name} imagePath={product.imagePath} size="md" />
       <span className="min-w-0">
         <span className="block truncate font-medium">{product.name}</span>
         <span className="mt-0.5 flex min-w-0 flex-wrap gap-1.5 text-xs text-muted-foreground">

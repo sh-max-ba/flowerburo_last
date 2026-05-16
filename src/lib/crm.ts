@@ -49,6 +49,7 @@ export type DealItem = {
   dealId: number
   productCode: string
   productName: string
+  imagePath: string
   qty: number
   price: number
   discountType: DiscountType
@@ -113,7 +114,7 @@ export function listProducts(): Product[] {
   const rows = db()
     .prepare(
       `SELECT code, category_path as categoryPath, article, name, unit, stock, reserved, expected,
-        cost_price as costPrice, sale_price as salePrice, updated_at as updatedAt
+        cost_price as costPrice, sale_price as salePrice, image_path as imagePath, updated_at as updatedAt
        FROM products
        ORDER BY name COLLATE NOCASE`
     )
@@ -125,6 +126,7 @@ export function listProducts(): Product[] {
     article: String(row.article ?? ""),
     name: String(row.name ?? ""),
     unit: String(row.unit ?? "шт"),
+    imagePath: String(row.imagePath ?? ""),
     stock: toNumber(row.stock),
     reserved: toNumber(row.reserved),
     expected: toNumber(row.expected),
@@ -801,7 +803,7 @@ function getProduct(client: Database.Database, productCode: string) {
   const row = client
     .prepare(
       `SELECT code, category_path as categoryPath, article, name, unit, stock, reserved, expected,
-        cost_price as costPrice, sale_price as salePrice, updated_at as updatedAt
+        cost_price as costPrice, sale_price as salePrice, image_path as imagePath, updated_at as updatedAt
        FROM products
        WHERE code = ?`
     )
@@ -814,6 +816,7 @@ function getProduct(client: Database.Database, productCode: string) {
         article: String(row.article ?? ""),
         name: String(row.name ?? ""),
         unit: String(row.unit ?? "шт"),
+        imagePath: String(row.imagePath ?? ""),
         stock: toNumber(row.stock),
         reserved: toNumber(row.reserved),
         expected: toNumber(row.expected),
@@ -840,13 +843,15 @@ function listDealItems(dealId: number, client: Database.Database = db()) {
   const rows = client
     .prepare(
       `SELECT id, deal_id as dealId, product_code as productCode, product_name as productName,
+        COALESCE(products.image_path, '') as imagePath,
         qty, price, COALESCE(discount_type, 'none') as discountType,
         COALESCE(discount_value, 0) as discountValue, COALESCE(discount_amount, 0) as discountAmount,
         COALESCE(total_before_discount, 0) as totalBeforeDiscount, COALESCE(total, 0) as total,
-        created_at as createdAt, updated_at as updatedAt
+        deal_items.created_at as createdAt, deal_items.updated_at as updatedAt
        FROM deal_items
+       LEFT JOIN products ON products.code = deal_items.product_code
        WHERE deal_id = ?
-       ORDER BY id ASC`
+       ORDER BY deal_items.id ASC`
     )
     .all(dealId) as Array<Record<string, unknown>>
 
@@ -855,6 +860,7 @@ function listDealItems(dealId: number, client: Database.Database = db()) {
     dealId: toNumber(row.dealId),
     productCode: String(row.productCode ?? ""),
     productName: String(row.productName ?? ""),
+    imagePath: String(row.imagePath ?? ""),
     qty: toNumber(row.qty),
     price: toNumber(row.price),
     discountType: normalizeDiscountType(String(row.discountType ?? "none")),

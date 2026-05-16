@@ -10,6 +10,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { ProductThumbnail } from "@/components/products/product-thumbnail"
 
 export type ProductLineItem = {
   productCode: string
@@ -17,6 +18,7 @@ export type ProductLineItem = {
   code: string
   article?: string
   categoryPath?: string
+  imagePath?: string
   qty: number
   price: number
   discountType?: DiscountType
@@ -39,6 +41,7 @@ export function lineFromProduct(product: Product): ProductLineItem {
     name: product.name,
     article: product.article,
     categoryPath: product.categoryPath,
+    imagePath: product.imagePath,
     qty: 1,
     price: product.salePrice,
     discountType: "none",
@@ -117,17 +120,24 @@ export function ProductLineItems({
                 <TableRow key={item.productCode}>
                   <TableCell className="min-w-0">
                     <input type="hidden" name="itemProductCode" value={item.productCode} />
-                    <div className="max-w-64 min-w-0">
-                      <div className="line-clamp-2 font-medium leading-snug">{item.name}</div>
-                      <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
-                        <span>{item.code}</span>
-                        {item.article && <span className="truncate">арт. {item.article}</span>}
-                      </div>
-                      {product && (
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          Остаток {formatNumber(product.stock)}
+                    <div className="flex max-w-72 min-w-0 items-start gap-2">
+                      <ProductThumbnail
+                        name={item.name}
+                        imagePath={product?.imagePath ?? item.imagePath}
+                        size="sm"
+                      />
+                      <div className="min-w-0">
+                        <div className="line-clamp-2 font-medium leading-snug">{item.name}</div>
+                        <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                          <span>{item.code}</span>
+                          {item.article && <span className="truncate">арт. {item.article}</span>}
                         </div>
-                      )}
+                        {product && (
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Остаток {formatNumber(product.stock)}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell>

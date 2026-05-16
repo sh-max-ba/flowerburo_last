@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { ProductThumbnail } from "@/components/products/product-thumbnail"
 import { Textarea } from "@/components/ui/textarea"
 
 type Line = {
@@ -57,6 +58,7 @@ export function StockDocumentForm({
           article: "",
           categoryPath: "",
           unit: "шт",
+          imagePath: "",
           stock: item.beforeStock ?? 0,
           reserved: 0,
           expected: 0,
@@ -239,8 +241,13 @@ export function StockDocumentForm({
                         <TableRow key={product.code}>
                           <TableCell>
                             <input type="hidden" name="itemProductCode" value={product.code} />
-                            <div className="font-medium">{product.name}</div>
-                            <div className="text-xs text-muted-foreground">{product.code}</div>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <ProductThumbnail name={product.name} imagePath={product.imagePath} size="sm" />
+                              <div className="min-w-0">
+                                <div className="truncate font-medium">{product.name}</div>
+                                <div className="text-xs text-muted-foreground">{product.code}</div>
+                              </div>
+                            </div>
                           </TableCell>
                           <TableCell>{formatNumber(product.stock)}</TableCell>
                           <TableCell>

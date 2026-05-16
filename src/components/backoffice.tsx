@@ -176,6 +176,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { ShiftCloseSummary } from "@/components/shifts/shift-pages"
 import { StockActProductPicker } from "@/components/stock/stock-act-product-picker"
 import { ProductCombobox } from "@/components/products/product-combobox"
+import { ProductThumbnail } from "@/components/products/product-thumbnail"
 import { CustomerCombobox } from "@/components/customers/customer-combobox"
 import {
   addProductToLineItems,
@@ -1104,9 +1105,12 @@ function StockSection({
           headers={["Код", "Товар", "Категория", "Остаток", "Цена", ""]}
           rows={products.map((product) => [
             product.code,
-            <div key="name" className="min-w-52">
-              <div className="font-medium">{product.name}</div>
-              <div className="truncate text-xs text-muted-foreground">{product.article || "Артикул не указан"}</div>
+            <div key="name" className="flex min-w-56 items-center gap-2">
+              <ProductThumbnail name={product.name} imagePath={product.imagePath} size="md" />
+              <div className="min-w-0">
+                <div className="truncate font-medium">{product.name}</div>
+                <div className="truncate text-xs text-muted-foreground">{product.article || "Артикул не указан"}</div>
+              </div>
             </div>,
             <CategoryCell key="category" categoryPath={product.categoryPath} />,
             <StockBadge key="stock" product={product} />,
@@ -2362,8 +2366,11 @@ function OrdersSection({
                 </div>
                 <div className="flex flex-col gap-1 rounded-lg bg-muted p-3 text-sm">
                   {order.items.map((item) => (
-                    <div key={item.id} className="flex justify-between gap-3">
-                      <span>{item.name}</span>
+                    <div key={item.id} className="flex items-center justify-between gap-3">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <ProductThumbnail name={item.name} imagePath={item.imagePath} size="xs" />
+                        <span className="truncate">{item.name}</span>
+                      </span>
                       <span>{number(item.qty)} шт</span>
                     </div>
                   ))}
@@ -3061,8 +3068,44 @@ function ProductSheet({
   onOpenChange: (open: boolean) => void
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
 }) {
+  const router = useRouter()
   const [categoryPath, setCategoryPath] = useState(product?.categoryPath ?? "")
+  const [imagePath, setImagePath] = useState(product?.imagePath ?? "")
+  const [imageFile, setImageFile] = useState<File | null>(null)
+  const [uploadingImage, setUploadingImage] = useState(false)
+  const [imageVersion, setImageVersion] = useState(0)
   const selectableCategories = categories.filter((category) => category.path !== uncategorizedValue)
+
+  async function uploadProductImage() {
+    if (!product || !imageFile) {
+      return
+    }
+
+    const formData = new FormData()
+    formData.set("file", imageFile)
+    setUploadingImage(true)
+
+    try {
+      const response = await fetch(`/api/products/${encodeURIComponent(product.code)}/image`, {
+        method: "POST",
+        body: formData,
+      })
+      const payload = (await response.json()) as { ok?: boolean; message?: string; imagePath?: string }
+      if (!response.ok || !payload.ok || !payload.imagePath) {
+        throw new Error(payload.message || "Фото товара не загружено.")
+      }
+
+      setImagePath(payload.imagePath)
+      setImageFile(null)
+      setImageVersion(Date.now())
+      toast.success("Фото товара обновлено")
+      router.refresh()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Фото товара не загружено.")
+    } finally {
+      setUploadingImage(false)
+    }
+  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -3133,6 +3176,40 @@ function ProductSheet({
                   <Input id="unit" name="unit" defaultValue={product?.unit ?? "шт"} />
                 </Field>
               </div>
+              <FieldSet>
+                <FieldLegend>Фото товара</FieldLegend>
+                <div className="flex items-start gap-3">
+                  <ProductThumbnail
+                    name={product?.name ?? "Товар"}
+                    imagePath={imagePath}
+                    size="xl"
+                    cacheKey={imageVersion}
+                  />
+                  <Field className="min-w-0 flex-1">
+                    <FieldLabel htmlFor="product-image">Файл</FieldLabel>
+                    <Input
+                      id="product-image"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      disabled={!product || pending || uploadingImage}
+                      onChange={(event) => setImageFile(event.target.files?.[0] ?? null)}
+                    />
+                    <FieldDescription>
+                      {product ? "JPG, PNG или WEBP до 5 MB." : "Сначала сохраните товар, затем загрузите фото."}
+                    </FieldDescription>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-fit"
+                      disabled={!product || !imageFile || pending || uploadingImage}
+                      onClick={uploadProductImage}
+                    >
+                      <UploadIcon data-icon="inline-start" />
+                      Загрузить фото
+                    </Button>
+                  </Field>
+                </div>
+              </FieldSet>
             </FieldGroup>
           </div>
           <SheetFooter>
@@ -4117,8 +4194,13 @@ function StockDocumentDialog({
                                 <TableRow key={product.code}>
                                   <TableCell>
                                     <input type="hidden" name="itemProductCode" value={product.code} />
-                                    <div className="font-medium">{product.name}</div>
-                                    <div className="text-xs text-muted-foreground">{product.code}</div>
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <ProductThumbnail name={product.name} imagePath={product.imagePath} size="sm" />
+                                      <div className="min-w-0">
+                                        <div className="truncate font-medium">{product.name}</div>
+                                        <div className="text-xs text-muted-foreground">{product.code}</div>
+                                      </div>
+                                    </div>
                                   </TableCell>
                                   <TableCell>{number(product.stock)}</TableCell>
                                   <TableCell>

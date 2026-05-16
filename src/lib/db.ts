@@ -40,6 +40,7 @@ export type Product = {
   article: string
   name: string
   unit: string
+  imagePath: string
   stock: number
   reserved: number
   expected: number
@@ -174,6 +175,7 @@ export type OrderItem = {
   orderId: number
   productCode: string
   name: string
+  imagePath?: string
   qty: number
   price: number
   discountType: DiscountType
@@ -488,6 +490,7 @@ function migrate(client: Database.Database) {
       expected REAL NOT NULL DEFAULT 0,
       cost_price REAL NOT NULL DEFAULT 0,
       sale_price REAL NOT NULL DEFAULT 0,
+      image_path TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -809,6 +812,7 @@ function migrate(client: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_deal_items_deal_id ON deal_items(deal_id);
   `)
 
+  ensureColumn("products", "image_path", "ALTER TABLE products ADD COLUMN image_path TEXT", client)
   ensureColumn("orders", "number", "ALTER TABLE orders ADD COLUMN number TEXT", client)
   ensureColumn("orders", "source", "ALTER TABLE orders ADD COLUMN source TEXT", client)
   ensureColumn("orders", "delivery_type", "ALTER TABLE orders ADD COLUMN delivery_type TEXT", client)
@@ -1623,6 +1627,7 @@ function mapProduct(row: ProductRow): Product {
     article: String(row.article ?? ""),
     name: String(row.name),
     unit: String(row.unit),
+    imagePath: String(row.image_path ?? ""),
     stock,
     reserved,
     expected: numberFromRow(row.expected),
@@ -2080,10 +2085,15 @@ export function getShiftDetails(shiftId: number, client: Database.Database = db(
     .all(shiftId) as ShiftRelatedOrder[]
   const relatedOrderItems = client
     .prepare(
-      `SELECT id, order_id as orderId, product_code as productCode, name, qty, price, total
-        , COALESCE(discount_type, 'none') as discountType, COALESCE(discount_value, 0) as discountValue,
-        COALESCE(discount_amount, 0) as discountAmount, COALESCE(NULLIF(total_before_discount, 0), total) as totalBeforeDiscount
+      `SELECT order_items.id, order_items.order_id as orderId, order_items.product_code as productCode,
+        order_items.name, COALESCE(products.image_path, '') as imagePath,
+        order_items.qty, order_items.price, order_items.total,
+        COALESCE(order_items.discount_type, 'none') as discountType,
+        COALESCE(order_items.discount_value, 0) as discountValue,
+        COALESCE(order_items.discount_amount, 0) as discountAmount,
+        COALESCE(NULLIF(order_items.total_before_discount, 0), order_items.total) as totalBeforeDiscount
        FROM order_items
+       LEFT JOIN products ON products.code = order_items.product_code
        WHERE order_id IN (
         SELECT DISTINCT order_id
         FROM cash_transactions
@@ -2102,6 +2112,7 @@ export function getShiftDetails(shiftId: number, client: Database.Database = db(
         orderId,
         productCode: String(item.productCode ?? ""),
         name: String(item.name ?? ""),
+        imagePath: String(item.imagePath ?? ""),
         qty: numberFromRow(item.qty),
         price: numberFromRow(item.price),
         discountType: normalizeDiscountType(String(item.discountType ?? "none")),
@@ -2241,6 +2252,25 @@ function getProduct(client: Database.Database, code: string) {
   return client.prepare("SELECT * FROM products WHERE code = ?").get(code) as ProductRow | undefined
 }
 
+export function getProductByCode(code: string) {
+  const row = getProduct(db(), code)
+  return row ? mapProduct(row) : null
+}
+
+export function updateProductImagePath(code: string, imagePath: string) {
+  const client = db()
+  const product = getProduct(client, code)
+  if (!product) {
+    throw new Error("Товар не найден.")
+  }
+
+  client
+    .prepare("UPDATE products SET image_path = ?, updated_at = CURRENT_TIMESTAMP WHERE code = ?")
+    .run(imagePath, code)
+
+  return getProductByCode(code)
+}
+
 function applyProductDelta(
   client: Database.Database,
   input: {
@@ -2375,11 +2405,16 @@ export function getDashboardData(): DashboardData {
     const placeholders = orderIds.map(() => "?").join(", ")
     const itemRows = client
       .prepare(
-        `SELECT id, order_id as orderId, product_code as productCode, name, qty, price,
-          COALESCE(discount_type, 'none') as discountType, COALESCE(discount_value, 0) as discountValue,
-          COALESCE(discount_amount, 0) as discountAmount, COALESCE(NULLIF(total_before_discount, 0), total) as totalBeforeDiscount,
-          total
+        `SELECT order_items.id, order_items.order_id as orderId, order_items.product_code as productCode,
+          order_items.name, COALESCE(products.image_path, '') as imagePath,
+          order_items.qty, order_items.price,
+          COALESCE(order_items.discount_type, 'none') as discountType,
+          COALESCE(order_items.discount_value, 0) as discountValue,
+          COALESCE(order_items.discount_amount, 0) as discountAmount,
+          COALESCE(NULLIF(order_items.total_before_discount, 0), order_items.total) as totalBeforeDiscount,
+          order_items.total
          FROM order_items
+         LEFT JOIN products ON products.code = order_items.product_code
          WHERE order_id IN (${placeholders})
          ORDER BY id ASC`
       )
@@ -2393,6 +2428,7 @@ export function getDashboardData(): DashboardData {
         orderId,
         productCode: String(row.productCode ?? ""),
         name: String(row.name ?? ""),
+        imagePath: String(row.imagePath ?? ""),
         qty: numberFromRow(row.qty),
         price: numberFromRow(row.price),
         discountType: normalizeDiscountType(String(row.discountType ?? "none")),
