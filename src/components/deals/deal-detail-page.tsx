@@ -8,15 +8,17 @@ import { CheckCircle2Icon, ExternalLinkIcon, ReceiptTextIcon, ShoppingBagIcon, T
 import { toast } from "sonner"
 import {
   addDealItemAction,
+  addDealBouquetAction,
   acceptDealPaymentAction,
   createOrderFromDealAction,
   removeDealItemAction,
+  removeDealItemGroupAction,
   updateDealFieldsAction,
   updateDealItemAction,
 } from "@/app/actions"
 import type { Customer, Deal, DealItem, DealSource, DealStage } from "@/lib/crm"
 import { calculateCommercialTotals, calculateLineTotal, type DiscountType } from "@/lib/pricing"
-import type { CurrentUser, PaymentMethod, Product } from "@/lib/db"
+import type { BouquetTemplate, CurrentUser, PaymentMethod, Product } from "@/lib/db"
 import { getPaymentMethodLabel, paymentMethodOptions, sourceLabel as getSourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { WazzupDealFrame } from "@/components/deals/wazzup-deal-frame"
@@ -57,6 +59,7 @@ type DealDraft = {
   dueAt: string
   deliveryType: string
   address: string
+  recipientPhone: string
   comment: string
   dealDiscountType: DiscountType
   dealDiscountValue: string
@@ -94,6 +97,7 @@ export function DealDetailPage({
   customers,
   users,
   products,
+  bouquets,
   openShift,
 }: {
   deal: Deal
@@ -101,6 +105,7 @@ export function DealDetailPage({
   customers: Customer[]
   users: CurrentUser[]
   products: Product[]
+  bouquets: BouquetTemplate[]
   openShift: { id: number; status: "open" | "closed" } | null
 }) {
   const router = useRouter()
@@ -172,29 +177,63 @@ export function DealDetailPage({
   const pricedItems = useMemo(
     () =>
       items.map((item) => {
+        const qtyNumber = normalizedQty(item.qty)
+        const priceNumber = normalizedPrice(item.price)
+        const discountValueNumber = normalizedPrice(item.discountValue)
+        const pricingQty = item.bouquetGroupId && priceNumber > 0 ? 1 : qtyNumber
         const line = calculateLineTotal({
-          qty: normalizedQty(item.qty),
-          price: normalizedPrice(item.price),
+          qty: pricingQty,
+          price: priceNumber,
           discountType: item.discountType,
-          discountValue: normalizedPrice(item.discountValue),
+          discountValue: discountValueNumber,
         })
 
         return {
           ...item,
-          qtyNumber: normalizedQty(item.qty),
-          priceNumber: normalizedPrice(item.price),
-          discountValueNumber: normalizedPrice(item.discountValue),
+          qtyNumber,
+          priceNumber,
+          discountValueNumber,
+          pricingQty,
           line,
         }
       }),
     [items]
   )
+  const itemGroups = useMemo(() => {
+    const groups: Array<
+      | { type: "single"; key: string; item: (typeof pricedItems)[number] }
+      | { type: "bouquet"; key: string; bouquetName: string; items: Array<(typeof pricedItems)[number]> }
+    > = []
+    const bouquetGroups = new Map<string, Extract<(typeof groups)[number], { type: "bouquet" }>>()
+
+    for (const item of pricedItems) {
+      if (!item.bouquetGroupId) {
+        groups.push({ type: "single", key: `item-${item.id}`, item })
+        continue
+      }
+
+      let group = bouquetGroups.get(item.bouquetGroupId)
+      if (!group) {
+        group = {
+          type: "bouquet",
+          key: item.bouquetGroupId,
+          bouquetName: item.bouquetName,
+          items: [],
+        }
+        bouquetGroups.set(item.bouquetGroupId, group)
+        groups.push(group)
+      }
+      group.items.push(item)
+    }
+
+    return groups
+  }, [pricedItems])
 
   const totals = useMemo(
     () =>
       calculateCommercialTotals(
         pricedItems.map((item) => ({
-          qty: item.qtyNumber,
+          qty: item.pricingQty,
           price: item.priceNumber,
           discountType: item.discountType,
           discountValue: item.discountValueNumber,
@@ -387,7 +426,7 @@ export function DealDetailPage({
     setItemSaveStatus("saving")
     setSaveError("")
     setItems((current) => {
-      const existing = current.find((item) => item.productCode === product.code)
+      const existing = current.find((item) => item.productCode === product.code && !item.bouquetGroupId)
       if (existing) {
         const updated = { ...existing, qty: String(normalizedQty(existing.qty) + 1) }
         return [
@@ -416,6 +455,25 @@ export function DealDetailPage({
     }
   }
 
+  async function addBouquet(bouquet: BouquetTemplate) {
+    const version = ++itemSaveVersionRef.current
+    setItemSaveStatus("saving")
+    setSaveError("")
+
+    const result = await addDealBouquetAction(deal.id, bouquet.id)
+    if (version !== itemSaveVersionRef.current) {
+      return
+    }
+
+    if (result.ok) {
+      setItemSaveStatus("saved")
+      router.refresh()
+    } else {
+      setItemSaveStatus("error")
+      setSaveError(result.message)
+    }
+  }
+
   async function removeItem(item: DealItemDraft) {
     setItems((current) => current.filter((currentItem) => currentItem.id !== item.id))
     if (item.isTemporary) {
@@ -426,6 +484,26 @@ export function DealDetailPage({
     setItemSaveStatus("saving")
     setSaveError("")
     const result = await removeDealItemAction(deal.id, item.id)
+    if (version !== itemSaveVersionRef.current) {
+      return
+    }
+
+    if (result.ok) {
+      setItemSaveStatus("saved")
+      router.refresh()
+    } else {
+      setItemSaveStatus("error")
+      setSaveError(result.message)
+    }
+  }
+
+  async function removeGroup(groupId: string) {
+    setItems((current) => current.filter((item) => item.bouquetGroupId !== groupId))
+    const version = ++itemSaveVersionRef.current
+    setItemSaveStatus("saving")
+    setSaveError("")
+
+    const result = await removeDealItemGroupAction(deal.id, groupId)
     if (version !== itemSaveVersionRef.current) {
       return
     }
@@ -731,6 +809,17 @@ export function DealDetailPage({
                 </Field>
               </div>
               <Field>
+                <FieldLabel className="text-xs text-muted-foreground">Номер получателя</FieldLabel>
+                <FieldContent>
+                  <Input
+                    placeholder="Например, +996 ..."
+                    value={draft.recipientPhone}
+                    onChange={(event) => updateDraftField("recipientPhone", event.target.value)}
+                    onBlur={() => flushFieldSave()}
+                  />
+                </FieldContent>
+              </Field>
+              <Field>
                 <FieldLabel className="text-xs text-muted-foreground">Комментарий</FieldLabel>
                 <FieldContent>
                   <Textarea
@@ -750,7 +839,14 @@ export function DealDetailPage({
               <CardDescription>Позиции и скидки сохраняются после изменения</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 overflow-visible">
-              <ProductCombobox products={products} portalDropdown onSelect={addProduct} />
+              <ProductCombobox
+                products={products}
+                bouquets={bouquets}
+                includeBouquets
+                portalDropdown
+                onSelect={addProduct}
+                onSelectBouquet={addBouquet}
+              />
               <div className="overflow-x-auto rounded-lg border border-zinc-200">
                 <Table className="min-w-[620px]">
                   <TableHeader>
@@ -773,107 +869,165 @@ export function DealDetailPage({
                         </TableCell>
                       </TableRow>
                     )}
-                    {pricedItems.map((item) => (
-                      <TableRow key={item.id}>
-                        <TableCell className="min-w-[180px] max-w-[240px]">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <ProductThumbnail
-                              name={item.productName}
-                              imagePath={item.imagePath}
-                              size="sm"
-                            />
-                            <div className="min-w-0">
-                              <div className="truncate font-medium text-zinc-950" title={item.productName}>
-                                {item.productName}
+                    {itemGroups.map((group) => {
+                      if (group.type === "bouquet") {
+                        const groupPrice = group.items.reduce((sum, item) => sum + item.priceNumber, 0)
+                        const groupTotal = group.items.reduce((sum, item) => sum + item.line.total, 0)
+
+                        return (
+                          <TableRow key={group.key}>
+                            <TableCell colSpan={5}>
+                              <div className="flex min-w-0 flex-col gap-2">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <Badge variant="secondary">Букет</Badge>
+                                      <span className="truncate font-medium text-zinc-950">
+                                        {group.bouquetName || "Букет"}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 text-xs text-muted-foreground">
+                                      Цена букета {formatMoney(groupPrice)}
+                                    </div>
+                                  </div>
+                                  <div className="text-right font-semibold text-zinc-950">
+                                    {formatMoney(groupTotal)}
+                                  </div>
+                                </div>
+                                <div className="grid gap-1 rounded-lg bg-zinc-50 p-2 text-xs text-muted-foreground">
+                                  {group.items.map((item) => (
+                                    <div key={item.id} className="flex items-center justify-between gap-3">
+                                      <span className="flex min-w-0 items-center gap-2">
+                                        <ProductThumbnail
+                                          name={item.productName}
+                                          imagePath={item.imagePath}
+                                          size="xs"
+                                        />
+                                        <span className="truncate">{item.productName}</span>
+                                      </span>
+                                      <span className="shrink-0">{formatNumber(item.qtyNumber)} шт</span>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
-                              <div className="truncate text-xs text-muted-foreground">{item.productCode}</div>
+                            </TableCell>
+                            <TableCell className="w-8 text-right align-top">
+                              <Button
+                                type="button"
+                                size="icon-sm"
+                                variant="destructive"
+                                onClick={() => void removeGroup(group.key)}
+                              >
+                                <Trash2Icon />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      }
+
+                      const item = group.item
+                      return (
+                        <TableRow key={item.id}>
+                          <TableCell className="min-w-[180px] max-w-[240px]">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <ProductThumbnail
+                                name={item.productName}
+                                imagePath={item.imagePath}
+                                size="sm"
+                              />
+                              <div className="min-w-0">
+                                <div className="truncate font-medium text-zinc-950" title={item.productName}>
+                                  {item.productName}
+                                </div>
+                                <div className="truncate text-xs text-muted-foreground">{item.productCode}</div>
+                              </div>
                             </div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="w-16">
-                          <Input
-                            className="h-8 w-16"
-                            type="number"
-                            min="1"
-                            step="1"
-                            value={item.qty}
-                            disabled={item.isTemporary}
-                            onChange={(event) => updateItemField(item.id, { qty: event.target.value })}
-                            onBlur={() => {
-                              updateItemField(item.id, { qty: item.qty }, { immediate: true, normalize: true })
-                            }}
-                          />
-                        </TableCell>
-                        <TableCell className="w-24">
-                          <Input
-                            className="h-8 w-24"
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={item.price}
-                            disabled={item.isTemporary}
-                            onChange={(event) => updateItemField(item.id, { price: event.target.value })}
-                            onBlur={() => {
-                              updateItemField(item.id, { price: item.price }, { immediate: true, normalize: true })
-                            }}
-                          />
-                        </TableCell>
-                        <TableCell className="w-52">
-                          <div className="flex items-center gap-1">
-                            <Select
-                              value={item.discountType}
-                              onValueChange={(value) =>
-                                updateItemField(
-                                  item.id,
-                                  { discountType: normalizeDiscountValue(value) },
-                                  { immediate: true }
-                                )
-                              }
-                            >
-                              <SelectTrigger className="h-8 w-28 bg-white" disabled={item.isTemporary}>
-                                <SelectValue>{(value) => discountLabel(String(value ?? "none"))}</SelectValue>
-                              </SelectTrigger>
-                              <SelectContent align="start" className="z-[9999]">
-                                {discountOptions.map((option) => (
-                                  <SelectItem key={option.value} value={option.value}>
-                                    {option.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                          </TableCell>
+                          <TableCell className="w-16">
                             <Input
-                              className="h-8 w-20"
+                              className="h-8 w-16"
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={item.qty}
+                              disabled={item.isTemporary}
+                              onChange={(event) => updateItemField(item.id, { qty: event.target.value })}
+                              onBlur={() => {
+                                updateItemField(item.id, { qty: item.qty }, { immediate: true, normalize: true })
+                              }}
+                            />
+                          </TableCell>
+                          <TableCell className="w-24">
+                            <Input
+                              className="h-8 w-24"
                               type="number"
                               min="0"
                               step="0.01"
-                              value={item.discountValue}
-                              disabled={item.isTemporary || item.discountType === "none"}
-                              onChange={(event) => updateItemField(item.id, { discountValue: event.target.value })}
+                              value={item.price}
+                              disabled={item.isTemporary}
+                              onChange={(event) => updateItemField(item.id, { price: event.target.value })}
                               onBlur={() => {
-                                updateItemField(
-                                  item.id,
-                                  { discountValue: item.discountValue },
-                                  { immediate: true, normalize: true }
-                                )
+                                updateItemField(item.id, { price: item.price }, { immediate: true, normalize: true })
                               }}
                             />
-                          </div>
-                        </TableCell>
-                        <TableCell className="w-28 text-right font-semibold text-zinc-950">
-                          {formatMoney(item.line.total)}
-                        </TableCell>
-                        <TableCell className="w-8 text-right">
-                          <Button
-                            type="button"
-                            size="icon-sm"
-                            variant="destructive"
-                            onClick={() => void removeItem(item)}
-                          >
-                            <Trash2Icon />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                          </TableCell>
+                          <TableCell className="w-52">
+                            <div className="flex items-center gap-1">
+                              <Select
+                                value={item.discountType}
+                                onValueChange={(value) =>
+                                  updateItemField(
+                                    item.id,
+                                    { discountType: normalizeDiscountValue(value) },
+                                    { immediate: true }
+                                  )
+                                }
+                              >
+                                <SelectTrigger className="h-8 w-28 bg-white" disabled={item.isTemporary}>
+                                  <SelectValue>{(value) => discountLabel(String(value ?? "none"))}</SelectValue>
+                                </SelectTrigger>
+                                <SelectContent align="start" className="z-[9999]">
+                                  {discountOptions.map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>
+                                      {option.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <Input
+                                className="h-8 w-20"
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={item.discountValue}
+                                disabled={item.isTemporary || item.discountType === "none"}
+                                onChange={(event) => updateItemField(item.id, { discountValue: event.target.value })}
+                                onBlur={() => {
+                                  updateItemField(
+                                    item.id,
+                                    { discountValue: item.discountValue },
+                                    { immediate: true, normalize: true }
+                                  )
+                                }}
+                              />
+                            </div>
+                          </TableCell>
+                          <TableCell className="w-28 text-right font-semibold text-zinc-950">
+                            {formatMoney(item.line.total)}
+                          </TableCell>
+                          <TableCell className="w-8 text-right">
+                            <Button
+                              type="button"
+                              size="icon-sm"
+                              variant="destructive"
+                              onClick={() => void removeItem(item)}
+                            >
+                              <Trash2Icon />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                   </TableBody>
                 </Table>
               </div>
@@ -1221,6 +1375,7 @@ function createDealDraft(deal: Deal): DealDraft {
     dueAt: toDatetimeLocal(deal.dueAt ?? ""),
     deliveryType: deal.deliveryType ?? "",
     address: deal.address ?? "",
+    recipientPhone: deal.recipientPhone ?? "",
     comment: deal.comment ?? "",
     dealDiscountType: deal.dealDiscountType ?? "none",
     dealDiscountValue: String(deal.dealDiscountValue ?? 0),
@@ -1245,6 +1400,9 @@ function createTemporaryItem(dealId: number, product: Product, itemId: number): 
     imagePath: product.imagePath,
     qty: "1",
     price: String(product.salePrice ?? 0),
+    bouquetId: null,
+    bouquetName: "",
+    bouquetGroupId: "",
     discountType: "none",
     discountValue: "0",
     discountAmount: 0,
@@ -1267,6 +1425,7 @@ function createDealFormData(dealId: number, draft: DealDraft) {
   formData.set("dueAt", draft.dueAt ?? "")
   formData.set("deliveryType", draft.deliveryType ?? "")
   formData.set("address", draft.address ?? "")
+  formData.set("recipientPhone", draft.recipientPhone ?? "")
   formData.set("comment", draft.comment ?? "")
   formData.set("dealDiscountType", draft.dealDiscountType ?? "none")
   formData.set("dealDiscountValue", String(normalizedPrice(draft.dealDiscountValue)))
@@ -1345,6 +1504,10 @@ function normalizedPrice(value: string | number) {
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value)
 }
 
 function mergeStatus(fieldStatus: SaveStatus, itemStatus: SaveStatus): SaveStatus {

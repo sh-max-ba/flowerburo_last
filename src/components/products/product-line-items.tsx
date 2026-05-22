@@ -1,7 +1,7 @@
 "use client"
 
 import { MinusIcon, PlusIcon, Trash2Icon } from "lucide-react"
-import type { Product } from "@/lib/db"
+import type { BouquetTemplate, Product } from "@/lib/db"
 import { calculateLineTotal, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
 import { cn, formatMoney } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
 
 export type ProductLineItem = {
+  lineId?: string
   productCode: string
   name: string
   code: string
@@ -21,6 +22,9 @@ export type ProductLineItem = {
   imagePath?: string
   qty: number
   price: number
+  bouquetId?: number | null
+  bouquetName?: string
+  bouquetGroupId?: string
   discountType?: DiscountType
   discountValue?: number
 }
@@ -36,6 +40,7 @@ type ProductLineItemsProps = {
 
 export function lineFromProduct(product: Product): ProductLineItem {
   return {
+    lineId: product.code,
     productCode: product.code,
     code: product.code,
     name: product.name,
@@ -59,19 +64,20 @@ export function ProductLineItems({
 }: ProductLineItemsProps) {
   const productByCode = new Map(products?.map((product) => [product.code, product]) ?? [])
   const scrollHeight = Math.min(items.length * 116 + 48, maxHeightPx)
+  const groupedItems = groupProductLineItems(items)
 
-  function updateItem(productCode: string, patch: Partial<ProductLineItem>) {
+  function updateItem(lineKey: string, patch: Partial<ProductLineItem>) {
     onItemsChange(
-      items.map((item) => (item.productCode === productCode ? { ...item, ...patch } : item))
+      items.map((item) => (getLineKey(item) === lineKey ? { ...item, ...patch } : item))
     )
   }
 
-  function adjustQty(productCode: string, delta: number) {
-    const item = items.find((current) => current.productCode === productCode)
+  function adjustQty(lineKey: string, delta: number) {
+    const item = items.find((current) => getLineKey(current) === lineKey)
     if (!item) {
       return
     }
-    updateItem(productCode, { qty: clampQty(item.qty + delta) })
+    updateItem(lineKey, { qty: clampQty(item.qty + delta) })
   }
 
   if (!items.length) {
@@ -103,23 +109,91 @@ export function ProductLineItems({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((item) => {
+            {groupedItems.map((group) => {
+              if (group.type === "bouquet") {
+                const bouquetTotal = group.items.reduce((sum, item) => sum + calculateProductLineTotal(item).total, 0)
+                const bouquetPrice = group.items.reduce((sum, item) => sum + item.price, 0)
+
+                return (
+                  <TableRow key={group.key}>
+                    <TableCell colSpan={7} className="min-w-0">
+                      {group.items.map((item) => (
+                        <LineItemHiddenInputs key={getLineKey(item)} item={item} />
+                      ))}
+                      <div className="flex min-w-0 flex-col gap-2">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                              <Badge variant="secondary">Букет</Badge>
+                              <div className="truncate font-medium">
+                                {group.bouquetName || "Букет"}
+                              </div>
+                            </div>
+                            <div className="mt-1 text-sm text-muted-foreground">
+                              Цена букета {formatMoney(bouquetPrice)}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-xs text-muted-foreground">Итого</div>
+                            <div className="font-semibold">{formatMoney(bouquetTotal)}</div>
+                          </div>
+                        </div>
+                        <div className="grid gap-1 rounded-lg bg-muted/50 p-2 text-sm">
+                          {group.items.map((item) => {
+                            const product = productByCode.get(item.productCode)
+                            return (
+                              <div key={getLineKey(item)} className="flex items-center justify-between gap-3">
+                                <span className="flex min-w-0 items-center gap-2">
+                                  <ProductThumbnail
+                                    name={item.name}
+                                    imagePath={product?.imagePath ?? item.imagePath}
+                                    size="xs"
+                                  />
+                                  <span className="min-w-0 truncate">{item.name}</span>
+                                </span>
+                                <span className="shrink-0 text-muted-foreground">
+                                  {formatNumber(item.qty)} шт
+                                  {product ? ` · остаток ${formatNumber(product.stock)}` : ""}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right align-top">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        disabled={disabled}
+                        onClick={() =>
+                          onItemsChange(items.filter((current) => current.bouquetGroupId !== group.key))
+                        }
+                      >
+                        <Trash2Icon />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                )
+              }
+
+              const item = group.item
               const product = productByCode.get(item.productCode)
               const qtyInvalid = item.qty < 1 || !Number.isInteger(item.qty)
               const priceInvalid = item.price < 0
               const discountType = normalizeDiscountType(item.discountType)
               const discountValue = Number.isFinite(item.discountValue) ? Number(item.discountValue) : 0
               const discountInvalid = discountValue < 0
-              const totals = calculateLineTotal({
-                qty: item.qty,
-                price: item.price,
-                discountType,
-                discountValue,
-              })
+              const totals = calculateProductLineTotal({ ...item, discountType, discountValue })
+              const lineKey = getLineKey(item)
               return (
-                <TableRow key={item.productCode}>
+                <TableRow key={lineKey}>
                   <TableCell className="min-w-0">
                     <input type="hidden" name="itemProductCode" value={item.productCode} />
+                    <input type="hidden" name="itemBouquetId" value="" />
+                    <input type="hidden" name="itemBouquetName" value="" />
+                    <input type="hidden" name="itemBouquetGroupId" value="" />
                     <div className="flex max-w-72 min-w-0 items-start gap-2">
                       <ProductThumbnail
                         name={item.name}
@@ -147,7 +221,7 @@ export function ProductLineItems({
                         variant="outline"
                         size="icon-sm"
                         disabled={disabled}
-                        onClick={() => adjustQty(item.productCode, -1)}
+                        onClick={() => adjustQty(lineKey, -1)}
                       >
                         <MinusIcon />
                       </Button>
@@ -161,7 +235,7 @@ export function ProductLineItems({
                         aria-invalid={qtyInvalid}
                         className={cn("w-20 text-right", qtyInvalid && "border-destructive")}
                         onChange={(event) =>
-                          updateItem(item.productCode, { qty: Number(event.target.value) })
+                          updateItem(lineKey, { qty: Number(event.target.value) })
                         }
                         required
                       />
@@ -170,7 +244,7 @@ export function ProductLineItems({
                         variant="outline"
                         size="icon-sm"
                         disabled={disabled}
-                        onClick={() => adjustQty(item.productCode, 1)}
+                        onClick={() => adjustQty(lineKey, 1)}
                       >
                         <PlusIcon />
                       </Button>
@@ -188,7 +262,7 @@ export function ProductLineItems({
                       aria-invalid={priceInvalid}
                       className={cn("w-24 text-right", priceInvalid && "border-destructive")}
                       onChange={(event) =>
-                        updateItem(item.productCode, { price: Number(event.target.value) })
+                        updateItem(lineKey, { price: Number(event.target.value) })
                       }
                       required
                     />
@@ -205,7 +279,7 @@ export function ProductLineItems({
                         value={discountType}
                         disabled={disabled}
                         onChange={(event) =>
-                          updateItem(item.productCode, {
+                          updateItem(lineKey, {
                             discountType: normalizeDiscountType(event.target.value),
                             discountValue: event.target.value === "none" ? 0 : discountValue,
                           })
@@ -226,7 +300,7 @@ export function ProductLineItems({
                         aria-invalid={discountInvalid}
                         className={cn("w-24 text-right", discountInvalid && "border-destructive")}
                         onChange={(event) =>
-                          updateItem(item.productCode, { discountValue: Number(event.target.value) || 0 })
+                          updateItem(lineKey, { discountValue: Number(event.target.value) || 0 })
                         }
                       />
                     </div>
@@ -248,7 +322,7 @@ export function ProductLineItems({
                       size="icon-sm"
                       disabled={disabled}
                       onClick={() =>
-                        onItemsChange(items.filter((current) => current.productCode !== item.productCode))
+                        onItemsChange(items.filter((current) => getLineKey(current) !== lineKey))
                       }
                     >
                       <Trash2Icon />
@@ -266,27 +340,49 @@ export function ProductLineItems({
 }
 
 export function addProductToLineItems(items: ProductLineItem[], product: Product, qty = 1) {
-  const existing = items.find((item) => item.productCode === product.code)
+  const existing = items.find((item) => item.productCode === product.code && !item.bouquetGroupId)
   if (existing) {
     const updated = { ...existing, qty: clampQty(existing.qty + qty) }
     return [
       updated,
-      ...items.filter((item) => item.productCode !== product.code),
+      ...items.filter((item) => getLineKey(item) !== getLineKey(existing)),
     ]
   }
 
   return [{ ...lineFromProduct(product), qty: clampQty(qty) }, ...items]
 }
 
+export function addBouquetToLineItems(items: ProductLineItem[], bouquet: BouquetTemplate) {
+  const bouquetGroupId = createBouquetGroupId(bouquet.id)
+  const bouquetItems = bouquet.items.map((item, index) => ({
+    lineId: `${bouquetGroupId}:${item.productCode}`,
+    productCode: item.productCode,
+    code: item.productCode,
+    name: item.productName,
+    imagePath: item.imagePath,
+    qty: clampQty(item.qty),
+    price: index === 0 ? bouquet.price : 0,
+    bouquetId: bouquet.id,
+    bouquetName: bouquet.name,
+    bouquetGroupId,
+    discountType: "none" as DiscountType,
+    discountValue: 0,
+  }))
+
+  return [...bouquetItems, ...items]
+}
+
 export function getLineItemsTotal(items: ProductLineItem[]) {
-  return items.reduce((sum, item) => {
-    return sum + calculateLineTotal({
-      qty: item.qty,
-      price: item.price,
-      discountType: item.discountType,
-      discountValue: item.discountValue,
-    }).total
-  }, 0)
+  return items.reduce((sum, item) => sum + calculateProductLineTotal(item).total, 0)
+}
+
+export function getProductLineItemsForTotals(items: ProductLineItem[]) {
+  return items.map((item) => ({
+    qty: getPricingQty(item),
+    price: item.price,
+    discountType: item.discountType,
+    discountValue: item.discountValue,
+  }))
 }
 
 export function validateProductLineItems(items: ProductLineItem[]) {
@@ -319,6 +415,83 @@ function clampQty(value: number) {
   }
 
   return Math.max(1, Math.round(value))
+}
+
+function LineItemHiddenInputs({
+  item,
+  includeEditableFields = true,
+}: {
+  item: ProductLineItem
+  includeEditableFields?: boolean
+}) {
+  return (
+    <>
+      <input type="hidden" name="itemProductCode" value={item.productCode} />
+      {includeEditableFields && (
+        <>
+          <input type="hidden" name="itemQty" value={item.qty} />
+          <input type="hidden" name="itemPrice" value={item.price} />
+          <input type="hidden" name="itemDiscountType" value={item.discountType ?? "none"} />
+          <input type="hidden" name="itemDiscountValue" value={item.discountValue ?? 0} />
+        </>
+      )}
+      <input type="hidden" name="itemBouquetId" value={item.bouquetId ?? ""} />
+      <input type="hidden" name="itemBouquetName" value={item.bouquetName ?? ""} />
+      <input type="hidden" name="itemBouquetGroupId" value={item.bouquetGroupId ?? ""} />
+    </>
+  )
+}
+
+function groupProductLineItems(items: ProductLineItem[]) {
+  const groups: Array<
+    | { type: "single"; key: string; item: ProductLineItem }
+    | { type: "bouquet"; key: string; bouquetName: string; items: ProductLineItem[] }
+  > = []
+  const bouquetGroups = new Map<string, Extract<(typeof groups)[number], { type: "bouquet" }>>()
+
+  for (const item of items) {
+    const bouquetGroupId = item.bouquetGroupId
+    if (!bouquetGroupId) {
+      groups.push({ type: "single", key: getLineKey(item), item })
+      continue
+    }
+
+    let group = bouquetGroups.get(bouquetGroupId)
+    if (!group) {
+      group = {
+        type: "bouquet",
+        key: bouquetGroupId,
+        bouquetName: item.bouquetName ?? "",
+        items: [],
+      }
+      bouquetGroups.set(bouquetGroupId, group)
+      groups.push(group)
+    }
+    group.items.push(item)
+  }
+
+  return groups
+}
+
+function getLineKey(item: ProductLineItem) {
+  return item.lineId || (item.bouquetGroupId ? `${item.bouquetGroupId}:${item.productCode}` : item.productCode)
+}
+
+function calculateProductLineTotal(item: ProductLineItem) {
+  return calculateLineTotal({
+    qty: getPricingQty(item),
+    price: item.price,
+    discountType: item.discountType,
+    discountValue: item.discountValue,
+  })
+}
+
+function getPricingQty(item: ProductLineItem) {
+  return item.bouquetGroupId && item.price > 0 ? 1 : item.qty
+}
+
+function createBouquetGroupId(bouquetId: number) {
+  return `bouquet-${bouquetId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 function formatNumber(value: number) {

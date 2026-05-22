@@ -47,7 +47,7 @@ If the app is running and WAL files exist, stop the app first so SQLite can chec
 
 ## Полная очистка перед запуском
 
-Скрипт полной очистки не запускается автоматически. Он требует явное подтверждение через `CONFIRM_RESET=YES`, перед очисткой делает backup `app.db`, сохраняет пользователей, роли и пароли, но очищает сессии, чтобы все вошли заново.
+Скрипт полной очистки не запускается автоматически. Он требует явное подтверждение через `CONFIRM_RESET=YES`, перед очисткой делает backup `app.db`, сохраняет пользователей, настройки интеграций, поставщиков и воронки сделок, но очищает рабочие данные и сессии.
 
 Команда:
 
@@ -61,7 +61,7 @@ CONFIRM_RESET=YES npm run reset-database-for-launch
 app.db.backup-before-launch-reset-YYYY-MM-DD-HH-mm-ss
 ```
 
-Скрипт очищает операционные таблицы, склад, историю импортов и `sessions`. Таблица `users` не очищается.
+Скрипт очищает товары, заказы, сделки, клиентов, продажи, смены, кассовые операции, складские документы, импорты, историю движений, Wazzup events/messages/sync и `sessions`. Не очищаются `users`, `integration_settings`, `suppliers`, `deal_pipelines`, `deal_stages`.
 
 ## Stop And Restart
 

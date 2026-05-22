@@ -11,13 +11,7 @@ import type { Customer } from "@/lib/crm"
 import { sourceLabel, sourceOptions } from "@/lib/labels"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -78,17 +72,16 @@ export function CustomersPage({
           <SearchIcon className="pointer-events-none absolute left-3 top-3 size-4 text-muted-foreground" />
           <Input name="search" defaultValue={search} placeholder="Поиск по имени или телефону" className="h-10 pl-9" />
         </form>
-        <Button className="h-10 bg-zinc-950 text-white hover:bg-zinc-800" onClick={() => setDialogOpen(true)}>
-          <PlusIcon data-icon="inline-start" />
-          Новый клиент
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="outline">{customers.length} в списке</Badge>
+          <Button className="h-10 bg-zinc-950 text-white hover:bg-zinc-800" onClick={() => setDialogOpen(true)}>
+            <PlusIcon data-icon="inline-start" />
+            Новый клиент
+          </Button>
+        </div>
       </div>
 
       <Card className="rounded-2xl border-zinc-200 bg-white">
-        <CardHeader>
-          <CardTitle className="font-semibold text-zinc-950">Клиенты</CardTitle>
-          <CardDescription className="text-zinc-500">{customers.length} в списке</CardDescription>
-        </CardHeader>
         <CardContent>
           {customers.length ? (
             <div className="overflow-x-auto">

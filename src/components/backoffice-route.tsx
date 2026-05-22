@@ -43,7 +43,8 @@ function canAccessSection(section: Section, role: string, canAccessCash: boolean
       section === "ready-orders" ||
       section === "orders" ||
       section === "clients" ||
-      section === "deals"
+      section === "deals" ||
+      section === "bouquets"
     )
   }
 

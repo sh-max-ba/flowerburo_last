@@ -1,23 +1,29 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useTransition } from "react"
 import type React from "react"
 import Link from "next/link"
+import { usePathname, useRouter } from "next/navigation"
 import {
   BanknoteIcon,
   BoxesIcon,
   ClipboardListIcon,
+  Flower2Icon,
   HistoryIcon,
   LogOutIcon,
-  MenuIcon,
   PackageCheckIcon,
   SettingsIcon,
   TagsIcon,
   UserCheckIcon,
 } from "lucide-react"
+import { toast } from "sonner"
+import { closeShiftAction, openShiftAction } from "@/app/actions"
 import { logoutAction } from "@/app/auth-actions"
+import type { ShiftShellContext } from "@/lib/app-shell"
 import type { CurrentUser, UserRole } from "@/lib/db"
-import { PageHeader } from "@/components/page-header"
+import { getPageContext, getPageTitle } from "@/lib/page-title"
+import { AppTopbar } from "@/components/app-topbar"
+import { ShiftSheet } from "@/components/shifts/shift-sheet"
 import { Button } from "@/components/ui/button"
 import {
   Sidebar,
@@ -33,16 +39,27 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarTrigger,
 } from "@/components/ui/sidebar"
 
-type CrmSection = "clients" | "deals" | "sales" | "orders" | "ready-orders" | "stock" | "stock-acts" | "history" | "shifts" | "settings"
+type CrmSection =
+  | "clients"
+  | "deals"
+  | "bouquets"
+  | "sales"
+  | "orders"
+  | "ready-orders"
+  | "stock"
+  | "stock-acts"
+  | "history"
+  | "shifts"
+  | "settings"
 
 type CrmShellProps = {
   user: CurrentUser
   active: CrmSection
   title: string
   actions?: React.ReactNode
+  shiftContext?: ShiftShellContext
   children: React.ReactNode
 }
 
@@ -61,6 +78,7 @@ const navItems: Array<{
 }> = [
   { id: "deals", label: "Сделки", icon: TagsIcon, href: "/deals", roles: ["owner", "manager"] },
   { id: "clients", label: "Клиенты", icon: UserCheckIcon, href: "/clients", roles: ["owner", "manager"] },
+  { id: "bouquets", label: "Букеты", icon: Flower2Icon, href: "/bouquets", roles: ["owner", "manager"] },
   { id: "sales", label: "Касса", icon: BanknoteIcon, href: "/cash", roles: ["owner", "manager"] },
   { id: "orders", label: "Стол заказов", icon: ClipboardListIcon, href: "/orders", roles: ["owner", "manager", "florist"] },
   { id: "ready-orders", label: "Готовые заказы", icon: PackageCheckIcon, href: "/ready-orders", roles: ["owner", "manager"] },
@@ -72,27 +90,35 @@ const navItems: Array<{
 ] as const
 
 const navGroups: Array<{ label: string; ids: CrmSection[] }> = [
-  { label: "CRM", ids: ["deals", "clients"] },
+  { label: "CRM", ids: ["deals", "clients", "bouquets"] },
   { label: "Работа", ids: ["sales", "orders", "ready-orders"] },
   { label: "Склад", ids: ["stock", "stock-acts", "history"] },
   { label: "Администрирование", ids: ["shifts", "settings"] },
 ]
 
-const descriptions: Partial<Record<CrmSection, string>> = {
-  deals: "Воронка продаж и обработка заявок",
-  clients: "База клиентов, скидки и история заказов",
-  sales: "Продажи, заказы и денежные операции смены",
-  orders: "Состав, сроки и статусы заказов в работе",
-  "ready-orders": "Выдача, доставка и финальная оплата готовых заказов",
-  stock: "Остатки, акты, импорт и движение товаров",
-  "stock-acts": "Черновики, проведения и отмены складских актов",
-  history: "Движения товаров и складская история",
-  shifts: "Открытие, закрытие и сверка кассовых смен",
-  settings: "Пользователи, поставщики и административные справочники",
-}
-
-export function CrmShell({ user, active, title, actions, children }: CrmShellProps) {
+export function CrmShell({ user, active, title, actions, shiftContext, children }: CrmShellProps) {
+  const router = useRouter()
+  const pathname = usePathname()
+  const [shiftSheet, setShiftSheet] = useState(false)
+  const [isPending, startTransition] = useTransition()
   const visibleItems = navItems.filter((item) => item.roles.includes(user.role))
+  const topbarTitle = getPageTitle(pathname) || title
+  const topbarContext = getPageContext(pathname)
+
+  function submitShiftForm(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const formData = new FormData(event.currentTarget)
+    startTransition(async () => {
+      const result = await (shiftContext?.openShift ? closeShiftAction(formData) : openShiftAction(formData))
+      if (result.ok) {
+        toast.success(result.message)
+        setShiftSheet(false)
+        router.refresh()
+      } else {
+        toast.error(result.message)
+      }
+    })
+  }
 
   return (
     <SidebarProvider>
@@ -165,21 +191,38 @@ export function CrmShell({ user, active, title, actions, children }: CrmShellPro
       </Sidebar>
 
       <SidebarInset className="bg-zinc-50">
-        <header className="sticky top-0 z-30 flex min-h-14 items-center gap-3 border-b border-zinc-200 bg-white px-4 shadow-sm md:px-5">
-          <div className="flex min-w-0 items-center gap-3">
-            <SidebarTrigger variant="ghost" size="icon-sm">
-              <MenuIcon />
-            </SidebarTrigger>
-            <span className="truncate text-sm font-medium text-zinc-500">Flower Buro</span>
-          </div>
-        </header>
+        <AppTopbar
+          title={topbarTitle}
+          context={topbarContext}
+          userName={user.name}
+          roleLabel={roleLabels[user.role]}
+          openShift={shiftContext?.openShift}
+          canManageShift={shiftContext?.canManageShift}
+          canViewShiftDetails={user.role === "owner"}
+          onShiftAction={shiftContext ? () => setShiftSheet(true) : undefined}
+        />
         <main className="flex flex-1 flex-col p-4 md:p-5">
           <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
-            <PageHeader title={title} description={descriptions[active]} actions={actions} />
+            {actions ? <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div> : null}
             {children}
           </div>
         </main>
       </SidebarInset>
+      {shiftContext ? (
+        <ShiftSheet
+          open={shiftSheet}
+          currentUserId={user.id}
+          currentUserName={user.name}
+          currentUserRole={user.role}
+          defaultOpeningCash={shiftContext.defaultOpeningCash}
+          activeFlorists={shiftContext.activeFlorists}
+          openShift={shiftContext.openShift}
+          openShiftDetails={shiftContext.openShiftDetails}
+          pending={isPending}
+          onOpenChange={setShiftSheet}
+          onSubmit={submitShiftForm}
+        />
+      ) : null}
     </SidebarProvider>
   )
 }

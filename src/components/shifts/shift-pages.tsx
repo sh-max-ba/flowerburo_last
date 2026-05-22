@@ -9,7 +9,6 @@ import { closeShiftAction } from "@/app/actions"
 import type { DashboardData, ShiftDetails } from "@/lib/db"
 import { cashTransactionTypeLabel, getPaymentMethodLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
-import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
@@ -38,93 +37,70 @@ export function ShiftsPage({ data }: { data: DashboardData }) {
   const shiftDetailsById = new Map(data.shiftDetails.map((detail) => [detail.shift.id, detail]))
 
   return (
-    <main className="min-h-screen bg-zinc-50 px-4 py-5 md:px-6">
-      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
-        <PageHeader
-          title="Смены"
-          description="Открытие, закрытие и сверка кассовых смен"
-          actions={
-            <Link className={buttonVariants({ variant: "outline" })} href="/">
-              <ArrowLeftIcon data-icon="inline-start" />
-              В backoffice
-            </Link>
-          }
-        />
+    <Card className="rounded-2xl border bg-white">
+      <CardContent>
+        {!data.shifts.length ? (
+          <CompactEmpty title="Смен пока нет" />
+        ) : (
+          <div className="min-w-0 overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>№</TableHead>
+                  <TableHead>Ответственный</TableHead>
+                  <TableHead>Открыта</TableHead>
+                  <TableHead>Закрыта</TableHead>
+                  <TableHead>Начальная наличка</TableHead>
+                  <TableHead>Ожидается</TableHead>
+                  <TableHead>Факт</TableHead>
+                  <TableHead>Разница</TableHead>
+                  <TableHead>Статус</TableHead>
+                  <TableHead className="text-right">Действие</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.shifts.map((shift) => {
+                  const detail = shiftDetailsById.get(shift.id)
+                  const difference = shift.closingCash === null ? null : shift.closingCash - shift.expectedCash
 
-        <Card className="rounded-2xl border bg-white">
-          <CardHeader>
-            <CardTitle>Таблица смен</CardTitle>
-            <CardDescription>Откройте смену, чтобы увидеть формулу, операции, продажи и оплаты заказов</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {!data.shifts.length ? (
-              <CompactEmpty title="Смен пока нет" />
-            ) : (
-              <div className="min-w-0 overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>№</TableHead>
-                      <TableHead>Ответственный</TableHead>
-                      <TableHead>Открыта</TableHead>
-                      <TableHead>Закрыта</TableHead>
-                      <TableHead>Начальная наличка</TableHead>
-                      <TableHead>Ожидается</TableHead>
-                      <TableHead>Факт</TableHead>
-                      <TableHead>Разница</TableHead>
-                      <TableHead>Статус</TableHead>
-                      <TableHead className="text-right">Действие</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.shifts.map((shift) => {
-                      const detail = shiftDetailsById.get(shift.id)
-                      const difference = shift.closingCash === null ? null : shift.closingCash - shift.expectedCash
-
-                      return (
-                        <TableRow
-                          key={shift.id}
-                          className="cursor-pointer"
-                          onClick={() => router.push(`/shifts/${shift.id}`)}
+                  return (
+                    <TableRow
+                      key={shift.id}
+                      className="cursor-pointer"
+                      onClick={() => router.push(`/shifts/${shift.id}`)}
+                    >
+                      <TableCell className="font-medium">#{shift.id}</TableCell>
+                      <TableCell>{detail?.cashier ?? (shift.cashierName || "-")}</TableCell>
+                      <TableCell>{dateTime(shift.openedAt)}</TableCell>
+                      <TableCell>{shift.closedAt ? dateTime(shift.closedAt) : "активна"}</TableCell>
+                      <TableCell>{formatMoney(shift.openingCash)}</TableCell>
+                      <TableCell className="font-medium">{formatMoney(shift.expectedCash)}</TableCell>
+                      <TableCell>{shift.closingCash === null ? "-" : formatMoney(shift.closingCash)}</TableCell>
+                      <TableCell>
+                        {difference === null ? "-" : <DifferenceBadge difference={difference} />}
+                      </TableCell>
+                      <TableCell>
+                        <ShiftStatusBadge status={shift.status} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Link
+                          className={buttonVariants({ variant: "outline", size: "sm" })}
+                          href={`/shifts/${shift.id}`}
+                          onClick={(event) => event.stopPropagation()}
                         >
-                          <TableCell className="font-medium">#{shift.id}</TableCell>
-                          <TableCell>{detail?.cashier ?? (shift.cashierName || "-")}</TableCell>
-                          <TableCell>{dateTime(shift.openedAt)}</TableCell>
-                          <TableCell>{shift.closedAt ? dateTime(shift.closedAt) : "активна"}</TableCell>
-                          <TableCell>{formatMoney(shift.openingCash)}</TableCell>
-                          <TableCell className="font-medium">{formatMoney(shift.expectedCash)}</TableCell>
-                          <TableCell>{shift.closingCash === null ? "-" : formatMoney(shift.closingCash)}</TableCell>
-                          <TableCell>
-                            {difference === null ? (
-                              "-"
-                            ) : (
-                              <DifferenceBadge difference={difference} />
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <ShiftStatusBadge status={shift.status} />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Link
-                              className={buttonVariants({ variant: "outline", size: "sm" })}
-                              href={`/shifts/${shift.id}`}
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              <EyeIcon data-icon="inline-start" />
-                              Открыть
-                            </Link>
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </main>
+                          <EyeIcon data-icon="inline-start" />
+                          Открыть
+                        </Link>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -134,28 +110,14 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
   const revenueByMethod = getRevenueByMethod(detail)
 
   return (
-    <main className="min-h-screen bg-zinc-50 px-4 py-5 md:px-6">
-      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
-        <PageHeader
-          title={`Смена #${shift.id}`}
-          description={
-            <>
-              Ответственный: {detail.cashier} · Открыта: {dateTime(shift.openedAt)}
-              {shift.closedAt ? ` · Закрыта: ${dateTime(shift.closedAt)}` : ""}
-            </>
-          }
-          actions={
-            <>
-              <ShiftStatusBadge status={shift.status} />
-              <Link className={buttonVariants({ variant: "outline" })} href="/shifts">
-                <ArrowLeftIcon data-icon="inline-start" />
-                Назад к сменам
-              </Link>
-              {shift.status === "open" && <ShiftCloseDialog detail={detail} />}
-            </>
-          }
-        />
-
+      <div className="flex flex-col gap-5">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <ShiftStatusBadge status={shift.status} />
+          <Link className={buttonVariants({ variant: "outline", size: "sm" })} href="/shifts">
+            <ArrowLeftIcon data-icon="inline-start" />
+            Назад к сменам
+          </Link>
+        </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <ShiftStat title="Выручка до скидок" value={formatMoney(detail.summary.revenueBeforeDiscount)} />
           <ShiftStat title="Скидки" value={formatMoney(detail.summary.discountTotal)} />
@@ -236,7 +198,6 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
 
         <ShiftOrderPaymentsCard orders={detail.relatedOrders} />
       </div>
-    </main>
   )
 }
 
@@ -529,22 +490,28 @@ function ShiftOrderPaymentsCard({ orders }: { orders: ShiftDetails["relatedOrder
   )
 }
 
+type ShiftItemRow = {
+  id: number
+  name: string
+  productCode: string
+  qty: number
+  price: number
+  bouquetName?: string
+  bouquetGroupId?: string
+  discountAmount?: number
+  totalBeforeDiscount?: number
+  total: number
+}
+
 function ShiftItemsTable({
   items,
   emptyTitle,
 }: {
-  items: Array<{
-    id: number
-    name: string
-    productCode: string
-    qty: number
-    price: number
-    discountAmount?: number
-    totalBeforeDiscount?: number
-    total: number
-  }>
+  items: ShiftItemRow[]
   emptyTitle: string
 }) {
+  const groups = groupShiftItems(items)
+
   if (!items.length) {
     return <div className="px-6 py-4 text-sm text-muted-foreground">{emptyTitle}</div>
   }
@@ -564,21 +531,90 @@ function ShiftItemsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {items.map((item) => (
-            <TableRow key={item.id}>
-              <TableCell className="font-medium">{item.name}</TableCell>
-              <TableCell>{item.productCode || "-"}</TableCell>
-              <TableCell>{formatNumber(item.qty)}</TableCell>
-              <TableCell>{formatMoney(item.price)}</TableCell>
-              <TableCell>{formatMoney(item.totalBeforeDiscount ?? item.total)}</TableCell>
-              <TableCell>{formatMoney(item.discountAmount ?? 0)}</TableCell>
-              <TableCell className="font-medium">{formatMoney(item.total)}</TableCell>
-            </TableRow>
-          ))}
+          {groups.map((group) => {
+            if (group.type === "bouquet") {
+              const totalBeforeDiscount = group.items.reduce(
+                (sum, item) => sum + (item.totalBeforeDiscount ?? item.total),
+                0
+              )
+              const discountAmount = group.items.reduce((sum, item) => sum + (item.discountAmount ?? 0), 0)
+              const total = group.items.reduce((sum, item) => sum + item.total, 0)
+              const price = group.items.reduce((sum, item) => sum + item.price, 0)
+
+              return (
+                <TableRow key={group.key}>
+                  <TableCell colSpan={2}>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex flex-wrap items-center gap-2 font-medium">
+                        <Badge variant="secondary">Букет</Badge>
+                        <span>{group.bouquetName || "Букет"}</span>
+                      </div>
+                      <div className="grid gap-1 text-xs text-muted-foreground">
+                        {group.items.map((item) => (
+                          <div key={item.id} className="flex justify-between gap-3">
+                            <span>{item.name}</span>
+                            <span>{formatNumber(item.qty)} шт</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell>-</TableCell>
+                  <TableCell>{formatMoney(price)}</TableCell>
+                  <TableCell>{formatMoney(totalBeforeDiscount)}</TableCell>
+                  <TableCell>{formatMoney(discountAmount)}</TableCell>
+                  <TableCell className="font-medium">{formatMoney(total)}</TableCell>
+                </TableRow>
+              )
+            }
+
+            const item = group.item
+            return (
+              <TableRow key={item.id}>
+                <TableCell className="font-medium">{item.name}</TableCell>
+                <TableCell>{item.productCode || "-"}</TableCell>
+                <TableCell>{formatNumber(item.qty)}</TableCell>
+                <TableCell>{formatMoney(item.price)}</TableCell>
+                <TableCell>{formatMoney(item.totalBeforeDiscount ?? item.total)}</TableCell>
+                <TableCell>{formatMoney(item.discountAmount ?? 0)}</TableCell>
+                <TableCell className="font-medium">{formatMoney(item.total)}</TableCell>
+              </TableRow>
+            )
+          })}
         </TableBody>
       </Table>
     </div>
   )
+}
+
+function groupShiftItems(items: ShiftItemRow[]) {
+  const groups: Array<
+    | { type: "single"; key: string; item: ShiftItemRow }
+    | { type: "bouquet"; key: string; bouquetName: string; items: ShiftItemRow[] }
+  > = []
+  const bouquetGroups = new Map<string, Extract<(typeof groups)[number], { type: "bouquet" }>>()
+
+  for (const item of items) {
+    if (!item.bouquetGroupId) {
+      groups.push({ type: "single", key: `item-${item.id}`, item })
+      continue
+    }
+
+    let group = bouquetGroups.get(item.bouquetGroupId)
+    if (!group) {
+      group = {
+        type: "bouquet",
+        key: item.bouquetGroupId,
+        bouquetName: item.bouquetName ?? "",
+        items: [],
+      }
+      bouquetGroups.set(item.bouquetGroupId, group)
+      groups.push(group)
+    }
+    group.items.push(item)
+  }
+
+  return groups
 }
 
 function ShiftStat({ title, value, emphasis }: { title: string; value: string; emphasis?: boolean }) {

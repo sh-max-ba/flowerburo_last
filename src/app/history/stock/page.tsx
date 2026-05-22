@@ -1,11 +1,12 @@
 import Link from "next/link"
 import { AccessDenied } from "@/components/access-denied"
-import { PageHeader } from "@/components/page-header"
+import { CrmShell } from "@/components/crm-shell"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { getShiftShellContext } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getHistoryReportData, type Movement } from "@/lib/db"
 
@@ -20,23 +21,14 @@ export default async function StockMovementsPage() {
   const report = getHistoryReportData()
 
   return (
-    <main className="min-h-screen bg-zinc-50 p-4 md:p-6">
-      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
-        <PageHeader
-          title="Движения склада"
-          description="Поступления, списания, импорт и списания по заказам"
-          actions={
-            <Link href="/stock" className={buttonVariants({ variant: "outline" })}>
-              Вернуться на склад
-            </Link>
-          }
-        />
+    <CrmShell user={user} active="history" title="История склада" shiftContext={getShiftShellContext(user)}>
+      <div className="flex justify-end">
+        <Link href="/stock" className={buttonVariants({ variant: "outline", size: "sm" })}>
+          Вернуться на склад
+        </Link>
+      </div>
 
         <Card className="rounded-2xl border bg-white">
-          <CardHeader>
-            <CardTitle>История движений</CardTitle>
-            <CardDescription>Изменения количества товаров без резервов.</CardDescription>
-          </CardHeader>
           <CardContent>
             {report.stockMovements.length === 0 ? (
               <Empty className="min-h-56">
@@ -79,8 +71,7 @@ export default async function StockMovementsPage() {
             )}
           </CardContent>
         </Card>
-      </div>
-    </main>
+    </CrmShell>
   )
 }
 

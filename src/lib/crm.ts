@@ -4,6 +4,7 @@ import {
   calculateCommercialTotals,
   calculateLineTotal,
   normalizeDiscountType,
+  type CommercialLineInput,
   type DiscountType,
 } from "@/lib/pricing"
 
@@ -55,6 +56,9 @@ export type DealItem = {
   imagePath: string
   qty: number
   price: number
+  bouquetId: number | null
+  bouquetName: string
+  bouquetGroupId: string
   discountType: DiscountType
   discountValue: number
   discountAmount: number
@@ -70,6 +74,7 @@ export type Deal = {
   customerId: number | null
   customerName: string
   customerPhone: string
+  recipientPhone: string
   customerDefaultDiscountPercent: number
   responsibleUserId: number | null
   responsibleUserName: string
@@ -254,7 +259,8 @@ export function listCustomerOrders(customerId: number): Order[] {
     .prepare(
       `SELECT id, number, customer_id as customerId, deal_id as dealId,
         created_by_user_id as createdByUserId, updated_by_user_id as updatedByUserId,
-        customer, phone, COALESCE(source, '') as source, COALESCE(delivery_type, '') as deliveryType,
+        customer, phone, COALESCE(recipient_phone, '') as recipientPhone,
+        COALESCE(source, '') as source, COALESCE(delivery_type, '') as deliveryType,
         COALESCE(address, '') as address, due_at as dueAt, status,
         COALESCE(NULLIF(items_total_before_discount, 0), total) as itemsTotalBeforeDiscount,
         COALESCE(items_discount_total, 0) as itemsDiscountTotal,
@@ -285,6 +291,7 @@ export function listCustomerOrders(customerId: number): Order[] {
     dealId: row.dealId === null ? null : toNumber(row.dealId),
     customer: String(row.customer ?? ""),
     phone: String(row.phone ?? ""),
+    recipientPhone: String(row.recipientPhone ?? ""),
     source: String(row.source ?? ""),
     deliveryType: String(row.deliveryType ?? ""),
     address: String(row.address ?? ""),
@@ -447,11 +454,11 @@ export function createDeal(formData: FormData, currentUser: CurrentUser) {
       .prepare(
         `INSERT INTO deals (
           customer_id, customer_name, customer_phone, responsible_user_id, responsible_user_name,
-          pipeline_id, stage_id, status, source, title, due_at, delivery_type, address, comment,
+          pipeline_id, stage_id, status, source, title, due_at, delivery_type, address, recipient_phone, comment,
           deal_discount_type, deal_discount_value, updated_at
         ) VALUES (
           @customerId, @customerName, @customerPhone, @responsibleUserId, @responsibleUserName,
-          @pipelineId, @stageId, 'open', @source, @title, @dueAt, @deliveryType, @address, @comment,
+          @pipelineId, @stageId, 'open', @source, @title, @dueAt, @deliveryType, @address, @recipientPhone, @comment,
           @dealDiscountType, @dealDiscountValue, CURRENT_TIMESTAMP
         )`
       )
@@ -468,6 +475,7 @@ export function createDeal(formData: FormData, currentUser: CurrentUser) {
         dueAt: clean(formData.get("dueAt")),
         deliveryType: clean(formData.get("deliveryType")),
         address: clean(formData.get("address")),
+        recipientPhone: clean(formData.get("recipientPhone")),
         comment: clean(formData.get("comment")),
         dealDiscountType: discountType,
         dealDiscountValue: discountValue,
@@ -507,7 +515,7 @@ export function updateDealFields(formData: FormData, currentUser: CurrentUser) {
          SET customer_id = @customerId, customer_name = @customerName, customer_phone = @customerPhone,
           responsible_user_id = @responsibleUserId, responsible_user_name = @responsibleUserName,
           stage_id = @stageId, status = @status, source = @source, title = @title, due_at = @dueAt,
-          delivery_type = @deliveryType, address = @address, comment = @comment,
+          delivery_type = @deliveryType, address = @address, recipient_phone = @recipientPhone, comment = @comment,
           deal_discount_type = @dealDiscountType, deal_discount_value = @dealDiscountValue,
           updated_at = CURRENT_TIMESTAMP
          WHERE id = @dealId`
@@ -526,6 +534,7 @@ export function updateDealFields(formData: FormData, currentUser: CurrentUser) {
         dueAt: clean(formData.get("dueAt")),
         deliveryType: clean(formData.get("deliveryType")),
         address: clean(formData.get("address")),
+        recipientPhone: clean(formData.get("recipientPhone")),
         comment: clean(formData.get("comment")),
         dealDiscountType: discountType,
         dealDiscountValue: discountValue,
@@ -561,7 +570,7 @@ export function addDealItem(dealId: number, productCode: string) {
       throw new Error("Товар не найден.")
     }
     const existing = client
-      .prepare("SELECT id, qty FROM deal_items WHERE deal_id = ? AND product_code = ?")
+      .prepare("SELECT id, qty FROM deal_items WHERE deal_id = ? AND product_code = ? AND COALESCE(bouquet_group_id, '') = ''")
       .get(dealId, product.code) as { id: number; qty: number } | undefined
 
     if (existing) {
@@ -576,6 +585,64 @@ export function addDealItem(dealId: number, productCode: string) {
         )
         .run(dealId, product.code, product.name, product.salePrice)
     }
+    recalculateDealTotals(dealId, client)
+  })
+
+  add()
+}
+
+export function addDealBouquet(dealId: number, bouquetId: number) {
+  const client = db()
+  const add = client.transaction(() => {
+    getDealRecord(client, dealId)
+    const bouquet = getBouquetTemplateForDeal(client, bouquetId)
+    if (!bouquet) {
+      throw new Error("Букет не найден.")
+    }
+    if (!bouquet.isActive) {
+      throw new Error("Букет выключен.")
+    }
+    if (!bouquet.items.length) {
+      throw new Error("В букете нет состава.")
+    }
+
+    const bouquetGroupId = createBouquetGroupId(bouquet.id)
+    const insertItem = client.prepare(
+      `INSERT INTO deal_items (
+        deal_id, product_code, product_name, qty, price, bouquet_id, bouquet_name, bouquet_group_id,
+        discount_type, discount_value, discount_amount, total_before_discount, total, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'none', 0, ?, ?, ?, CURRENT_TIMESTAMP)`
+    )
+
+    bouquet.items.forEach((item, index) => {
+      const product = getProduct(client, item.productCode)
+      if (!product) {
+        throw new Error(`Товар ${item.productCode} не найден.`)
+      }
+
+      const price = index === 0 ? bouquet.price : 0
+      const line = calculateComponentLineTotal({
+        qty: item.qty,
+        price,
+        bouquetGroupId,
+        discountType: "none",
+        discountValue: 0,
+      })
+      insertItem.run(
+        dealId,
+        item.productCode,
+        item.productName,
+        item.qty,
+        price,
+        bouquet.id,
+        bouquet.name,
+        bouquetGroupId,
+        line.discountAmount,
+        line.totalBeforeDiscount,
+        line.total
+      )
+    })
+
     recalculateDealTotals(dealId, client)
   })
 
@@ -621,20 +688,72 @@ export function removeDealItem(dealId: number, itemId: number) {
   const client = db()
   const remove = client.transaction(() => {
     getDealRecord(client, dealId)
-    client.prepare("DELETE FROM deal_items WHERE id = ? AND deal_id = ?").run(itemId, dealId)
+    const item = client
+      .prepare("SELECT COALESCE(bouquet_group_id, '') as bouquetGroupId FROM deal_items WHERE id = ? AND deal_id = ?")
+      .get(itemId, dealId) as { bouquetGroupId: string } | undefined
+    const bouquetGroupId = clean(item?.bouquetGroupId)
+    if (bouquetGroupId) {
+      client.prepare("DELETE FROM deal_items WHERE deal_id = ? AND bouquet_group_id = ?").run(dealId, bouquetGroupId)
+    } else {
+      client.prepare("DELETE FROM deal_items WHERE id = ? AND deal_id = ?").run(itemId, dealId)
+    }
     recalculateDealTotals(dealId, client)
   })
 
   remove()
 }
 
+export function removeDealItemGroup(dealId: number, bouquetGroupId: string) {
+  const client = db()
+  const remove = client.transaction(() => {
+    getDealRecord(client, dealId)
+    const groupId = clean(bouquetGroupId)
+    if (!groupId) {
+      throw new Error("Группа букета не найдена.")
+    }
+
+    const result = client.prepare("DELETE FROM deal_items WHERE deal_id = ? AND bouquet_group_id = ?").run(dealId, groupId)
+    if (result.changes === 0) {
+      throw new Error("Группа букета не найдена.")
+    }
+    recalculateDealTotals(dealId, client)
+  })
+
+  remove()
+}
+
+function calculateComponentLineTotal({
+  qty,
+  price,
+  discountType,
+  discountValue,
+  bouquetGroupId,
+}: CommercialLineInput & { bouquetGroupId?: string | null }) {
+  return calculateLineTotal({
+    qty: bouquetGroupId && price > 0 ? 1 : qty,
+    price,
+    discountType,
+    discountValue,
+  })
+}
+
+function itemsForCommercialTotals<T extends CommercialLineInput & { bouquetGroupId?: string | null }>(items: T[]) {
+  return items.map((item) => ({
+    qty: item.bouquetGroupId && item.price > 0 ? 1 : item.qty,
+    price: item.price,
+    discountType: item.discountType,
+    discountValue: item.discountValue,
+  }))
+}
+
 export function recalculateDealTotals(dealId: number, client: Database.Database = db()) {
   const deal = getDealRecord(client, dealId)
   const items = listDealItems(dealId, client)
   const lineTotals = items.map((item) =>
-    calculateLineTotal({
+    calculateComponentLineTotal({
       qty: item.qty,
       price: item.price,
+      bouquetGroupId: item.bouquetGroupId,
       discountType: item.discountType,
       discountValue: item.discountValue,
     })
@@ -650,7 +769,11 @@ export function recalculateDealTotals(dealId: number, client: Database.Database 
     updateItem.run(total.discountAmount, total.totalBeforeDiscount, total.total, item.id)
   })
 
-  const totals = calculateCommercialTotals(items, String(deal.deal_discount_type), toNumber(deal.deal_discount_value))
+  const totals = calculateCommercialTotals(
+    itemsForCommercialTotals(items),
+    String(deal.deal_discount_type),
+    toNumber(deal.deal_discount_value)
+  )
   client
     .prepare(
       `UPDATE deals
@@ -864,6 +987,47 @@ function getProduct(client: Database.Database, productCode: string) {
     : null
 }
 
+function getBouquetTemplateForDeal(client: Database.Database, bouquetId: number) {
+  const row = client
+    .prepare(
+      `SELECT id, name, COALESCE(description, '') as description, COALESCE(price, 0) as price,
+        COALESCE(is_active, 1) as isActive
+       FROM bouquet_templates
+       WHERE id = ?`
+    )
+    .get(bouquetId) as Record<string, unknown> | undefined
+
+  if (!row) {
+    return null
+  }
+
+  const itemRows = client
+    .prepare(
+      `SELECT product_code as productCode, product_name as productName, qty
+       FROM bouquet_template_items
+       WHERE bouquet_id = ?
+       ORDER BY id ASC`
+    )
+    .all(bouquetId) as Array<Record<string, unknown>>
+
+  return {
+    id: toNumber(row.id),
+    name: String(row.name ?? ""),
+    description: String(row.description ?? ""),
+    price: toNumber(row.price),
+    isActive: toNumber(row.isActive) === 1,
+    items: itemRows.map((item) => ({
+      productCode: String(item.productCode ?? ""),
+      productName: String(item.productName ?? ""),
+      qty: toNumber(item.qty),
+    })),
+  }
+}
+
+function createBouquetGroupId(bouquetId: number) {
+  return `bouquet-${bouquetId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 function getDealRecord(client: Database.Database, dealId: number) {
   const deal = client.prepare("SELECT * FROM deals WHERE id = ?").get(dealId) as
     | Record<string, unknown>
@@ -882,6 +1046,8 @@ function listDealItems(dealId: number, client: Database.Database = db()) {
         COALESCE(products.image_path, '') as imagePath,
         qty, price, COALESCE(discount_type, 'none') as discountType,
         COALESCE(discount_value, 0) as discountValue, COALESCE(discount_amount, 0) as discountAmount,
+        deal_items.bouquet_id as bouquetId, COALESCE(deal_items.bouquet_name, '') as bouquetName,
+        COALESCE(deal_items.bouquet_group_id, '') as bouquetGroupId,
         COALESCE(total_before_discount, 0) as totalBeforeDiscount, COALESCE(total, 0) as total,
         deal_items.created_at as createdAt, deal_items.updated_at as updatedAt
        FROM deal_items
@@ -899,6 +1065,9 @@ function listDealItems(dealId: number, client: Database.Database = db()) {
     imagePath: String(row.imagePath ?? ""),
     qty: toNumber(row.qty),
     price: toNumber(row.price),
+    bouquetId: row.bouquetId === null || row.bouquetId === undefined ? null : toNumber(row.bouquetId),
+    bouquetName: String(row.bouquetName ?? ""),
+    bouquetGroupId: String(row.bouquetGroupId ?? ""),
     discountType: normalizeDiscountType(String(row.discountType ?? "none")),
     discountValue: toNumber(row.discountValue),
     discountAmount: toNumber(row.discountAmount),
@@ -937,6 +1106,7 @@ function mapDeal(row: Record<string, unknown>, items: DealItem[]): Deal {
     customerId: row.customer_id === null || row.customer_id === undefined ? null : toNumber(row.customer_id),
     customerName: String(row.display_customer_name ?? row.customer_name ?? ""),
     customerPhone: String(row.display_customer_phone ?? row.customer_phone ?? ""),
+    recipientPhone: String(row.recipient_phone ?? ""),
     customerDefaultDiscountPercent: clampPercent(toNumber(row.customerDefaultDiscountPercent)),
     responsibleUserId:
       row.responsible_user_id === null || row.responsible_user_id === undefined

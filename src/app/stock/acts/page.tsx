@@ -1,9 +1,9 @@
 import Link from "next/link"
 import { AccessDenied } from "@/components/access-denied"
-import { PageHeader } from "@/components/page-header"
+import { CrmShell } from "@/components/crm-shell"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import {
@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { getShiftShellContext } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { listStockDocuments, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
 import { stockDocumentStatusLabel, stockDocumentTypeLabel } from "@/lib/labels"
@@ -34,23 +35,14 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
   const documents = listStockDocuments({ type, status, query })
 
   return (
-    <main className="min-h-screen bg-zinc-50 p-4 md:p-6">
-      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
-        <PageHeader
-          title="Акты склада"
-          description="Черновики, проведения и отмены складских актов"
-          actions={
-            <Link href="/stock" className={buttonVariants({ variant: "outline" })}>
-              Вернуться на склад
-            </Link>
-          }
-        />
+    <CrmShell user={user} active="stock-acts" title="Акты склада" shiftContext={getShiftShellContext(user)}>
+      <div className="flex justify-end">
+        <Link href="/stock" className={buttonVariants({ variant: "outline", size: "sm" })}>
+          Вернуться на склад
+        </Link>
+      </div>
 
         <Card className="rounded-2xl border bg-white">
-          <CardHeader>
-            <CardTitle>Список актов</CardTitle>
-            <CardDescription>Поиск по номеру и комментарию, фильтр по типу и статусу.</CardDescription>
-          </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <form className="grid gap-2 md:grid-cols-[1fr_220px_220px_auto]">
               <Input name="query" defaultValue={query} placeholder="Номер или комментарий" />
@@ -160,8 +152,7 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
             )}
           </CardContent>
         </Card>
-      </div>
-    </main>
+    </CrmShell>
   )
 }
 

@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation"
 import { ShiftDetailPage } from "@/components/shifts/shift-pages"
 import { AccessDenied } from "@/components/access-denied"
+import { CrmShell } from "@/components/crm-shell"
+import { getShiftShellContext } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getShiftDetails } from "@/lib/db"
 
@@ -24,7 +26,11 @@ export default async function Page({ params }: PageProps<"/shifts/[id]">) {
     notFound()
   }
 
-  return <ShiftDetailPage detail={detail} />
+  return (
+    <CrmShell user={user} active="shifts" title={`Смена #${detail.shift.id}`} shiftContext={getShiftShellContext(user)}>
+      <ShiftDetailPage detail={detail} />
+    </CrmShell>
+  )
 }
 
 function getShiftDetailsOrNull(shiftId: number) {

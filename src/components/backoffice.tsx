@@ -14,6 +14,7 @@ import {
   CheckCircle2Icon,
   ClipboardListIcon,
   CopyIcon,
+  Flower2Icon,
   PackageCheckIcon,
   DownloadIcon,
   EyeIcon,
@@ -22,7 +23,6 @@ import {
   KeyRoundIcon,
   ListIcon,
   LogOutIcon,
-  MenuIcon,
   MinusCircleIcon,
   MoreHorizontalIcon,
   PencilIcon,
@@ -87,9 +87,11 @@ import type {
   CustomerOption,
   DashboardData,
   Order,
+  OrderItem,
   OrderStatus,
   PaymentMethod,
   Product,
+  BouquetTemplate,
   Supplier,
   StockDocumentType,
   UserRole,
@@ -99,9 +101,11 @@ import type {
 import { toDatetimeLocalValue } from "@/lib/datetime"
 import { getPaymentMethodLabel, paymentMethodOptions, sourceOptions } from "@/lib/labels"
 import { calculateCommercialTotals, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
+import { getPageContext, getPageTitle } from "@/lib/page-title"
 import { cn, formatMoney } from "@/lib/utils"
 import type { WazzupSettingsStatus } from "@/lib/wazzup"
-import { PageHeader } from "@/components/page-header"
+import { AppTopbar } from "@/components/app-topbar"
+import { BouquetsPage } from "@/components/bouquets/bouquets-page"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -188,7 +192,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -200,6 +203,8 @@ import { ProductThumbnail } from "@/components/products/product-thumbnail"
 import { CustomerCombobox } from "@/components/customers/customer-combobox"
 import {
   addProductToLineItems,
+  addBouquetToLineItems,
+  getProductLineItemsForTotals,
   ProductLineItems,
   type ProductLineItem,
   validateProductLineItems,
@@ -213,6 +218,7 @@ export type Section =
   | "orders"
   | "clients"
   | "deals"
+  | "bouquets"
   | "history"
   | "settings"
 type Result = Awaited<ReturnType<typeof saveProductAction>>
@@ -248,6 +254,7 @@ const orderSortOptions: Array<{ label: string; value: OrderSortMode }> = [
 const sections: Array<{ id: Section; label: string; icon: typeof BoxesIcon; href: string }> = [
   { id: "deals", label: "Сделки", icon: TagsIcon, href: "/deals" },
   { id: "clients", label: "Клиенты", icon: UserCheckIcon, href: "/clients" },
+  { id: "bouquets", label: "Букеты", icon: Flower2Icon, href: "/bouquets" },
   { id: "sales", label: "Касса", icon: ReceiptTextIcon, href: "/cash" },
   { id: "orders", label: "Стол заказов", icon: ClipboardListIcon, href: "/orders" },
   { id: "ready-orders", label: "Готовые заказы", icon: PackageCheckIcon, href: "/ready-orders" },
@@ -258,23 +265,11 @@ const sections: Array<{ id: Section; label: string; icon: typeof BoxesIcon; href
 ]
 
 const sectionGroups: Array<{ label: string; ids: Section[] }> = [
-  { label: "CRM", ids: ["deals", "clients"] },
+  { label: "CRM", ids: ["deals", "clients", "bouquets"] },
   { label: "Работа", ids: ["sales", "orders", "ready-orders"] },
   { label: "Склад", ids: ["stock", "history"] },
   { label: "Администрирование", ids: ["shifts", "settings"] },
 ]
-
-const sectionDescriptions: Record<Section, string> = {
-  stock: "Остатки, акты, импорт и движение товаров",
-  sales: "Продажи, заказы и денежные операции смены",
-  "ready-orders": "Выдача, доставка и финальная оплата готовых заказов",
-  shifts: "Открытие, закрытие и сверка кассовых смен",
-  orders: "Состав, сроки и статусы заказов в работе",
-  clients: "База клиентов, скидки и история заказов",
-  deals: "Воронка продаж и обработка заявок",
-  history: "Операции системы, продажи и движение товаров",
-  settings: "Пользователи, поставщики и административные справочники",
-}
 
 const roleLabels: Record<UserRole, string> = {
   owner: "Управляющий",
@@ -285,9 +280,21 @@ const roleLabels: Record<UserRole, string> = {
 const userRoleOptions: UserRole[] = ["owner", "manager", "florist"]
 
 const roleSectionIds: Record<UserRole, Section[]> = {
-  owner: ["deals", "clients", "sales", "orders", "ready-orders", "stock", "shifts", "history", "settings"],
-  manager: ["deals", "clients", "sales", "orders", "ready-orders"],
+  owner: ["deals", "clients", "bouquets", "sales", "orders", "ready-orders", "stock", "shifts", "history", "settings"],
+  manager: ["deals", "clients", "bouquets", "sales", "orders", "ready-orders"],
   florist: ["orders"],
+}
+
+function canCloseDisplayedShift(user: CurrentUser, shift: NonNullable<DashboardData["stats"]["openShift"]>) {
+  if (user.role === "owner") {
+    return true
+  }
+
+  if (user.role === "manager") {
+    return shift.type === "night" || (shift.type === "day" && shift.userId === user.id)
+  }
+
+  return shift.type === "night" && shift.userId === user.id
 }
 
 function normalizeCategoryPath(value: string | null | undefined) {
@@ -540,10 +547,13 @@ export function Backoffice({
   const [isPending, startTransition] = useTransition()
   const displayedSection = visibleSectionIds.includes(section) ? section : visibleSectionIds[0]
   const activeSection = sections.find((item) => item.id === displayedSection)
-  const canManageShift = user.role === "owner" || user.role === "manager" || canAccessCash
+  const canManageShift = data.stats.openShift
+    ? canCloseDisplayedShift(user, data.stats.openShift)
+    : user.role === "owner" || user.role === "manager"
   const openShiftDetails = data.stats.openShift
     ? data.shiftDetails.find((detail) => detail.shift.id === data.stats.openShift?.id) ?? null
     : null
+  const activeHref = activeSection?.href ?? "/cash"
 
   useEffect(() => {
     if (displayedSection !== "orders" && displayedSection !== "sales" && displayedSection !== "ready-orders") {
@@ -748,69 +758,23 @@ export function Backoffice({
               </Button>
             </form>
           </div>
-          <div className="flex flex-col gap-1 rounded-lg border bg-background p-3 text-xs group-data-[collapsible=icon]:hidden">
-            <div className="font-medium text-foreground">
-              {data.stats.openShift
-                ? `Смена #${data.stats.openShift.id} · Ответственный: ${
-                    data.stats.openShift.cashierName || "не указан"
-                  }`
-                : "Смена не открыта"}
-            </div>
-            {data.stats.openShift && (
-              <div className="text-muted-foreground">
-                Ожидается: {formatMoney(data.stats.openShift.expectedCash)}
-              </div>
-            )}
-          </div>
         </SidebarFooter>
       </Sidebar>
 
       <SidebarInset className="bg-zinc-50">
-        <header className="sticky top-0 z-30 flex min-h-14 items-center gap-3 border-b border-zinc-200 bg-white px-4 shadow-sm md:px-5">
-          <div className="flex min-w-0 items-center gap-3">
-            <SidebarTrigger variant="ghost" size="icon-sm">
-              <MenuIcon />
-            </SidebarTrigger>
-            <span className="truncate text-sm font-medium text-zinc-500">Flower Buro</span>
-          </div>
-        </header>
+        <AppTopbar
+          title={getPageTitle(activeHref)}
+          context={getPageContext(activeHref)}
+          userName={user.name}
+          roleLabel={roleLabels[user.role]}
+          openShift={data.stats.openShift}
+          canManageShift={canManageShift}
+          canViewShiftDetails={user.role === "owner"}
+          onShiftAction={() => setShiftSheet(true)}
+        />
 
         <main className="flex flex-1 flex-col p-4 md:p-5">
-          <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
-            <PageHeader
-              title={activeSection?.label ?? ""}
-              description={sectionDescriptions[displayedSection]}
-              actions={
-                <>
-                  <Badge variant={data.stats.openShift ? "secondary" : "outline"}>
-                    {displayedSection === "sales" && data.stats.openShift
-                      ? "Смена открыта"
-                      : data.stats.openShift
-                        ? `Смена #${data.stats.openShift.id} · ${
-                            data.stats.openShift.cashierName || "ответственный не указан"
-                          }`
-                        : "Смена закрыта"}
-                  </Badge>
-                  {displayedSection === "sales" && data.stats.openShift?.type === "night" && (
-                    <Badge variant="outline">Ночная смена</Badge>
-                  )}
-                  {canManageShift && (
-                    <Button
-                      variant={data.stats.openShift ? "outline" : "default"}
-                      onClick={() => {
-                        setSection(canAccessCash ? "sales" : displayedSection)
-                        setShiftSheet(true)
-                      }}
-                    >
-                      <BanknoteIcon data-icon="inline-start" />
-                      {data.stats.openShift ? "Закрыть смену" : "Открыть смену"}
-                    </Button>
-                  )}
-                </>
-              }
-            />
-            {displayedSection === "stock" && <StatsGrid data={data} />}
-
+          <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4">
             {displayedSection === "stock" && (
               <StockSection
                 products={filteredProducts}
@@ -868,6 +832,9 @@ export function Backoffice({
                 onReady={(order) => run(() => markOrderReadyAction(order.id))}
                 onCancel={(order) => run(() => cancelOrderAction(order.id))}
               />
+            )}
+            {displayedSection === "bouquets" && (
+              <BouquetsPage products={data.products} bouquets={data.bouquetTemplates} />
             )}
             {displayedSection === "history" && <HistorySection data={data} />}
             {displayedSection === "settings" && (
@@ -1175,27 +1142,6 @@ export function Backoffice({
   )
 }
 
-function StatsGrid({ data }: { data: DashboardData }) {
-  const stats = [
-    { label: "Товаров", value: data.stats.productsCount, subtitle: "в активном списке склада" },
-    { label: "Низкий остаток", value: data.stats.lowStockCount, subtitle: "нужно проверить закупку" },
-  ]
-
-  return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      {stats.map((item) => (
-        <Card key={item.label} className="rounded-2xl border bg-white">
-          <CardHeader>
-            <CardDescription className="text-xs">{item.label}</CardDescription>
-            <CardTitle className="text-2xl font-semibold">{item.value}</CardTitle>
-            <CardDescription>{item.subtitle}</CardDescription>
-          </CardHeader>
-        </Card>
-      ))}
-    </div>
-  )
-}
-
 function StockSection({
   products,
   categories,
@@ -1412,6 +1358,7 @@ function SalesSection({
         <TabsContent value="sale">
           <QuickSaleForm
             products={data.products}
+            bouquets={data.bouquetTemplates}
             customers={data.customers}
             pending={pending}
             disabled={!openShift}
@@ -1421,6 +1368,7 @@ function SalesSection({
         <TabsContent value="order">
           <NewOrderForm
             products={data.products}
+            bouquets={data.bouquetTemplates}
             customers={data.customers}
             pending={pending}
             shiftOpen={Boolean(openShift)}
@@ -1550,12 +1498,14 @@ function CustomerCreateDialog({
 
 function QuickSaleForm({
   products,
+  bouquets,
   customers,
   pending,
   disabled,
   onSubmit,
 }: {
   products: Product[]
+  bouquets: BouquetTemplate[]
   customers: CustomerOption[]
   pending: boolean
   disabled: boolean
@@ -1576,11 +1526,15 @@ function QuickSaleForm({
   const selectedCustomer = selectedCustomerId === null
     ? null
     : availableCustomers.find((customer) => customer.id === selectedCustomerId) ?? null
-  const saleTotals = calculateCommercialTotals(items, saleDiscountType, saleDiscountValue)
+  const saleTotals = calculateCommercialTotals(getProductLineItemsForTotals(items), saleDiscountType, saleDiscountValue)
   const saleTotal = saleTotals.total
 
   function addProduct(product: Product) {
     setItems((current) => addProductToLineItems(current, product))
+  }
+
+  function addBouquet(bouquet: BouquetTemplate) {
+    setItems((current) => addBouquetToLineItems(current, bouquet))
   }
 
   function resetForm() {
@@ -1646,7 +1600,15 @@ function QuickSaleForm({
                 <CardDescription className="text-zinc-500">Поиск товара и компактная корзина продажи</CardDescription>
               </CardHeader>
               <CardContent className="flex min-w-0 flex-col gap-4">
-                <ProductCombobox products={products} disabled={pending} onSelect={addProduct} />
+                <ProductCombobox
+                  products={products}
+                  bouquets={bouquets}
+                  includeBouquets
+                  portalDropdown
+                  disabled={pending}
+                  onSelect={addProduct}
+                  onSelectBouquet={addBouquet}
+                />
                 <div className="min-w-0">
                   <div className="mb-2 text-sm font-medium">Корзина</div>
                   <ProductLineItems
@@ -1900,12 +1862,14 @@ function CashMetric({ label, value }: { label: string; value: string }) {
 
 function NewOrderForm({
   products,
+  bouquets,
   customers,
   pending,
   shiftOpen,
   onSubmit,
 }: {
   products: Product[]
+  bouquets: BouquetTemplate[]
   customers: CustomerOption[]
   pending: boolean
   shiftOpen: boolean
@@ -1918,6 +1882,7 @@ function NewOrderForm({
   const [items, setItems] = useState<ProductLineItem[]>([])
   const [customer, setCustomer] = useState("")
   const [phone, setPhone] = useState("")
+  const [recipientPhone, setRecipientPhone] = useState("")
   const [createdCustomers, setCreatedCustomers] = useState<CustomerOption[]>([])
   const [customerDialogOpen, setCustomerDialogOpen] = useState(false)
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null)
@@ -1937,7 +1902,7 @@ function NewOrderForm({
   const selectedCustomer = selectedCustomerId === null
     ? null
     : availableCustomers.find((current) => current.id === selectedCustomerId) ?? null
-  const orderTotals = calculateCommercialTotals(items, orderDiscountType, orderDiscountValue)
+  const orderTotals = calculateCommercialTotals(getProductLineItemsForTotals(items), orderDiscountType, orderDiscountValue)
   const itemsTotal = orderTotals.total
   const total = itemsTotal + deliveryPrice
   const balance = total - prepaid
@@ -1949,11 +1914,16 @@ function NewOrderForm({
     setItems((current) => addProductToLineItems(current, product))
   }
 
+  function addBouquet(bouquet: BouquetTemplate) {
+    setItems((current) => addBouquetToLineItems(current, bouquet))
+  }
+
   function resetForm() {
     setItems([])
     setSelectedCustomerId(null)
     setCustomer("")
     setPhone("")
+    setRecipientPhone("")
     setOrderDiscountType("none")
     setOrderDiscountValue(0)
     setOrderDiscountTouched(false)
@@ -2109,14 +2079,24 @@ function NewOrderForm({
                         required
                       />
                     </Field>
-                    <Field>
-                      <FieldLabel htmlFor="phone">Телефон</FieldLabel>
-                      <Input id="phone" name="phone" value={phone} onChange={(event) => setPhone(event.target.value)} />
-                    </Field>
-                  </div>
-                </FieldGroup>
-              </CardContent>
-            </Card>
+                  <Field>
+                    <FieldLabel htmlFor="phone">Телефон</FieldLabel>
+                    <Input id="phone" name="phone" value={phone} onChange={(event) => setPhone(event.target.value)} />
+                  </Field>
+                </div>
+                <Field>
+                  <FieldLabel htmlFor="recipientPhone">Номер получателя</FieldLabel>
+                  <Input
+                    id="recipientPhone"
+                    name="recipientPhone"
+                    placeholder="Например, +996 ..."
+                    value={recipientPhone}
+                    onChange={(event) => setRecipientPhone(event.target.value)}
+                  />
+                </Field>
+              </FieldGroup>
+            </CardContent>
+          </Card>
 
           <Card className="rounded-2xl border-zinc-200 bg-white">
             <CardHeader>
@@ -2192,7 +2172,15 @@ function NewOrderForm({
               <CardDescription className="text-zinc-500">Добавляйте товары через поиск.</CardDescription>
             </CardHeader>
             <CardContent className="flex min-w-0 flex-col gap-4">
-              <ProductCombobox products={products} disabled={pending} onSelect={addProduct} />
+              <ProductCombobox
+                products={products}
+                bouquets={bouquets}
+                includeBouquets
+                portalDropdown
+                disabled={pending}
+                onSelect={addProduct}
+                onSelectBouquet={addBouquet}
+              />
               <ProductLineItems
                 products={products}
                 items={items}
@@ -2481,6 +2469,7 @@ function ReadyOrderCard({
       <CardContent className="flex flex-1 flex-col gap-4">
         <div className="grid gap-3 text-sm">
           <Info label="Телефон" value={order.phone || "не указан"} />
+          {order.recipientPhone && <Info label="Номер получателя" value={order.recipientPhone} />}
           <Info label="Тип" value={deliveryTypeLabel(order.deliveryType)} />
           {order.deliveryType === "delivery" && <Info label="Адрес" value={order.address || "не указан"} />}
           <div className="grid grid-cols-2 gap-3">
@@ -2505,6 +2494,8 @@ function ReadyOrderCard({
           <Info label="Курьеру" value={formatMoney(order.courierPayout)} />
           <Info label="Выплата" value={order.deliveryPayoutPaid ? "выдана" : "не выдана"} />
         </div>
+
+        <OrderComposition items={order.items} />
 
         <div className="mt-auto flex flex-col gap-2 border-t pt-3">
           {order.deliveryType === "pickup" && order.status === "Готов" && (
@@ -2561,6 +2552,91 @@ function ReadyOrderCard({
   )
 }
 
+function OrderComposition({ items, compact = false }: { items: OrderItem[]; compact?: boolean }) {
+  const groups = groupOrderItems(items)
+
+  if (!groups.length) {
+    return (
+      <div className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
+        Состав не указан
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn("flex flex-col rounded-lg bg-muted p-3 text-sm", compact ? "gap-1" : "gap-2")}>
+      {groups.map((group) => {
+        if (group.type === "bouquet") {
+          return (
+            <div key={group.key} className="flex flex-col gap-1 rounded-md bg-background/70 p-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="min-w-0 font-medium">
+                  Букет &ldquo;{group.bouquetName || "Без названия"}&rdquo;
+                </span>
+                <span className="shrink-0 text-muted-foreground">{formatMoney(group.total)}</span>
+              </div>
+              <div className="grid gap-1 pl-2">
+                {group.items.map((item) => (
+                  <div key={item.id} className="flex items-center justify-between gap-3 text-muted-foreground">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <ProductThumbnail name={item.name} imagePath={item.imagePath} size="xs" />
+                      <span className="truncate">{item.name}</span>
+                    </span>
+                    <span className="shrink-0">{number(item.qty)} шт</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        }
+
+        const item = group.item
+        return (
+          <div key={group.key} className="flex items-center justify-between gap-3">
+            <span className="flex min-w-0 items-center gap-2">
+              <ProductThumbnail name={item.name} imagePath={item.imagePath} size="xs" />
+              <span className="truncate">{item.name}</span>
+            </span>
+            <span className="shrink-0">{number(item.qty)} шт</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function groupOrderItems(items: OrderItem[]) {
+  const groups: Array<
+    | { type: "single"; key: string; item: OrderItem }
+    | { type: "bouquet"; key: string; bouquetName: string; total: number; items: OrderItem[] }
+  > = []
+  const bouquetGroups = new Map<string, Extract<(typeof groups)[number], { type: "bouquet" }>>()
+
+  for (const item of items) {
+    if (!item.bouquetGroupId) {
+      groups.push({ type: "single", key: `item-${item.id}`, item })
+      continue
+    }
+
+    let group = bouquetGroups.get(item.bouquetGroupId)
+    if (!group) {
+      group = {
+        type: "bouquet",
+        key: item.bouquetGroupId,
+        bouquetName: item.bouquetName,
+        total: 0,
+        items: [],
+      }
+      bouquetGroups.set(item.bouquetGroupId, group)
+      groups.push(group)
+    }
+    group.items.push(item)
+    group.total += item.total
+  }
+
+  return groups
+}
+
 function OrdersSection({
   data,
   pending,
@@ -2583,53 +2659,51 @@ function OrdersSection({
   )
 
   return (
-    <Card className="rounded-2xl border bg-white">
-      <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <CardTitle>Стол заказов</CardTitle>
-          <CardDescription>Рабочий экран флористов без кассовых данных</CardDescription>
-        </div>
+    <div className="flex flex-col gap-4">
+      <div className="flex justify-end">
         <OrderToolbar
           sortMode={sortMode}
           viewMode={viewMode}
           onSortModeChange={setSortMode}
           onViewModeChange={setViewMode}
         />
-      </CardHeader>
-      <CardContent>
-        {!orders.length ? (
-          <Empty>
-            <EmptyHeader>
-              <EmptyTitle>Заказов для флористов нет</EmptyTitle>
-              <EmptyDescription>Новые заказы появятся после создания на кассе.</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : viewMode === "calendar" ? (
-          <OrderCalendarView
-            orders={orders}
-            weekStart={weekStart}
-            showMoney={false}
-            onToday={() => setWeekStart(startOfLocalDay(new Date()))}
-            onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
-            onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
-            onOpenOrder={() => setViewMode("list")}
-          />
-        ) : (
-          <div className="grid gap-3 lg:grid-cols-2">
-            {orders.map((order) => (
-              <WorkOrderCard
-                key={order.id}
-                order={order}
-                pending={pending}
-                onStart={onStart}
-                onReady={onReady}
-                onCancel={onCancel}
-              />
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      </div>
+      <Card className="rounded-2xl border bg-white">
+        <CardContent>
+          {!orders.length ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>Заказов для флористов нет</EmptyTitle>
+                <EmptyDescription>Новые заказы появятся после создания на кассе.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : viewMode === "calendar" ? (
+            <OrderCalendarView
+              orders={orders}
+              weekStart={weekStart}
+              showMoney={false}
+              onToday={() => setWeekStart(startOfLocalDay(new Date()))}
+              onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
+              onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
+              onOpenOrder={() => setViewMode("list")}
+            />
+          ) : (
+            <div className="grid gap-3 lg:grid-cols-2">
+              {orders.map((order) => (
+                <WorkOrderCard
+                  key={order.id}
+                  order={order}
+                  pending={pending}
+                  onStart={onStart}
+                  onReady={onReady}
+                  onCancel={onCancel}
+                />
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   )
 }
 
@@ -2658,20 +2732,11 @@ function WorkOrderCard({
       <div className="flex flex-col gap-1 text-sm">
         <div className="font-medium">{order.customer}</div>
         <div>{deliveryTypeLabel(order.deliveryType)}</div>
+        {order.recipientPhone && <div>Получатель: {order.recipientPhone}</div>}
         {order.address && <div>{order.address}</div>}
         {order.note && <div className="text-muted-foreground">{order.note}</div>}
       </div>
-      <div className="flex flex-col gap-1 rounded-lg bg-muted p-3 text-sm">
-        {order.items.map((item) => (
-          <div key={item.id} className="flex items-center justify-between gap-3">
-            <span className="flex min-w-0 items-center gap-2">
-              <ProductThumbnail name={item.name} imagePath={item.imagePath} size="xs" />
-              <span className="truncate">{item.name}</span>
-            </span>
-            <span>{number(item.qty)} шт</span>
-          </div>
-        ))}
-      </div>
+      <OrderComposition items={order.items} compact />
       {(order.status === "Готов" || order.status === "Передан курьеру") && (
         <Alert>
           <AlertTriangleIcon />
@@ -2891,6 +2956,9 @@ function OrderCalendarCard({
       </div>
       <div className="min-w-0">
         <div className="truncate font-medium">{order.customer || "Клиент не указан"}</div>
+        {order.recipientPhone && (
+          <div className="truncate text-muted-foreground">Получатель: {order.recipientPhone}</div>
+        )}
         <div className="truncate text-muted-foreground">{deliveryTypeLabel(order.deliveryType)}</div>
       </div>
       {showMoney && (
@@ -3528,10 +3596,10 @@ function WazzupSettingsBlock({
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="grid gap-3 md:grid-cols-3">
-            <StatusTile label="Webhook events" value={String(status.diagnostics.webhookEventsCount)} />
-            <StatusTile label="Wazzup messages" value={String(status.diagnostics.wazzupMessagesCount)} />
-            <StatusTile label="Auth failed" value={String(status.diagnostics.failedAuthEventsCount)} />
-            <StatusTile label="Последний event_type" value={status.diagnostics.latestEventType || "-"} />
+            <StatusTile label="Webhook события" value={String(status.diagnostics.webhookEventsCount)} />
+            <StatusTile label="Сообщения Wazzup" value={String(status.diagnostics.wazzupMessagesCount)} />
+            <StatusTile label="Ошибки авторизации" value={String(status.diagnostics.failedAuthEventsCount)} />
+            <StatusTile label="Последний тип события" value={status.diagnostics.latestEventType || "-"} />
             <StatusTile
               label="Последнее сообщение"
               value={
@@ -3566,10 +3634,10 @@ function WazzupSettingsBlock({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>event_type</TableHead>
-                  <TableHead>status</TableHead>
-                  <TableHead>created_at</TableHead>
-                  <TableHead>error</TableHead>
+                  <TableHead>Тип события</TableHead>
+                  <TableHead>Статус</TableHead>
+                  <TableHead>Создано</TableHead>
+                  <TableHead>Ошибка</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

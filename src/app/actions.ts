@@ -4,10 +4,12 @@ import { revalidatePath } from "next/cache"
 import { canCloseShift, canUseCash, getCurrentUser } from "@/lib/auth"
 import {
   addDealItem,
+  addDealBouquet,
   createCustomer,
   createDeal,
   getCustomer,
   removeDealItem,
+  removeDealItemGroup,
   updateCustomer,
   updateDealFields,
   updateDealItem,
@@ -45,8 +47,10 @@ import {
   createOrder,
   createOrderFromDeal,
   createSale,
+  createBouquetTemplate,
   createAndPostStockDocument,
   createUser,
+  deleteBouquetTemplate,
   deleteProduct,
   handOrderToCourier,
   markOrderReady,
@@ -61,7 +65,9 @@ import {
   setSupplierActive,
   setUserActive,
   startOrderWork,
+  toggleBouquetTemplateActive,
   updateUser,
+  updateBouquetTemplate,
   upsertSupplier,
   upsertProduct,
   writeOffProductStock,
@@ -69,6 +75,7 @@ import {
   type UserRole,
   type CurrentUser,
   type CustomerOption,
+  type BouquetTemplateInput,
 } from "@/lib/db"
 
 type ActionResult = {
@@ -93,6 +100,22 @@ type UserAction = (user: CurrentUser) => ActionPayload | Promise<ActionPayload>
 
 function getShiftId(formData: FormData) {
   return Number(String(formData.get("shiftId") ?? "").trim())
+}
+
+function parseBouquetTemplateFormData(formData: FormData): BouquetTemplateInput {
+  const productCodes = formData.getAll("itemProductCode").map((value) => String(value ?? "").trim())
+  const qtyValues = formData.getAll("itemQty")
+
+  return {
+    name: String(formData.get("name") ?? "").trim(),
+    description: String(formData.get("description") ?? "").trim(),
+    price: Number(String(formData.get("price") ?? "0").replace(",", ".")),
+    isActive: formData.get("isActive") === "on" || formData.get("isActive") === "1",
+    items: productCodes.map((productCode, index) => ({
+      productCode,
+      qty: Number(String(qtyValues[index] ?? "0").replace(",", ".")),
+    })),
+  }
 }
 
 async function requireCashAccess() {
@@ -133,6 +156,7 @@ async function runAction(
     revalidatePath("/cash")
     revalidatePath("/ready-orders")
     revalidatePath("/orders")
+    revalidatePath("/bouquets")
     revalidatePath("/shifts")
     revalidatePath("/users")
     revalidatePath("/settings")
@@ -186,6 +210,35 @@ async function runCashAction(
 
 export async function saveProductAction(formData: FormData) {
   return runRoleAction(["owner"], (user) => upsertProduct(formData, user), "Товар сохранен.")
+}
+
+export async function createBouquetTemplateAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], (user) => {
+    createBouquetTemplate(parseBouquetTemplateFormData(formData), user)
+    revalidatePath("/bouquets")
+  }, "Букет сохранен.")
+}
+
+export async function updateBouquetTemplateAction(id: number, formData: FormData) {
+  return runRoleAction(["owner", "manager"], () => {
+    updateBouquetTemplate(id, parseBouquetTemplateFormData(formData))
+    revalidatePath("/bouquets")
+  }, "Букет сохранен.")
+}
+
+export async function toggleBouquetTemplateActiveAction(id: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    const isActive = toggleBouquetTemplateActive(id)
+    revalidatePath("/bouquets")
+    return [isActive ? "Букет включен" : "Букет выключен"]
+  }, "Статус букета изменен.")
+}
+
+export async function deleteBouquetTemplateAction(id: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    deleteBouquetTemplate(id)
+    revalidatePath("/bouquets")
+  }, "Букет выключен.")
 }
 
 export async function saveWazzupSettingsAction(formData: FormData) {
@@ -495,6 +548,13 @@ export async function addDealItemAction(dealId: number, productCode: string) {
   }, "Позиция добавлена.")
 }
 
+export async function addDealBouquetAction(dealId: number, bouquetId: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    addDealBouquet(dealId, bouquetId)
+    revalidateCrm(null, dealId)
+  }, "Букет добавлен.")
+}
+
 export async function updateDealItemAction(formData: FormData) {
   return runRoleAction(["owner", "manager"], () => {
     const dealId = Number(String(formData.get("dealId") ?? ""))
@@ -508,6 +568,13 @@ export async function removeDealItemAction(dealId: number, itemId: number) {
     removeDealItem(dealId, itemId)
     revalidateCrm(null, dealId)
   }, "Позиция удалена.")
+}
+
+export async function removeDealItemGroupAction(dealId: number, bouquetGroupId: string) {
+  return runRoleAction(["owner", "manager"], () => {
+    removeDealItemGroup(dealId, bouquetGroupId)
+    revalidateCrm(null, dealId)
+  }, "Букет удален.")
 }
 
 export async function createOrderFromDealAction(dealId: number) {

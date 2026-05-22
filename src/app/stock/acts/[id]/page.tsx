@@ -1,12 +1,13 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { AccessDenied } from "@/components/access-denied"
-import { PageHeader } from "@/components/page-header"
+import { CrmShell } from "@/components/crm-shell"
 import { StockDocumentActions } from "@/components/stock/stock-document-actions"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { getShiftShellContext } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getStockDocument, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
 import { stockDocumentStatusLabel, stockDocumentTypeLabel } from "@/lib/labels"
@@ -32,17 +33,12 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
   const quantityHeaders = stockDocumentQuantityHeaders(document.status)
 
   return (
-    <main className="min-h-screen bg-zinc-50 p-4 md:p-6">
-      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
-        <PageHeader
-          title={`Акт ${document.number}`}
-          description={`${stockDocumentTypeLabel(document.type)} · ${formatDateTime(document.createdAt)}`}
-          actions={
-            <Link href="/stock/acts" className={buttonVariants({ variant: "outline" })}>
-              Все акты
-            </Link>
-          }
-        />
+    <CrmShell user={user} active="stock-acts" title={`Акт ${document.number}`} shiftContext={getShiftShellContext(user)}>
+      <div className="flex justify-end">
+        <Link href="/stock/acts" className={buttonVariants({ variant: "outline", size: "sm" })}>
+          Все акты
+        </Link>
+      </div>
 
         <Card className="rounded-2xl border bg-white">
           <CardHeader>
@@ -136,8 +132,7 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
             </div>
           </CardContent>
         </Card>
-      </div>
-    </main>
+    </CrmShell>
   )
 }
 

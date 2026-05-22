@@ -1,5 +1,7 @@
 import { ShiftsPage } from "@/components/shifts/shift-pages"
 import { AccessDenied } from "@/components/access-denied"
+import { CrmShell } from "@/components/crm-shell"
+import { buildShiftShellContext } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getDashboardData } from "@/lib/db"
 
@@ -13,5 +15,9 @@ export default async function Page() {
 
   const data = getDashboardData()
 
-  return <ShiftsPage data={data} />
+  return (
+    <CrmShell user={user} active="shifts" title="Смены" shiftContext={buildShiftShellContext(user, data)}>
+      <ShiftsPage data={data} />
+    </CrmShell>
+  )
 }

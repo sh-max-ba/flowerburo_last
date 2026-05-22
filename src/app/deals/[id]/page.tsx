@@ -3,8 +3,9 @@ import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { DealDetailPage } from "@/components/deals/deal-detail-page"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
+import { getShiftShellContext } from "@/lib/app-shell"
 import { getDeal, listCustomers, listDealStages, listProducts } from "@/lib/crm"
-import { getOpenShift, listUsers } from "@/lib/db"
+import { getOpenShift, listBouquetTemplates, listUsers } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
 
@@ -26,13 +27,19 @@ export default async function DealDetailRoute({ params }: { params: Promise<{ id
   }
 
   return (
-    <CrmShell user={user} active="deals" title={`Сделка ${deal.number || `#${deal.id}`}`}>
+    <CrmShell
+      user={user}
+      active="deals"
+      title={`Сделка ${deal.number || `#${deal.id}`}`}
+      shiftContext={getShiftShellContext(user)}
+    >
       <DealDetailPage
         deal={deal}
         stages={listDealStages()}
         customers={listCustomers()}
         users={listUsers().filter((item) => item.isActive)}
         products={listProducts()}
+        bouquets={listBouquetTemplates({ activeOnly: true })}
         openShift={getOpenShift() ?? null}
       />
     </CrmShell>

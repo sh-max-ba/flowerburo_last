@@ -8,6 +8,7 @@ import {
   calculateCommercialTotals,
   calculateLineTotal,
   normalizeDiscountType,
+  type CommercialLineInput,
   type DiscountType,
 } from "@/lib/pricing"
 
@@ -48,6 +49,44 @@ export type Product = {
   salePrice: number
   available: number
   updatedAt: string
+}
+
+export type BouquetTemplateItem = {
+  id: number
+  bouquetId: number
+  productCode: string
+  productName: string
+  qty: number
+  stock: number
+  reserved: number
+  available: number
+  imagePath: string
+  createdAt: string
+}
+
+export type BouquetTemplate = {
+  id: number
+  name: string
+  description: string
+  price: number
+  isActive: boolean
+  createdByUserId: number | null
+  createdByName: string
+  createdAt: string
+  updatedAt: string
+  itemsCount: number
+  items: BouquetTemplateItem[]
+}
+
+export type BouquetTemplateInput = {
+  name: string
+  description?: string | null
+  price?: number | null
+  isActive?: boolean
+  items: Array<{
+    productCode: string
+    qty: number
+  }>
 }
 
 export type WarehouseImportAction = "create" | "update" | "unchanged" | "error"
@@ -122,6 +161,9 @@ export type SaleItem = {
   name: string
   qty: number
   price: number
+  bouquetId: number | null
+  bouquetName: string
+  bouquetGroupId: string
   discountType: DiscountType
   discountValue: number
   discountAmount: number
@@ -178,6 +220,9 @@ export type OrderItem = {
   imagePath?: string
   qty: number
   price: number
+  bouquetId: number | null
+  bouquetName: string
+  bouquetGroupId: string
   discountType: DiscountType
   discountValue: number
   discountAmount: number
@@ -194,6 +239,7 @@ export type Order = {
   customerId: number | null
   dealId: number | null
   phone: string
+  recipientPhone: string
   source: string
   deliveryType: string
   address: string
@@ -403,6 +449,7 @@ export type DashboardData = {
   users: CurrentUser[]
   customers: CustomerOption[]
   suppliers: Supplier[]
+  bouquetTemplates: BouquetTemplate[]
   stats: {
     productsCount: number
     lowStockCount: number
@@ -520,6 +567,9 @@ function migrate(client: Database.Database) {
       product_code TEXT NOT NULL REFERENCES products(code),
       qty REAL NOT NULL,
       unit_price REAL NOT NULL,
+      bouquet_id INTEGER,
+      bouquet_name TEXT,
+      bouquet_group_id TEXT,
       discount_type TEXT DEFAULT 'none',
       discount_value REAL DEFAULT 0,
       discount_amount REAL DEFAULT 0,
@@ -568,6 +618,7 @@ function migrate(client: Database.Database) {
       updated_by_user_id INTEGER,
       customer TEXT NOT NULL DEFAULT '',
       phone TEXT NOT NULL DEFAULT '',
+      recipient_phone TEXT,
       source TEXT,
       delivery_type TEXT,
       address TEXT,
@@ -673,6 +724,27 @@ function migrate(client: Database.Database) {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS bouquet_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      price REAL DEFAULT 0,
+      is_active INTEGER DEFAULT 1,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS bouquet_template_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bouquet_id INTEGER NOT NULL,
+      product_code TEXT NOT NULL,
+      product_name TEXT NOT NULL,
+      qty REAL NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS order_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       order_id INTEGER NOT NULL,
@@ -680,6 +752,9 @@ function migrate(client: Database.Database) {
       name TEXT NOT NULL,
       qty REAL NOT NULL,
       price REAL NOT NULL,
+      bouquet_id INTEGER,
+      bouquet_name TEXT,
+      bouquet_group_id TEXT,
       discount_type TEXT DEFAULT 'none',
       discount_value REAL DEFAULT 0,
       discount_amount REAL DEFAULT 0,
@@ -765,6 +840,7 @@ function migrate(client: Database.Database) {
       customer_id INTEGER,
       customer_name TEXT,
       customer_phone TEXT,
+      recipient_phone TEXT,
       responsible_user_id INTEGER,
       responsible_user_name TEXT,
       pipeline_id INTEGER,
@@ -886,6 +962,9 @@ function migrate(client: Database.Database) {
       product_name TEXT NOT NULL,
       qty REAL NOT NULL,
       price REAL NOT NULL,
+      bouquet_id INTEGER,
+      bouquet_name TEXT,
+      bouquet_group_id TEXT,
       discount_type TEXT DEFAULT 'none',
       discount_value REAL DEFAULT 0,
       discount_amount REAL DEFAULT 0,
@@ -904,11 +983,14 @@ function migrate(client: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_wazzup_webhook_events_hash ON wazzup_webhook_events(event_hash);
     CREATE INDEX IF NOT EXISTS idx_wazzup_messages_chat ON wazzup_messages(chat_type, chat_id);
     CREATE INDEX IF NOT EXISTS idx_integration_settings_provider ON integration_settings(provider);
+    CREATE INDEX IF NOT EXISTS idx_bouquet_template_items_bouquet_id ON bouquet_template_items(bouquet_id);
+    CREATE INDEX IF NOT EXISTS idx_bouquet_template_items_product_code ON bouquet_template_items(product_code);
   `)
 
   ensureColumn("products", "image_path", "ALTER TABLE products ADD COLUMN image_path TEXT", client)
   ensureColumn("orders", "number", "ALTER TABLE orders ADD COLUMN number TEXT", client)
   ensureColumn("orders", "source", "ALTER TABLE orders ADD COLUMN source TEXT", client)
+  ensureColumn("orders", "recipient_phone", "ALTER TABLE orders ADD COLUMN recipient_phone TEXT", client)
   ensureColumn("orders", "delivery_type", "ALTER TABLE orders ADD COLUMN delivery_type TEXT", client)
   ensureColumn("orders", "address", "ALTER TABLE orders ADD COLUMN address TEXT", client)
   ensureColumn("orders", "prepaid", "ALTER TABLE orders ADD COLUMN prepaid REAL DEFAULT 0", client)
@@ -1041,6 +1123,9 @@ function migrate(client: Database.Database) {
     "ALTER TABLE sale_items ADD COLUMN total_before_discount REAL DEFAULT 0",
     client
   )
+  ensureColumn("sale_items", "bouquet_id", "ALTER TABLE sale_items ADD COLUMN bouquet_id INTEGER", client)
+  ensureColumn("sale_items", "bouquet_name", "ALTER TABLE sale_items ADD COLUMN bouquet_name TEXT", client)
+  ensureColumn("sale_items", "bouquet_group_id", "ALTER TABLE sale_items ADD COLUMN bouquet_group_id TEXT", client)
   ensureColumn(
     "order_items",
     "discount_type",
@@ -1065,6 +1150,9 @@ function migrate(client: Database.Database) {
     "ALTER TABLE order_items ADD COLUMN total_before_discount REAL DEFAULT 0",
     client
   )
+  ensureColumn("order_items", "bouquet_id", "ALTER TABLE order_items ADD COLUMN bouquet_id INTEGER", client)
+  ensureColumn("order_items", "bouquet_name", "ALTER TABLE order_items ADD COLUMN bouquet_name TEXT", client)
+  ensureColumn("order_items", "bouquet_group_id", "ALTER TABLE order_items ADD COLUMN bouquet_group_id TEXT", client)
   ensureColumn("orders", "created_by_user_id", "ALTER TABLE orders ADD COLUMN created_by_user_id INTEGER", client)
   ensureColumn("orders", "updated_by_user_id", "ALTER TABLE orders ADD COLUMN updated_by_user_id INTEGER", client)
   ensureColumn("movements", "user_id", "ALTER TABLE movements ADD COLUMN user_id INTEGER", client)
@@ -1090,11 +1178,15 @@ function migrate(client: Database.Database) {
   ensureColumn("customers", "wazzup_chat_type", "ALTER TABLE customers ADD COLUMN wazzup_chat_type TEXT", client)
   ensureColumn("customers", "wazzup_chat_id", "ALTER TABLE customers ADD COLUMN wazzup_chat_id TEXT", client)
   ensureColumn("customers", "wazzup_channel_id", "ALTER TABLE customers ADD COLUMN wazzup_channel_id TEXT", client)
+  ensureColumn("deals", "recipient_phone", "ALTER TABLE deals ADD COLUMN recipient_phone TEXT", client)
   ensureColumn("deals", "wazzup_chat_type", "ALTER TABLE deals ADD COLUMN wazzup_chat_type TEXT", client)
   ensureColumn("deals", "wazzup_chat_id", "ALTER TABLE deals ADD COLUMN wazzup_chat_id TEXT", client)
   ensureColumn("deals", "wazzup_channel_id", "ALTER TABLE deals ADD COLUMN wazzup_channel_id TEXT", client)
   ensureColumn("deals", "last_message_text", "ALTER TABLE deals ADD COLUMN last_message_text TEXT", client)
   ensureColumn("deals", "last_message_at", "ALTER TABLE deals ADD COLUMN last_message_at TEXT", client)
+  ensureColumn("deal_items", "bouquet_id", "ALTER TABLE deal_items ADD COLUMN bouquet_id INTEGER", client)
+  ensureColumn("deal_items", "bouquet_name", "ALTER TABLE deal_items ADD COLUMN bouquet_name TEXT", client)
+  ensureColumn("deal_items", "bouquet_group_id", "ALTER TABLE deal_items ADD COLUMN bouquet_group_id TEXT", client)
   ensureColumn(
     "integration_settings",
     "webhook_auth_required",
@@ -1104,6 +1196,11 @@ function migrate(client: Database.Database) {
   client.exec(`
     CREATE INDEX IF NOT EXISTS idx_customers_wazzup_chat ON customers(wazzup_chat_type, wazzup_chat_id);
     CREATE INDEX IF NOT EXISTS idx_deals_wazzup_chat ON deals(wazzup_chat_type, wazzup_chat_id, status);
+    CREATE INDEX IF NOT EXISTS idx_bouquet_template_items_bouquet_id ON bouquet_template_items(bouquet_id);
+    CREATE INDEX IF NOT EXISTS idx_bouquet_template_items_product_code ON bouquet_template_items(product_code);
+    CREATE INDEX IF NOT EXISTS idx_sale_items_bouquet_group_id ON sale_items(bouquet_group_id);
+    CREATE INDEX IF NOT EXISTS idx_order_items_bouquet_group_id ON order_items(bouquet_group_id);
+    CREATE INDEX IF NOT EXISTS idx_deal_items_bouquet_group_id ON deal_items(bouquet_group_id);
   `)
 
   seedDefaultDealPipeline(client)
@@ -1669,7 +1766,7 @@ function toOptionalNumber(value: FormDataEntryValue | string | number | null | u
   return Number.isFinite(number) ? number : null
 }
 
-function clean(value: FormDataEntryValue | null) {
+function clean(value: FormDataEntryValue | string | null | undefined) {
   return String(value ?? "").trim()
 }
 
@@ -2149,6 +2246,8 @@ export function getShiftDetails(shiftId: number, client: Database.Database = db(
         sale_items.unit_price as price, COALESCE(sale_items.discount_type, 'none') as discountType,
         COALESCE(sale_items.discount_value, 0) as discountValue,
         COALESCE(sale_items.discount_amount, 0) as discountAmount,
+        sale_items.bouquet_id as bouquetId, COALESCE(sale_items.bouquet_name, '') as bouquetName,
+        COALESCE(sale_items.bouquet_group_id, '') as bouquetGroupId,
         COALESCE(NULLIF(sale_items.total_before_discount, 0), sale_items.total) as totalBeforeDiscount,
         sale_items.total
        FROM sale_items
@@ -2169,6 +2268,9 @@ export function getShiftDetails(shiftId: number, client: Database.Database = db(
         name: String(item.name ?? ""),
         qty: numberFromRow(item.qty),
         price: numberFromRow(item.price),
+        bouquetId: item.bouquetId === null || item.bouquetId === undefined ? null : numberFromRow(item.bouquetId),
+        bouquetName: String(item.bouquetName ?? ""),
+        bouquetGroupId: String(item.bouquetGroupId ?? ""),
         discountType: normalizeDiscountType(String(item.discountType ?? "none")),
         discountValue: numberFromRow(item.discountValue),
         discountAmount: numberFromRow(item.discountAmount),
@@ -2203,6 +2305,8 @@ export function getShiftDetails(shiftId: number, client: Database.Database = db(
         COALESCE(order_items.discount_type, 'none') as discountType,
         COALESCE(order_items.discount_value, 0) as discountValue,
         COALESCE(order_items.discount_amount, 0) as discountAmount,
+        order_items.bouquet_id as bouquetId, COALESCE(order_items.bouquet_name, '') as bouquetName,
+        COALESCE(order_items.bouquet_group_id, '') as bouquetGroupId,
         COALESCE(NULLIF(order_items.total_before_discount, 0), order_items.total) as totalBeforeDiscount
        FROM order_items
        LEFT JOIN products ON products.code = order_items.product_code
@@ -2227,6 +2331,9 @@ export function getShiftDetails(shiftId: number, client: Database.Database = db(
         imagePath: String(item.imagePath ?? ""),
         qty: numberFromRow(item.qty),
         price: numberFromRow(item.price),
+        bouquetId: item.bouquetId === null || item.bouquetId === undefined ? null : numberFromRow(item.bouquetId),
+        bouquetName: String(item.bouquetName ?? ""),
+        bouquetGroupId: String(item.bouquetGroupId ?? ""),
         discountType: normalizeDiscountType(String(item.discountType ?? "none")),
         discountValue: numberFromRow(item.discountValue),
         discountAmount: numberFromRow(item.discountAmount),
@@ -2383,6 +2490,268 @@ export function updateProductImagePath(code: string, imagePath: string) {
   return getProductByCode(code)
 }
 
+export function listBouquetTemplates(options: { activeOnly?: boolean } = {}): BouquetTemplate[] {
+  const client = db()
+  const where = options.activeOnly ? "WHERE COALESCE(bouquet_templates.is_active, 1) = 1" : ""
+  const rows = client
+    .prepare(
+      `SELECT bouquet_templates.id, bouquet_templates.name, COALESCE(bouquet_templates.description, '') as description,
+        COALESCE(bouquet_templates.price, 0) as price, COALESCE(bouquet_templates.is_active, 1) as isActive,
+        bouquet_templates.created_by_user_id as createdByUserId,
+        COALESCE(bouquet_templates.created_by_name, '') as createdByName,
+        bouquet_templates.created_at as createdAt, bouquet_templates.updated_at as updatedAt,
+        COUNT(bouquet_template_items.id) as itemsCount
+       FROM bouquet_templates
+       LEFT JOIN bouquet_template_items ON bouquet_template_items.bouquet_id = bouquet_templates.id
+       ${where}
+       GROUP BY bouquet_templates.id
+       ORDER BY COALESCE(bouquet_templates.is_active, 1) DESC,
+        bouquet_templates.updated_at DESC, bouquet_templates.id DESC`
+    )
+    .all() as Array<Record<string, unknown>>
+
+  return rows.map((row) => mapBouquetTemplate(row, listBouquetTemplateItems(numberFromRow(row.id), client)))
+}
+
+export function getBouquetTemplate(id: number) {
+  const client = db()
+  const row = client
+    .prepare(
+      `SELECT bouquet_templates.id, bouquet_templates.name, COALESCE(bouquet_templates.description, '') as description,
+        COALESCE(bouquet_templates.price, 0) as price, COALESCE(bouquet_templates.is_active, 1) as isActive,
+        bouquet_templates.created_by_user_id as createdByUserId,
+        COALESCE(bouquet_templates.created_by_name, '') as createdByName,
+        bouquet_templates.created_at as createdAt, bouquet_templates.updated_at as updatedAt,
+        COUNT(bouquet_template_items.id) as itemsCount
+       FROM bouquet_templates
+       LEFT JOIN bouquet_template_items ON bouquet_template_items.bouquet_id = bouquet_templates.id
+       WHERE bouquet_templates.id = ?
+       GROUP BY bouquet_templates.id`
+    )
+    .get(id) as Record<string, unknown> | undefined
+
+  return row ? mapBouquetTemplate(row, listBouquetTemplateItems(id, client)) : null
+}
+
+export function createBouquetTemplate(input: BouquetTemplateInput, currentUser?: CurrentUser) {
+  const client = db()
+  const create = client.transaction(() => {
+    const normalized = normalizeBouquetTemplateInput(client, input)
+    const result = client
+      .prepare(
+        `INSERT INTO bouquet_templates (
+          name, description, price, is_active, created_by_user_id, created_by_name, updated_at
+        ) VALUES (
+          @name, @description, @price, @isActive, @createdByUserId, @createdByName, CURRENT_TIMESTAMP
+        )`
+      )
+      .run({
+        name: normalized.name,
+        description: normalized.description,
+        price: normalized.price,
+        isActive: normalized.isActive ? 1 : 0,
+        createdByUserId: currentUser?.id ?? null,
+        createdByName: currentUser?.name ?? "",
+      })
+    const bouquetId = Number(result.lastInsertRowid)
+    replaceBouquetTemplateItems(client, bouquetId, normalized.items)
+    return bouquetId
+  })
+
+  return create()
+}
+
+export function updateBouquetTemplate(id: number, input: BouquetTemplateInput) {
+  const client = db()
+  const update = client.transaction(() => {
+    const bouquetId = Math.trunc(id)
+    const existing = getBouquetTemplateRecord(client, bouquetId)
+    if (!existing) {
+      throw new Error("Букет не найден.")
+    }
+
+    const normalized = normalizeBouquetTemplateInput(client, input)
+    client
+      .prepare(
+        `UPDATE bouquet_templates
+         SET name = @name, description = @description, price = @price, is_active = @isActive,
+          updated_at = CURRENT_TIMESTAMP
+         WHERE id = @id`
+      )
+      .run({
+        id: bouquetId,
+        name: normalized.name,
+        description: normalized.description,
+        price: normalized.price,
+        isActive: normalized.isActive ? 1 : 0,
+      })
+    replaceBouquetTemplateItems(client, bouquetId, normalized.items)
+  })
+
+  update()
+}
+
+export function toggleBouquetTemplateActive(id: number) {
+  const client = db()
+  const toggle = client.transaction(() => {
+    const bouquetId = Math.trunc(id)
+    const existing = getBouquetTemplateRecord(client, bouquetId)
+    if (!existing) {
+      throw new Error("Букет не найден.")
+    }
+
+    const nextActive = numberFromRow(existing.is_active) === 1 ? 0 : 1
+    client
+      .prepare("UPDATE bouquet_templates SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .run(nextActive, bouquetId)
+    return nextActive === 1
+  })
+
+  return toggle()
+}
+
+export function deleteBouquetTemplate(id: number) {
+  const client = db()
+  const deactivate = client.transaction(() => {
+    const bouquetId = Math.trunc(id)
+    const existing = getBouquetTemplateRecord(client, bouquetId)
+    if (!existing) {
+      throw new Error("Букет не найден.")
+    }
+
+    client
+      .prepare("UPDATE bouquet_templates SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .run(bouquetId)
+  })
+
+  deactivate()
+}
+
+function getBouquetTemplateRecord(client: Database.Database, id: number) {
+  return client.prepare("SELECT * FROM bouquet_templates WHERE id = ?").get(id) as
+    | Record<string, unknown>
+    | undefined
+}
+
+function listBouquetTemplateItems(bouquetId: number, client: Database.Database) {
+  const rows = client
+    .prepare(
+      `SELECT bouquet_template_items.id, bouquet_template_items.bouquet_id as bouquetId,
+        bouquet_template_items.product_code as productCode,
+        bouquet_template_items.product_name as productName,
+        bouquet_template_items.qty, bouquet_template_items.created_at as createdAt,
+        COALESCE(products.stock, 0) as stock, COALESCE(products.reserved, 0) as reserved,
+        COALESCE(products.image_path, '') as imagePath
+       FROM bouquet_template_items
+       LEFT JOIN products ON products.code = bouquet_template_items.product_code
+       WHERE bouquet_template_items.bouquet_id = ?
+       ORDER BY bouquet_template_items.id ASC`
+    )
+    .all(bouquetId) as Array<Record<string, unknown>>
+
+  return rows.map((row) => {
+    const stock = numberFromRow(row.stock)
+    const reserved = numberFromRow(row.reserved)
+    return {
+      id: numberFromRow(row.id),
+      bouquetId: numberFromRow(row.bouquetId),
+      productCode: String(row.productCode ?? ""),
+      productName: String(row.productName ?? ""),
+      qty: numberFromRow(row.qty),
+      stock,
+      reserved,
+      available: stock - reserved,
+      imagePath: String(row.imagePath ?? ""),
+      createdAt: String(row.createdAt ?? ""),
+    } satisfies BouquetTemplateItem
+  })
+}
+
+function mapBouquetTemplate(row: Record<string, unknown>, items: BouquetTemplateItem[]): BouquetTemplate {
+  return {
+    id: numberFromRow(row.id),
+    name: String(row.name ?? ""),
+    description: String(row.description ?? ""),
+    price: numberFromRow(row.price),
+    isActive: numberFromRow(row.isActive ?? row.is_active) === 1,
+    createdByUserId:
+      row.createdByUserId === null || row.createdByUserId === undefined ? null : numberFromRow(row.createdByUserId),
+    createdByName: String(row.createdByName ?? ""),
+    createdAt: String(row.createdAt ?? ""),
+    updatedAt: String(row.updatedAt ?? ""),
+    itemsCount: numberFromRow(row.itemsCount) || items.length,
+    items,
+  }
+}
+
+function normalizeBouquetTemplateInput(client: Database.Database, input: BouquetTemplateInput) {
+  const name = clean(input.name)
+  if (!name) {
+    throw new Error("Укажите название букета.")
+  }
+
+  const price = Number(input.price ?? 0)
+  if (!Number.isFinite(price) || price < 0) {
+    throw new Error("Цена букета не может быть отрицательной.")
+  }
+
+  if (!input.items.length) {
+    throw new Error("Добавьте хотя бы одну позицию в состав букета.")
+  }
+
+  const itemsByCode = new Map<string, { productCode: string; productName: string; qty: number }>()
+  for (const rawItem of input.items) {
+    const productCode = clean(rawItem.productCode)
+    const qty = Number(rawItem.qty)
+    if (!productCode) {
+      throw new Error("У каждой позиции букета должен быть товар склада.")
+    }
+    if (!Number.isFinite(qty) || qty <= 0) {
+      throw new Error("Количество в составе букета должно быть больше нуля.")
+    }
+
+    const product = getProduct(client, productCode)
+    if (!product) {
+      throw new Error(`Товар ${productCode} не найден.`)
+    }
+
+    const existing = itemsByCode.get(productCode)
+    itemsByCode.set(productCode, {
+      productCode,
+      productName: String(product.name ?? productCode),
+      qty: (existing?.qty ?? 0) + qty,
+    })
+  }
+
+  const items = [...itemsByCode.values()]
+  if (!items.length) {
+    throw new Error("Добавьте хотя бы одну позицию в состав букета.")
+  }
+
+  return {
+    name,
+    description: clean(input.description ?? ""),
+    price,
+    isActive: input.isActive ?? true,
+    items,
+  }
+}
+
+function replaceBouquetTemplateItems(
+  client: Database.Database,
+  bouquetId: number,
+  items: Array<{ productCode: string; productName: string; qty: number }>
+) {
+  client.prepare("DELETE FROM bouquet_template_items WHERE bouquet_id = ?").run(bouquetId)
+  const insertItem = client.prepare(
+    `INSERT INTO bouquet_template_items (bouquet_id, product_code, product_name, qty)
+     VALUES (?, ?, ?, ?)`
+  )
+  for (const item of items) {
+    insertItem.run(bouquetId, item.productCode, item.productName, item.qty)
+  }
+}
+
 function applyProductDelta(
   client: Database.Database,
   input: {
@@ -2488,7 +2857,8 @@ export function getDashboardData(): DashboardData {
 
   const orderRows = client
     .prepare(
-      `SELECT id, number, customer_id as customerId, deal_id as dealId, customer, phone, COALESCE(source, '') as source,
+      `SELECT id, number, customer_id as customerId, deal_id as dealId, customer, phone,
+        COALESCE(recipient_phone, '') as recipientPhone, COALESCE(source, '') as source,
         created_by_user_id as createdByUserId, updated_by_user_id as updatedByUserId,
         COALESCE(delivery_type, 'pickup') as deliveryType, COALESCE(address, '') as address,
         due_at as dueAt, status,
@@ -2523,6 +2893,8 @@ export function getDashboardData(): DashboardData {
           COALESCE(order_items.discount_type, 'none') as discountType,
           COALESCE(order_items.discount_value, 0) as discountValue,
           COALESCE(order_items.discount_amount, 0) as discountAmount,
+          order_items.bouquet_id as bouquetId, COALESCE(order_items.bouquet_name, '') as bouquetName,
+          COALESCE(order_items.bouquet_group_id, '') as bouquetGroupId,
           COALESCE(NULLIF(order_items.total_before_discount, 0), order_items.total) as totalBeforeDiscount,
           order_items.total
          FROM order_items
@@ -2543,6 +2915,9 @@ export function getDashboardData(): DashboardData {
         imagePath: String(row.imagePath ?? ""),
         qty: numberFromRow(row.qty),
         price: numberFromRow(row.price),
+        bouquetId: row.bouquetId === null || row.bouquetId === undefined ? null : numberFromRow(row.bouquetId),
+        bouquetName: String(row.bouquetName ?? ""),
+        bouquetGroupId: String(row.bouquetGroupId ?? ""),
         discountType: normalizeDiscountType(String(row.discountType ?? "none")),
         discountValue: numberFromRow(row.discountValue),
         discountAmount: numberFromRow(row.discountAmount),
@@ -2565,6 +2940,7 @@ export function getDashboardData(): DashboardData {
         dealId: row.dealId === null ? null : numberFromRow(row.dealId),
         customer: String(row.customer ?? ""),
         phone: String(row.phone ?? ""),
+        recipientPhone: String(row.recipientPhone ?? ""),
         source: String(row.source ?? ""),
         deliveryType: String(row.deliveryType ?? "pickup"),
         address: String(row.address ?? ""),
@@ -2629,6 +3005,7 @@ export function getDashboardData(): DashboardData {
     users: listUsers(client),
     customers,
     suppliers: listSuppliers({}, client),
+    bouquetTemplates: listBouquetTemplates(),
     stats: {
       productsCount: products.length,
       lowStockCount: products.filter((product) => product.available > 0 && product.available <= 3).length,
@@ -3880,6 +4257,30 @@ export function cancelStockDocument(documentId: number) {
   cancelDocument()
 }
 
+function calculateComponentLineTotal({
+  qty,
+  price,
+  discountType,
+  discountValue,
+  bouquetGroupId,
+}: CommercialLineInput & { bouquetGroupId?: string | null }) {
+  return calculateLineTotal({
+    qty: bouquetGroupId && price > 0 ? 1 : qty,
+    price,
+    discountType,
+    discountValue,
+  })
+}
+
+function itemsForCommercialTotals<T extends CommercialLineInput & { bouquetGroupId?: string | null }>(items: T[]) {
+  return items.map((item) => ({
+    qty: item.bouquetGroupId && item.price > 0 ? 1 : item.qty,
+    price: item.price,
+    discountType: item.discountType,
+    discountValue: item.discountValue,
+  }))
+}
+
 function buildSaleItems(client: Database.Database, formData: FormData) {
   const multiProductCodes = formData.getAll("itemProductCode").map((value) => clean(value))
   const productCodes = multiProductCodes.length ? multiProductCodes : [clean(formData.get("productCode"))]
@@ -3887,6 +4288,11 @@ function buildSaleItems(client: Database.Database, formData: FormData) {
   const priceValues = multiProductCodes.length ? formData.getAll("itemPrice") : [formData.get("price")]
   const discountTypes = multiProductCodes.length ? formData.getAll("itemDiscountType") : [formData.get("itemDiscountType")]
   const discountValues = multiProductCodes.length ? formData.getAll("itemDiscountValue") : [formData.get("itemDiscountValue")]
+  const bouquetIds = multiProductCodes.length ? formData.getAll("itemBouquetId") : [formData.get("itemBouquetId")]
+  const bouquetNames = multiProductCodes.length ? formData.getAll("itemBouquetName") : [formData.get("itemBouquetName")]
+  const bouquetGroupIds = multiProductCodes.length
+    ? formData.getAll("itemBouquetGroupId")
+    : [formData.get("itemBouquetGroupId")]
 
   if (!productCodes.length || productCodes.every((code) => !code)) {
     throw new Error("Добавьте в продажу хотя бы одну позицию со склада.")
@@ -3915,9 +4321,13 @@ function buildSaleItems(client: Database.Database, formData: FormData) {
     const unitPrice = explicitPrice ?? numberFromRow(product.sale_price)
     const discountType = normalizeDiscountType(clean(discountTypes[index] ?? null))
     const discountValue = Math.max(0, toNumber(discountValues[index]))
-    const totals = calculateLineTotal({
+    const bouquetId = toOptionalNumber(bouquetIds[index] ?? null)
+    const bouquetName = clean(bouquetNames[index] ?? null)
+    const bouquetGroupId = clean(bouquetGroupIds[index] ?? null)
+    const totals = calculateComponentLineTotal({
       qty,
       price: unitPrice,
+      bouquetGroupId,
       discountType,
       discountValue,
     })
@@ -3928,6 +4338,9 @@ function buildSaleItems(client: Database.Database, formData: FormData) {
       qty,
       unitPrice,
       price: unitPrice,
+      bouquetId: bouquetId && bouquetId > 0 ? bouquetId : null,
+      bouquetName: bouquetGroupId ? bouquetName : "",
+      bouquetGroupId,
       discountType,
       discountValue: discountType === "none" ? 0 : discountValue,
       discountAmount: totals.discountAmount,
@@ -3973,7 +4386,7 @@ export function createSale(formData: FormData, currentUser: CurrentUser) {
     const customer = resolveCashCustomer(client, formData)
     const saleDiscountType = normalizeDiscountType(clean(formData.get("saleDiscountType")))
     const saleDiscountValue = saleDiscountType === "none" ? 0 : Math.max(0, toNumber(formData.get("saleDiscountValue")))
-    const totals = calculateCommercialTotals(items, saleDiscountType, saleDiscountValue)
+    const totals = calculateCommercialTotals(itemsForCommercialTotals(items), saleDiscountType, saleDiscountValue)
     const total = totals.total
     const sale = client
       .prepare(
@@ -4004,8 +4417,8 @@ export function createSale(formData: FormData, currentUser: CurrentUser) {
     const insertItem = client.prepare(
       `INSERT INTO sale_items (
         sale_id, product_code, qty, unit_price, discount_type, discount_value,
-        discount_amount, total_before_discount, total
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        discount_amount, total_before_discount, total, bouquet_id, bouquet_name, bouquet_group_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     for (const item of items) {
       insertItem.run(
@@ -4017,7 +4430,10 @@ export function createSale(formData: FormData, currentUser: CurrentUser) {
         item.discountValue,
         item.discountAmount,
         item.totalBeforeDiscount,
-        item.total
+        item.total,
+        item.bouquetId,
+        item.bouquetName,
+        item.bouquetGroupId
       )
       applyProductDelta(client, {
         productCode: item.productCode,
@@ -4236,6 +4652,9 @@ function buildOrderItems(client: Database.Database, formData: FormData) {
   const priceValues = formData.getAll("itemPrice")
   const discountTypes = formData.getAll("itemDiscountType")
   const discountValues = formData.getAll("itemDiscountValue")
+  const bouquetIds = formData.getAll("itemBouquetId")
+  const bouquetNames = formData.getAll("itemBouquetName")
+  const bouquetGroupIds = formData.getAll("itemBouquetGroupId")
 
   if (!productCodes.length || productCodes.every((code) => !code)) {
     throw new Error("Добавьте в заказ хотя бы одну позицию со склада.")
@@ -4264,9 +4683,13 @@ function buildOrderItems(client: Database.Database, formData: FormData) {
     const price = explicitPrice ?? numberFromRow(product.sale_price)
     const discountType = normalizeDiscountType(clean(discountTypes[index] ?? null))
     const discountValue = discountType === "none" ? 0 : Math.max(0, toNumber(discountValues[index]))
-    const totals = calculateLineTotal({
+    const bouquetId = toOptionalNumber(bouquetIds[index] ?? null)
+    const bouquetName = clean(bouquetNames[index] ?? null)
+    const bouquetGroupId = clean(bouquetGroupIds[index] ?? null)
+    const totals = calculateComponentLineTotal({
       qty,
       price,
+      bouquetGroupId,
       discountType,
       discountValue,
     })
@@ -4276,6 +4699,9 @@ function buildOrderItems(client: Database.Database, formData: FormData) {
       name: String(product.name),
       qty,
       price,
+      bouquetId: bouquetId && bouquetId > 0 ? bouquetId : null,
+      bouquetName: bouquetGroupId ? bouquetName : "",
+      bouquetGroupId,
       discountType,
       discountValue,
       discountAmount: totals.discountAmount,
@@ -4290,6 +4716,7 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
   const customerSnapshot = resolveCashCustomer(client, formData)
   const customer = customerSnapshot.name || clean(formData.get("customer")) || clean(formData.get("customer_name"))
   const phone = customerSnapshot.phone || clean(formData.get("phone"))
+  const recipientPhone = clean(formData.get("recipientPhone"))
   const dueAt = clean(formData.get("dueAt"))
   const deliveryType = clean(formData.get("deliveryType")) || "pickup"
   const address = clean(formData.get("address"))
@@ -4319,7 +4746,7 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
 
   const saveOrder = client.transaction(() => {
     const items = buildOrderItems(client, formData)
-    const totals = calculateCommercialTotals(items, orderDiscountType, orderDiscountValue)
+    const totals = calculateCommercialTotals(itemsForCommercialTotals(items), orderDiscountType, orderDiscountValue)
     const total = totals.total + deliveryPrice
 
     if (prepaid > total && total >= 0) {
@@ -4330,13 +4757,13 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
     const order = client
       .prepare(
         `INSERT INTO orders (
-          created_by_user_id, updated_by_user_id, customer_id, customer, phone, source, delivery_type, address,
-          due_at, status, items_total_before_discount, items_discount_total, order_discount_type,
+          created_by_user_id, updated_by_user_id, customer_id, customer, phone, recipient_phone, source,
+          delivery_type, address, due_at, status, items_total_before_discount, items_discount_total, order_discount_type,
           order_discount_value, order_discount_amount, total_before_discount, total, prepaid, paid,
           delivery_price, courier_payout, is_reserved, note, updated_at
         ) VALUES (
-          @createdByUserId, @updatedByUserId, @customerId, @customer, @phone, @source, @deliveryType, @address,
-          @dueAt, 'Новый', @itemsTotalBeforeDiscount, @itemsDiscountTotal, @orderDiscountType,
+          @createdByUserId, @updatedByUserId, @customerId, @customer, @phone, @recipientPhone, @source,
+          @deliveryType, @address, @dueAt, 'Новый', @itemsTotalBeforeDiscount, @itemsDiscountTotal, @orderDiscountType,
           @orderDiscountValue, @orderDiscountAmount, @totalBeforeDiscount, @total, @prepaid, @paid,
           @deliveryPrice, @courierPayout, 1, @note, CURRENT_TIMESTAMP
         )`
@@ -4347,6 +4774,7 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
         customerId: customerSnapshot.id,
         customer,
         phone,
+        recipientPhone,
         source: clean(formData.get("source")),
         deliveryType,
         address: deliveryType === "delivery" ? address : "",
@@ -4372,8 +4800,8 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
     const insertItem = client.prepare(
       `INSERT INTO order_items (
         order_id, product_code, name, qty, price, discount_type, discount_value,
-        discount_amount, total_before_discount, total, is_custom
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        discount_amount, total_before_discount, total, is_custom, bouquet_id, bouquet_name, bouquet_group_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     for (const item of items) {
       insertItem.run(
@@ -4387,7 +4815,10 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
         item.discountAmount,
         item.totalBeforeDiscount,
         item.total,
-        0
+        0,
+        item.bouquetId,
+        item.bouquetName,
+        item.bouquetGroupId
       )
       applyProductDelta(client, {
         productCode: item.productCode,
@@ -4449,7 +4880,9 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
       .prepare(
         `SELECT id, product_code as productCode, product_name as productName,
           qty, price, COALESCE(discount_type, 'none') as discountType,
-          COALESCE(discount_value, 0) as discountValue
+          COALESCE(discount_value, 0) as discountValue,
+          bouquet_id as bouquetId, COALESCE(bouquet_name, '') as bouquetName,
+          COALESCE(bouquet_group_id, '') as bouquetGroupId
          FROM deal_items
          WHERE deal_id = ?
          ORDER BY id ASC`
@@ -4473,9 +4906,14 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
 
       const discountType = normalizeDiscountType(String(item.discountType ?? "none"))
       const discountValue = discountType === "none" ? 0 : Math.max(0, numberFromRow(item.discountValue))
-      const line = calculateLineTotal({
+      const price = numberFromRow(item.price)
+      const bouquetId = item.bouquetId === null || item.bouquetId === undefined ? null : numberFromRow(item.bouquetId)
+      const bouquetName = String(item.bouquetName ?? "")
+      const bouquetGroupId = String(item.bouquetGroupId ?? "")
+      const line = calculateComponentLineTotal({
         qty,
-        price: numberFromRow(item.price),
+        price,
+        bouquetGroupId,
         discountType,
         discountValue,
       })
@@ -4485,7 +4923,10 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
         productCode,
         name: String(item.productName ?? productCode),
         qty,
-        price: numberFromRow(item.price),
+        price,
+        bouquetId: bouquetId && bouquetId > 0 ? bouquetId : null,
+        bouquetName: bouquetGroupId ? bouquetName : "",
+        bouquetGroupId,
         discountType,
         discountValue,
         discountAmount: line.discountAmount,
@@ -4497,13 +4938,14 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
     const orderDiscountType = normalizeDiscountType(String(deal.deal_discount_type ?? "none"))
     const orderDiscountValue =
       orderDiscountType === "none" ? 0 : Math.max(0, numberFromRow(deal.deal_discount_value))
-    const totals = calculateCommercialTotals(items, orderDiscountType, orderDiscountValue)
+    const totals = calculateCommercialTotals(itemsForCommercialTotals(items), orderDiscountType, orderDiscountValue)
     const paid = Math.max(0, numberFromRow(deal.paid))
     if (paid - totals.total > 0.009) {
       throw new Error("Оплата по сделке не может быть больше суммы заказа.")
     }
     const customer = cleanRowString(deal.customer_name) || "Клиент сделки"
     const phone = cleanRowString(deal.customer_phone)
+    const recipientPhone = cleanRowString(deal.recipient_phone)
     const deliveryType = cleanRowString(deal.delivery_type) || "pickup"
     const address = cleanRowString(deal.address)
     const note = cleanRowString(deal.comment)
@@ -4511,12 +4953,12 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
     const order = client
       .prepare(
         `INSERT INTO orders (
-          created_by_user_id, updated_by_user_id, customer_id, deal_id, customer, phone, source,
+          created_by_user_id, updated_by_user_id, customer_id, deal_id, customer, phone, recipient_phone, source,
           delivery_type, address, due_at, status, items_total_before_discount, items_discount_total,
           order_discount_type, order_discount_value, order_discount_amount, total_before_discount,
           total, prepaid, paid, delivery_price, courier_payout, is_reserved, note, updated_at
         ) VALUES (
-          @createdByUserId, @updatedByUserId, @customerId, @dealId, @customer, @phone, 'deal',
+          @createdByUserId, @updatedByUserId, @customerId, @dealId, @customer, @phone, @recipientPhone, 'deal',
           @deliveryType, @address, @dueAt, 'Новый', @itemsTotalBeforeDiscount, @itemsDiscountTotal,
           @orderDiscountType, @orderDiscountValue, @orderDiscountAmount, @totalBeforeDiscount,
           @total, @prepaid, @paid, 0, 0, 1, @note, CURRENT_TIMESTAMP
@@ -4529,6 +4971,7 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
         dealId,
         customer,
         phone,
+        recipientPhone,
         deliveryType,
         address,
         dueAt: cleanRowString(deal.due_at),
@@ -4551,8 +4994,8 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
     const insertItem = client.prepare(
       `INSERT INTO order_items (
         order_id, product_code, name, qty, price, discount_type, discount_value,
-        discount_amount, total_before_discount, total, is_custom
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+        discount_amount, total_before_discount, total, is_custom, bouquet_id, bouquet_name, bouquet_group_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
     )
     const updateDealItem = client.prepare(
       `UPDATE deal_items
@@ -4571,7 +5014,10 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
         item.discountValue,
         item.discountAmount,
         item.totalBeforeDiscount,
-        item.total
+        item.total,
+        item.bouquetId,
+        item.bouquetName,
+        item.bouquetGroupId
       )
       updateDealItem.run(item.discountAmount, item.totalBeforeDiscount, item.total, item.id)
       applyProductDelta(client, {
