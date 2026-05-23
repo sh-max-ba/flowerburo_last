@@ -25,6 +25,7 @@ import {
   listWazzupChannels,
   maskWazzupWebhookUrl,
   saveWazzupSettings,
+  sendBouquetToDealChat,
   syncWazzupAll,
   syncWazzupContacts,
   syncWazzupDeals,
@@ -553,6 +554,20 @@ export async function addDealBouquetAction(dealId: number, bouquetId: number) {
     addDealBouquet(dealId, bouquetId)
     revalidateCrm(null, dealId)
   }, "Букет добавлен.")
+}
+
+export async function sendBouquetToDealChatAction(dealId: number, bouquetId: number): Promise<ActionResult> {
+  try {
+    const user = await requireActionRole(["owner", "manager"])
+    await sendBouquetToDealChat(dealId, bouquetId, user)
+    revalidateCrm(null, dealId)
+    return { ok: true, message: "Букет отправлен в чат", messages: ["Букет отправлен в чат"] }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Букет не отправлен в чат.",
+    }
+  }
 }
 
 export async function updateDealItemAction(formData: FormData) {

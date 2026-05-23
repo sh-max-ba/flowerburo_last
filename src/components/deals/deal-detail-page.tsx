@@ -4,7 +4,15 @@ import type React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useRef, useState, useTransition } from "react"
-import { CheckCircle2Icon, ExternalLinkIcon, ReceiptTextIcon, ShoppingBagIcon, Trash2Icon } from "lucide-react"
+import {
+  CheckCircle2Icon,
+  ExternalLinkIcon,
+  PlusIcon,
+  ReceiptTextIcon,
+  SendIcon,
+  ShoppingBagIcon,
+  Trash2Icon,
+} from "lucide-react"
 import { toast } from "sonner"
 import {
   addDealItemAction,
@@ -13,14 +21,16 @@ import {
   createOrderFromDealAction,
   removeDealItemAction,
   removeDealItemGroupAction,
+  sendBouquetToDealChatAction,
   updateDealFieldsAction,
   updateDealItemAction,
 } from "@/app/actions"
 import type { Customer, Deal, DealItem, DealSource, DealStage } from "@/lib/crm"
 import { calculateCommercialTotals, calculateLineTotal, type DiscountType } from "@/lib/pricing"
-import type { BouquetTemplate, CurrentUser, PaymentMethod, Product } from "@/lib/db"
+import type { BouquetTemplate, CurrentUser, DealBouquetMessage, PaymentMethod, Product } from "@/lib/db"
 import { getPaymentMethodLabel, paymentMethodOptions, sourceLabel as getSourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
+import { BouquetThumbnail } from "@/components/bouquets/bouquet-thumbnail"
 import { WazzupDealFrame } from "@/components/deals/wazzup-deal-frame"
 import { ProductCombobox } from "@/components/products/product-combobox"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
@@ -98,6 +108,7 @@ export function DealDetailPage({
   users,
   products,
   bouquets,
+  bouquetMessages,
   openShift,
 }: {
   deal: Deal
@@ -106,6 +117,7 @@ export function DealDetailPage({
   users: CurrentUser[]
   products: Product[]
   bouquets: BouquetTemplate[]
+  bouquetMessages: DealBouquetMessage[]
   openShift: { id: number; status: "open" | "closed" } | null
 }) {
   const router = useRouter()
@@ -119,6 +131,8 @@ export function DealDetailPage({
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
   const [paymentComment, setPaymentComment] = useState("")
   const [showShiftWarning, setShowShiftWarning] = useState(false)
+  const [bouquetSearch, setBouquetSearch] = useState("")
+  const [sendingBouquetId, setSendingBouquetId] = useState<number | null>(null)
   const [actionPending, startActionTransition] = useTransition()
   const currentDealIdRef = useRef(deal.id)
   const fieldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -173,6 +187,19 @@ export function DealDetailPage({
   const stagesById = useMemo(() => new Map(stages.map((stage) => [String(stage.id), stage])), [stages])
   const usersById = useMemo(() => new Map(users.map((user) => [String(user.id), user])), [users])
   const selectedCustomer = draft.customerId === noValue ? null : customersById.get(draft.customerId) ?? null
+  const suggestedBouquets = useMemo(() => {
+    const query = bouquetSearch.trim().toLowerCase()
+    if (!query) {
+      return bouquets
+    }
+
+    return bouquets.filter((bouquet) =>
+      [bouquet.name, bouquet.description, String(bouquet.price)]
+        .join(" ")
+        .toLowerCase()
+        .includes(query)
+    )
+  }, [bouquetSearch, bouquets])
 
   const pricedItems = useMemo(
     () =>
@@ -471,6 +498,23 @@ export function DealDetailPage({
     } else {
       setItemSaveStatus("error")
       setSaveError(result.message)
+    }
+  }
+
+  async function sendBouquet(bouquet: BouquetTemplate) {
+    setSendingBouquetId(bouquet.id)
+    try {
+      const result = await sendBouquetToDealChatAction(deal.id, bouquet.id)
+      if (result.ok) {
+        toast.success("Букет отправлен в чат")
+        router.refresh()
+      } else {
+        toast.error(result.message)
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Букет не отправлен в чат.")
+    } finally {
+      setSendingBouquetId(null)
     }
   }
 
@@ -1036,6 +1080,115 @@ export function DealDetailPage({
 
           <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
             <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold text-zinc-950">Предложить букет</CardTitle>
+              <CardDescription>Отправка активного букета клиенту в Wazzup</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3 overflow-visible">
+              <Field>
+                <FieldLabel className="text-xs text-muted-foreground">Поиск букета</FieldLabel>
+                <FieldContent>
+                  <Input
+                    value={bouquetSearch}
+                    placeholder="Название, описание или цена"
+                    onChange={(event) => setBouquetSearch(event.target.value)}
+                  />
+                </FieldContent>
+              </Field>
+
+              {suggestedBouquets.length ? (
+                <div className="flex max-h-[420px] flex-col gap-2 overflow-y-auto pr-1">
+                  {suggestedBouquets.map((bouquet) => (
+                    <div key={bouquet.id} className="rounded-lg border border-zinc-200 p-3">
+                      <div className="flex min-w-0 gap-3">
+                        <BouquetThumbnail name={bouquet.name} imagePath={bouquet.imagePath} size="lg" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-zinc-950">{bouquet.name}</div>
+                              <div className="text-sm font-semibold text-zinc-950">{formatMoney(bouquet.price)}</div>
+                            </div>
+                            <Badge variant="secondary">{bouquet.itemsCount} поз.</Badge>
+                          </div>
+                          <div className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                            {bouquet.description || "Описание букета пока не заполнено."}
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={sendingBouquetId !== null}
+                              onClick={() => void sendBouquet(bouquet)}
+                            >
+                              <SendIcon data-icon="inline-start" />
+                              {sendingBouquetId === bouquet.id ? "Отправляем..." : "Отправить в чат"}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={itemSaveStatus === "saving" || hasPendingSaves}
+                              onClick={() => void addBouquet(bouquet)}
+                            >
+                              <PlusIcon data-icon="inline-start" />
+                              Добавить в сделку
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-zinc-200 p-4 text-sm text-muted-foreground">
+                  Активные букеты не найдены.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold text-zinc-950">Отправленные букеты</CardTitle>
+              <CardDescription>История предложений клиенту</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2 overflow-visible">
+              {bouquetMessages.length ? (
+                bouquetMessages.map((message) => (
+                  <div key={message.id} className="flex gap-3 rounded-lg border border-zinc-200 p-3">
+                    <BouquetThumbnail
+                      name={message.bouquetName}
+                      imagePath={message.imagePath}
+                      size="sm"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0 truncate font-medium text-zinc-950">
+                          {message.bouquetName || `Букет #${message.bouquetId}`}
+                        </div>
+                        <Badge variant={message.status === "sent" ? "secondary" : "destructive"}>
+                          {message.status === "sent" ? "Отправлен" : "Ошибка"}
+                        </Badge>
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {formatDateTime(message.sentAt)}
+                        {message.sentByName ? ` · ${message.sentByName}` : ""}
+                      </div>
+                      {message.error && (
+                        <div className="mt-1 line-clamp-2 text-xs text-destructive">{message.error}</div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-lg border border-dashed border-zinc-200 p-4 text-sm text-muted-foreground">
+                  Букеты еще не отправлялись.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+            <CardHeader className="pb-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle className="text-base font-semibold text-zinc-950">Скидка на чек</CardTitle>
                 {hasAppliedCustomerDiscount && selectedCustomer && (
@@ -1176,7 +1329,7 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm xl:sticky xl:bottom-4">
+          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Итог</CardTitle>
               <CardDescription>Суммы считаются текущими правилами расчета</CardDescription>
@@ -1508,6 +1661,25 @@ function roundMoney(value: number) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value)
+}
+
+function formatDateTime(value: string) {
+  if (!value) {
+    return "-"
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
 }
 
 function mergeStatus(fieldStatus: SaveStatus, itemStatus: SaveStatus): SaveStatus {

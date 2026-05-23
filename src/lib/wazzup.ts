@@ -1,6 +1,16 @@
 import crypto from "node:crypto"
 import { getDeal, normalizePhone, type Deal } from "@/lib/crm"
-import { initDb, listUsers, type CurrentUser, type UserRole } from "@/lib/db"
+import {
+  getBouquetTemplate,
+  initDb,
+  listUsers,
+  recordDealBouquetMessage,
+  type BouquetTemplate,
+  type CurrentUser,
+  type UserRole,
+} from "@/lib/db"
+import { getSafeBouquetImagePath } from "@/lib/product-images"
+import { formatMoney } from "@/lib/utils"
 
 export type WazzupIframeResult =
   | ({ status: "ok"; url: string } & WazzupIframeSafeDiagnostics)
@@ -196,6 +206,8 @@ type DealForWazzupTarget = Pick<
 
 const provider = "wazzup"
 const wazzupApiBaseUrl = "https://api.wazzup24.com/v3"
+const wazzupMessagePath = "/message"
+const wazzupSendUnavailableMessage = "Невозможно отправить: у сделки нет телефона клиента или Wazzup не настроен."
 export const wazzupWebhookTargetUrl = "http://91.99.4.32:3000/api/wazzup/webhook"
 
 export function getWazzupSettingsForServer(): WazzupServerSettings {
@@ -657,6 +669,173 @@ export async function getWazzupIframeUrlForDeal(
 
   persistWazzupTargetForDeal(deal.id, targetWithChannel)
   return { status: "ok", url: data.url, ...diagnostics }
+}
+
+export async function sendBouquetToDealChat(
+  dealId: number,
+  bouquetId: number,
+  currentUser: CurrentUser
+) {
+  const deal = getDeal(dealId)
+  if (!deal) {
+    throw new Error("Сделка не найдена.")
+  }
+
+  const bouquet = getBouquetTemplate(bouquetId)
+  if (!bouquet || !bouquet.isActive) {
+    throw new Error("Активный букет не найден.")
+  }
+
+  const messageText = buildBouquetMessageText(bouquet)
+  const imagePath = getSafeBouquetImagePath(bouquet.imagePath)
+
+  try {
+    const settings = getWazzupSettingsForServer()
+    const target = resolveWazzupChatTargetForDeal(deal)
+    if (target.status !== "ok" || !settings.isEnabled || !settings.apiKey) {
+      throw new Error(wazzupSendUnavailableMessage)
+    }
+
+    const targetWithChannel = await withActiveWhatsappChannel(target)
+    const channelId = clean(targetWithChannel.channelId)
+    if (!channelId) {
+      throw new Error(wazzupSendUnavailableMessage)
+    }
+
+    const basePayload = {
+      channelId,
+      chatType: targetWithChannel.chatType,
+      chatId: targetWithChannel.chatId,
+      crmUserId: String(currentUser.id),
+    }
+
+    if (clean(bouquet.imagePath) && !imagePath) {
+      throw new Error("Фото букета недоступно.")
+    }
+
+    if (imagePath) {
+      await postWazzupMessage({
+        ...basePayload,
+        contentUri: getAbsoluteBouquetImageUrl(imagePath),
+        crmMessageId: createCrmMessageId(deal.id, bouquet.id, "image"),
+      })
+    }
+
+    await postWazzupMessage({
+      ...basePayload,
+      text: messageText,
+      crmMessageId: createCrmMessageId(deal.id, bouquet.id, "text"),
+    })
+
+    persistWazzupTargetForDeal(deal.id, targetWithChannel)
+    recordDealBouquetMessage({
+      dealId: deal.id,
+      bouquetId: bouquet.id,
+      bouquetName: bouquet.name,
+      messageText,
+      imagePath,
+      sentByUserId: currentUser.id,
+      sentByName: currentUser.name,
+      status: "sent",
+    })
+
+    return {
+      endpoint: `${wazzupApiBaseUrl}${wazzupMessagePath}`,
+      sentImage: Boolean(imagePath),
+    }
+  } catch (error) {
+    const message = safeWazzupBouquetSendErrorMessage(error)
+    recordDealBouquetMessage({
+      dealId: deal.id,
+      bouquetId: bouquet.id,
+      bouquetName: bouquet.name,
+      messageText,
+      imagePath,
+      sentByUserId: currentUser.id,
+      sentByName: currentUser.name,
+      status: "failed",
+      error: message,
+    })
+    throw new Error(message)
+  }
+}
+
+type WazzupMessageRequest = {
+  channelId: string
+  chatType: string
+  chatId: string
+  crmUserId: string
+  crmMessageId: string
+  text?: string
+  contentUri?: string
+}
+
+function buildBouquetMessageText(bouquet: BouquetTemplate) {
+  const description = clean(bouquet.description) || "Описание букета пока не заполнено."
+
+  return [
+    `Букет “${clean(bouquet.name) || "Без названия"}”`,
+    formatMoney(bouquet.price),
+    "",
+    description,
+    "",
+    "Если понравился, можем сразу оформить заказ 🌸",
+  ].join("\n")
+}
+
+function getAbsoluteBouquetImageUrl(imagePath: string) {
+  const appUrl = clean(process.env.NEXT_PUBLIC_APP_URL)
+  if (!appUrl) {
+    throw new Error("Для отправки фото настройте NEXT_PUBLIC_APP_URL")
+  }
+
+  return `${appUrl.replace(/\/+$/, "")}${imagePath}`
+}
+
+function createCrmMessageId(dealId: number, bouquetId: number, kind: "image" | "text") {
+  return `deal-${dealId}-bouquet-${bouquetId}-${kind}-${crypto.randomUUID()}`
+}
+
+async function postWazzupMessage(payload: WazzupMessageRequest) {
+  const response = await requestWazzup(wazzupMessagePath, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+  const raw = await response.text()
+  const data = parseJson(raw)
+  if (!response.ok) {
+    throw new Error(safeWazzupMessageErrorMessage(response.status, data))
+  }
+}
+
+function safeWazzupMessageErrorMessage(status: number, data: unknown) {
+  if (status === 401) {
+    return "Невозможно отправить: неверный Wazzup API key."
+  }
+
+  const record = asRecord(data)
+  const code = wazzupErrorCode(data)
+  const description = clean(record.description)
+  if (code === "uriNotValid") {
+    return "Wazzup не смог получить фото по публичному URL."
+  }
+
+  return `Wazzup вернул HTTP ${status}${code ? `: ${code}` : ""}${description ? ` (${description})` : ""}`
+}
+
+function safeWazzupBouquetSendErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : ""
+  if (!message) {
+    return "Не удалось отправить букет через Wazzup."
+  }
+  if (message === "Wazzup API key не настроен") {
+    return wazzupSendUnavailableMessage
+  }
+
+  return message
 }
 
 export async function syncWazzupUsers(): Promise<WazzupUsersSyncResult> {

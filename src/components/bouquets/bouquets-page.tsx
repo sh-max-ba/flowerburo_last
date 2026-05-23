@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState, useTransition } from "react"
-import { PencilIcon, PlusIcon, PowerIcon, Trash2Icon } from "lucide-react"
+import { PencilIcon, PlusIcon, PowerIcon, Trash2Icon, UploadIcon } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
@@ -16,12 +16,13 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import { Field, FieldGroup, FieldLabel, FieldSet, FieldLegend } from "@/components/ui/field"
+import { Field, FieldDescription, FieldGroup, FieldLabel, FieldSet, FieldLegend } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
+import { BouquetThumbnail } from "@/components/bouquets/bouquet-thumbnail"
 import { ProductCombobox } from "@/components/products/product-combobox"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
 
@@ -48,6 +49,10 @@ export function BouquetsPage({
   const [price, setPrice] = useState(0)
   const [isActive, setIsActive] = useState(true)
   const [items, setItems] = useState<BouquetDraftItem[]>([])
+  const [imagePath, setImagePath] = useState("")
+  const [imageFile, setImageFile] = useState<File | null>(null)
+  const [uploadingImage, setUploadingImage] = useState(false)
+  const [imageVersion, setImageVersion] = useState(0)
   const [pending, startTransition] = useTransition()
   const productByCode = useMemo(() => new Map(products.map((product) => [product.code, product])), [products])
 
@@ -58,6 +63,9 @@ export function BouquetsPage({
     setPrice(0)
     setIsActive(true)
     setItems([])
+    setImagePath("")
+    setImageFile(null)
+    setImageVersion(0)
     setSheetOpen(true)
   }
 
@@ -67,6 +75,9 @@ export function BouquetsPage({
     setDescription(bouquet.description)
     setPrice(bouquet.price)
     setIsActive(bouquet.isActive)
+    setImagePath(bouquet.imagePath)
+    setImageFile(null)
+    setImageVersion(0)
     setItems(
       bouquet.items.map((item) => {
         const product = productByCode.get(item.productCode)
@@ -80,6 +91,37 @@ export function BouquetsPage({
       })
     )
     setSheetOpen(true)
+  }
+
+  async function uploadBouquetImage() {
+    if (!editing || !imageFile) {
+      return
+    }
+
+    const formData = new FormData()
+    formData.set("file", imageFile)
+    setUploadingImage(true)
+
+    try {
+      const response = await fetch(`/api/bouquets/${editing.id}/image`, {
+        method: "POST",
+        body: formData,
+      })
+      const payload = (await response.json()) as { ok?: boolean; message?: string; imagePath?: string }
+      if (!response.ok || !payload.ok || !payload.imagePath) {
+        throw new Error(payload.message || "Фото букета не загружено.")
+      }
+
+      setImagePath(payload.imagePath)
+      setImageFile(null)
+      setImageVersion(Date.now())
+      toast.success("Фото букета обновлено")
+      router.refresh()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Фото букета не загружено.")
+    } finally {
+      setUploadingImage(false)
+    }
   }
 
   function addProduct(product: Product) {
@@ -202,6 +244,7 @@ export function BouquetsPage({
               <Table className="min-w-[900px]">
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-16">Фото</TableHead>
                     <TableHead>Название</TableHead>
                     <TableHead className="w-32">Цена</TableHead>
                     <TableHead className="w-28">Статус</TableHead>
@@ -214,6 +257,9 @@ export function BouquetsPage({
                 <TableBody>
                   {bouquets.map((bouquet) => (
                     <TableRow key={bouquet.id}>
+                      <TableCell>
+                        <BouquetThumbnail name={bouquet.name} imagePath={bouquet.imagePath} size="lg" />
+                      </TableCell>
                       <TableCell className="font-medium">{bouquet.name}</TableCell>
                       <TableCell>{formatMoney(bouquet.price)}</TableCell>
                       <TableCell>
@@ -299,6 +345,41 @@ export function BouquetsPage({
                   <Checkbox checked={isActive} disabled={pending} onCheckedChange={(checked) => setIsActive(Boolean(checked))} />
                   <FieldLabel>Активен</FieldLabel>
                 </Field>
+
+                <FieldSet>
+                  <FieldLegend>Фото букета</FieldLegend>
+                  <div className="flex items-start gap-3">
+                    <BouquetThumbnail
+                      name={name || editing?.name || "Букет"}
+                      imagePath={imagePath}
+                      size="xl"
+                      cacheKey={imageVersion}
+                    />
+                    <Field className="min-w-0 flex-1">
+                      <FieldLabel htmlFor="bouquet-image">Файл</FieldLabel>
+                      <Input
+                        id="bouquet-image"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        disabled={!editing || pending || uploadingImage}
+                        onChange={(event) => setImageFile(event.target.files?.[0] ?? null)}
+                      />
+                      <FieldDescription>
+                        {editing ? "JPG, PNG или WEBP до 5 MB." : "Сначала сохраните букет, затем загрузите фото."}
+                      </FieldDescription>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-fit"
+                        disabled={!editing || !imageFile || pending || uploadingImage}
+                        onClick={uploadBouquetImage}
+                      >
+                        <UploadIcon data-icon="inline-start" />
+                        Загрузить фото
+                      </Button>
+                    </Field>
+                  </div>
+                </FieldSet>
 
                 <FieldSet>
                   <FieldLegend>Состав букета</FieldLegend>

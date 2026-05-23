@@ -68,6 +68,7 @@ export type BouquetTemplate = {
   id: number
   name: string
   description: string
+  imagePath: string
   price: number
   isActive: boolean
   createdByUserId: number | null
@@ -76,6 +77,22 @@ export type BouquetTemplate = {
   updatedAt: string
   itemsCount: number
   items: BouquetTemplateItem[]
+}
+
+export type DealBouquetMessageStatus = "sent" | "failed"
+
+export type DealBouquetMessage = {
+  id: number
+  dealId: number
+  bouquetId: number
+  bouquetName: string
+  messageText: string
+  imagePath: string
+  sentByUserId: number | null
+  sentByName: string
+  sentAt: string
+  status: DealBouquetMessageStatus
+  error: string
 }
 
 export type BouquetTemplateInput = {
@@ -728,6 +745,7 @@ function migrate(client: Database.Database) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       description TEXT,
+      image_path TEXT,
       price REAL DEFAULT 0,
       is_active INTEGER DEFAULT 1,
       created_by_user_id INTEGER,
@@ -974,6 +992,20 @@ function migrate(client: Database.Database) {
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS deal_bouquet_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deal_id INTEGER NOT NULL,
+      bouquet_id INTEGER NOT NULL,
+      bouquet_name TEXT,
+      message_text TEXT,
+      image_path TEXT,
+      sent_by_user_id INTEGER,
+      sent_by_name TEXT,
+      sent_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      status TEXT,
+      error TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_customers_normalized_phone ON customers(normalized_phone);
     CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
     CREATE INDEX IF NOT EXISTS idx_deal_stages_pipeline_position ON deal_stages(pipeline_id, position);
@@ -985,9 +1017,11 @@ function migrate(client: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_integration_settings_provider ON integration_settings(provider);
     CREATE INDEX IF NOT EXISTS idx_bouquet_template_items_bouquet_id ON bouquet_template_items(bouquet_id);
     CREATE INDEX IF NOT EXISTS idx_bouquet_template_items_product_code ON bouquet_template_items(product_code);
+    CREATE INDEX IF NOT EXISTS idx_deal_bouquet_messages_deal_id ON deal_bouquet_messages(deal_id, sent_at);
   `)
 
   ensureColumn("products", "image_path", "ALTER TABLE products ADD COLUMN image_path TEXT", client)
+  ensureColumn("bouquet_templates", "image_path", "ALTER TABLE bouquet_templates ADD COLUMN image_path TEXT", client)
   ensureColumn("orders", "number", "ALTER TABLE orders ADD COLUMN number TEXT", client)
   ensureColumn("orders", "source", "ALTER TABLE orders ADD COLUMN source TEXT", client)
   ensureColumn("orders", "recipient_phone", "ALTER TABLE orders ADD COLUMN recipient_phone TEXT", client)
@@ -2496,6 +2530,7 @@ export function listBouquetTemplates(options: { activeOnly?: boolean } = {}): Bo
   const rows = client
     .prepare(
       `SELECT bouquet_templates.id, bouquet_templates.name, COALESCE(bouquet_templates.description, '') as description,
+        COALESCE(bouquet_templates.image_path, '') as imagePath,
         COALESCE(bouquet_templates.price, 0) as price, COALESCE(bouquet_templates.is_active, 1) as isActive,
         bouquet_templates.created_by_user_id as createdByUserId,
         COALESCE(bouquet_templates.created_by_name, '') as createdByName,
@@ -2518,6 +2553,7 @@ export function getBouquetTemplate(id: number) {
   const row = client
     .prepare(
       `SELECT bouquet_templates.id, bouquet_templates.name, COALESCE(bouquet_templates.description, '') as description,
+        COALESCE(bouquet_templates.image_path, '') as imagePath,
         COALESCE(bouquet_templates.price, 0) as price, COALESCE(bouquet_templates.is_active, 1) as isActive,
         bouquet_templates.created_by_user_id as createdByUserId,
         COALESCE(bouquet_templates.created_by_name, '') as createdByName,
@@ -2531,6 +2567,21 @@ export function getBouquetTemplate(id: number) {
     .get(id) as Record<string, unknown> | undefined
 
   return row ? mapBouquetTemplate(row, listBouquetTemplateItems(id, client)) : null
+}
+
+export function updateBouquetTemplateImagePath(id: number, imagePath: string) {
+  const client = db()
+  const bouquetId = Math.trunc(id)
+  const existing = getBouquetTemplateRecord(client, bouquetId)
+  if (!existing) {
+    throw new Error("Букет не найден.")
+  }
+
+  client
+    .prepare("UPDATE bouquet_templates SET image_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .run(imagePath, bouquetId)
+
+  return getBouquetTemplate(bouquetId)
 }
 
 export function createBouquetTemplate(input: BouquetTemplateInput, currentUser?: CurrentUser) {
@@ -2627,6 +2678,62 @@ export function deleteBouquetTemplate(id: number) {
   deactivate()
 }
 
+export function listDealBouquetMessages(dealId: number): DealBouquetMessage[] {
+  const rows = db()
+    .prepare(
+      `SELECT id, deal_id as dealId, bouquet_id as bouquetId,
+        COALESCE(bouquet_name, '') as bouquetName,
+        COALESCE(message_text, '') as messageText,
+        COALESCE(image_path, '') as imagePath,
+        sent_by_user_id as sentByUserId,
+        COALESCE(sent_by_name, '') as sentByName,
+        COALESCE(sent_at, '') as sentAt,
+        COALESCE(status, '') as status,
+        COALESCE(error, '') as error
+       FROM deal_bouquet_messages
+       WHERE deal_id = ?
+       ORDER BY sent_at DESC, id DESC
+       LIMIT 30`
+    )
+    .all(Math.trunc(dealId)) as Array<Record<string, unknown>>
+
+  return rows.map(mapDealBouquetMessage)
+}
+
+export function recordDealBouquetMessage(input: {
+  dealId: number
+  bouquetId: number
+  bouquetName: string
+  messageText: string
+  imagePath?: string | null
+  sentByUserId?: number | null
+  sentByName?: string | null
+  status: DealBouquetMessageStatus
+  error?: string | null
+}) {
+  db()
+    .prepare(
+      `INSERT INTO deal_bouquet_messages (
+        deal_id, bouquet_id, bouquet_name, message_text, image_path, sent_by_user_id, sent_by_name,
+        status, error
+      ) VALUES (
+        @dealId, @bouquetId, @bouquetName, @messageText, @imagePath, @sentByUserId, @sentByName,
+        @status, @error
+      )`
+    )
+    .run({
+      dealId: Math.trunc(input.dealId),
+      bouquetId: Math.trunc(input.bouquetId),
+      bouquetName: clean(input.bouquetName),
+      messageText: clean(input.messageText),
+      imagePath: clean(input.imagePath ?? ""),
+      sentByUserId: input.sentByUserId ?? null,
+      sentByName: clean(input.sentByName ?? ""),
+      status: input.status,
+      error: clean(input.error ?? ""),
+    })
+}
+
 function getBouquetTemplateRecord(client: Database.Database, id: number) {
   return client.prepare("SELECT * FROM bouquet_templates WHERE id = ?").get(id) as
     | Record<string, unknown>
@@ -2672,6 +2779,7 @@ function mapBouquetTemplate(row: Record<string, unknown>, items: BouquetTemplate
     id: numberFromRow(row.id),
     name: String(row.name ?? ""),
     description: String(row.description ?? ""),
+    imagePath: String(row.imagePath ?? row.image_path ?? ""),
     price: numberFromRow(row.price),
     isActive: numberFromRow(row.isActive ?? row.is_active) === 1,
     createdByUserId:
@@ -2682,6 +2790,27 @@ function mapBouquetTemplate(row: Record<string, unknown>, items: BouquetTemplate
     itemsCount: numberFromRow(row.itemsCount) || items.length,
     items,
   }
+}
+
+function mapDealBouquetMessage(row: Record<string, unknown>): DealBouquetMessage {
+  return {
+    id: numberFromRow(row.id),
+    dealId: numberFromRow(row.dealId),
+    bouquetId: numberFromRow(row.bouquetId),
+    bouquetName: String(row.bouquetName ?? ""),
+    messageText: String(row.messageText ?? ""),
+    imagePath: String(row.imagePath ?? ""),
+    sentByUserId:
+      row.sentByUserId === null || row.sentByUserId === undefined ? null : numberFromRow(row.sentByUserId),
+    sentByName: String(row.sentByName ?? ""),
+    sentAt: String(row.sentAt ?? ""),
+    status: normalizeDealBouquetMessageStatus(String(row.status ?? "")),
+    error: String(row.error ?? ""),
+  }
+}
+
+function normalizeDealBouquetMessageStatus(value: string): DealBouquetMessageStatus {
+  return value === "sent" ? "sent" : "failed"
 }
 
 function normalizeBouquetTemplateInput(client: Database.Database, input: BouquetTemplateInput) {

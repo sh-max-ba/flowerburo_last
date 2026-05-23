@@ -21,6 +21,8 @@
 /build
 public/uploads/products/*
 !public/uploads/products/.gitkeep
+public/uploads/bouquets/*
+!public/uploads/bouquets/.gitkeep
 
 # misc
 .DS_Store
