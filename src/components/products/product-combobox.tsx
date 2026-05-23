@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { SearchIcon } from "lucide-react"
+import { toast } from "sonner"
 import type { BouquetTemplate, Product } from "@/lib/db"
+import { getBouquetAvailability } from "@/lib/bouquet-availability"
 import { formatMoney } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
@@ -136,6 +138,9 @@ export function ProductCombobox({
     }
 
     clearBlurTimeout()
+    if (!getBouquetAvailability(bouquet).available) {
+      toast.warning("По букету не хватает позиций на складе")
+    }
     onSelectBouquet(bouquet)
     setQuery("")
     setOpen(false)
@@ -327,6 +332,8 @@ function BouquetComboboxRow({
   bouquet: BouquetTemplate
   onSelect: () => void
 }) {
+  const availability = getBouquetAvailability(bouquet)
+
   return (
     <button
       type="button"
@@ -337,8 +344,13 @@ function BouquetComboboxRow({
       onClick={onSelect}
     >
       <span className="min-w-0">
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
           <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-xs">Букет</Badge>
+          {!availability.available && (
+            <Badge className="border-amber-200 bg-amber-50 px-1.5 py-0 text-xs text-amber-800">
+              Не хватает
+            </Badge>
+          )}
           <span className="truncate font-medium">{bouquet.name}</span>
         </span>
         {bouquet.description && (

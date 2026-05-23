@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState, useTransition } from "react"
-import { PencilIcon, PlusIcon, PowerIcon, Trash2Icon, UploadIcon } from "lucide-react"
+import { AlertTriangleIcon, PencilIcon, PlusIcon, PowerIcon, Trash2Icon, UploadIcon } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
@@ -10,7 +10,9 @@ import {
   updateBouquetTemplateAction,
 } from "@/app/actions"
 import type { BouquetTemplate, Product } from "@/lib/db"
+import { getBouquetAvailability } from "@/lib/bouquet-availability"
 import { cn, formatMoney } from "@/lib/utils"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,6 +23,7 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { BouquetThumbnail } from "@/components/bouquets/bouquet-thumbnail"
 import { ProductCombobox } from "@/components/products/product-combobox"
@@ -55,6 +58,9 @@ export function BouquetsPage({
   const [imageVersion, setImageVersion] = useState(0)
   const [pending, startTransition] = useTransition()
   const productByCode = useMemo(() => new Map(products.map((product) => [product.code, product])), [products])
+  const activeBouquets = useMemo(() => bouquets.filter((bouquet) => bouquet.isActive), [bouquets])
+  const inactiveBouquets = useMemo(() => bouquets.filter((bouquet) => !bouquet.isActive), [bouquets])
+  const draftAvailability = useMemo(() => getBouquetAvailability({ items }), [items])
 
   function openCreate() {
     setEditing(null)
@@ -227,69 +233,47 @@ export function BouquetsPage({
       </div>
 
       <Card className="rounded-2xl border bg-white">
-        <CardHeader>
+        <CardHeader className="pb-3">
           <CardTitle>Список букетов</CardTitle>
           <CardDescription>Букет хранит состав и цену, но не является складской позицией.</CardDescription>
         </CardHeader>
-        <CardContent>
-          {!bouquets.length ? (
-            <Empty className="min-h-36 rounded-lg border py-6">
-              <EmptyHeader>
-                <EmptyTitle>Букетов пока нет</EmptyTitle>
-                <EmptyDescription>Создайте первый шаблон сборки.</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          ) : (
-            <div className="overflow-x-auto rounded-lg border">
-              <Table className="min-w-[900px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-16">Фото</TableHead>
-                    <TableHead>Название</TableHead>
-                    <TableHead className="w-32">Цена</TableHead>
-                    <TableHead className="w-28">Статус</TableHead>
-                    <TableHead className="w-32">Компоненты</TableHead>
-                    <TableHead>Описание</TableHead>
-                    <TableHead className="w-40">Обновлен</TableHead>
-                    <TableHead className="w-28 text-right">Действия</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {bouquets.map((bouquet) => (
-                    <TableRow key={bouquet.id}>
-                      <TableCell>
-                        <BouquetThumbnail name={bouquet.name} imagePath={bouquet.imagePath} size="lg" />
-                      </TableCell>
-                      <TableCell className="font-medium">{bouquet.name}</TableCell>
-                      <TableCell>{formatMoney(bouquet.price)}</TableCell>
-                      <TableCell>
-                        <Badge variant={bouquet.isActive ? "secondary" : "outline"}>
-                          {bouquet.isActive ? "Активен" : "Выключен"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{bouquet.itemsCount}</TableCell>
-                      <TableCell className="max-w-80">
-                        <span className="line-clamp-2 text-sm text-muted-foreground">
-                          {bouquet.description || "-"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{formatDateTime(bouquet.updatedAt)}</TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-1">
-                          <Button type="button" size="icon-sm" variant="ghost" onClick={() => openEdit(bouquet)}>
-                            <PencilIcon />
-                          </Button>
-                          <Button type="button" size="icon-sm" variant="ghost" onClick={() => toggleActive(bouquet)}>
-                            <PowerIcon />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+        <CardContent className="pt-0">
+          <Tabs defaultValue="active" className="gap-3">
+            <TabsList className="h-10 w-full justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit">
+              <TabsTrigger value="active">
+                Активные
+                <Badge variant="secondary" className="h-5 px-1.5 text-xs">
+                  {activeBouquets.length}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="inactive">
+                Неактивные
+                <Badge variant="secondary" className="h-5 px-1.5 text-xs">
+                  {inactiveBouquets.length}
+                </Badge>
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="active">
+              <BouquetsTable
+                bouquets={activeBouquets}
+                emptyTitle="Активных букетов пока нет"
+                emptyDescription="Включите существующий букет или создайте новый шаблон."
+                pending={pending}
+                onEdit={openEdit}
+                onToggleActive={toggleActive}
+              />
+            </TabsContent>
+            <TabsContent value="inactive">
+              <BouquetsTable
+                bouquets={inactiveBouquets}
+                emptyTitle="Неактивных букетов пока нет"
+                emptyDescription="Выключенные букеты будут появляться здесь."
+                pending={pending}
+                onEdit={openEdit}
+                onToggleActive={toggleActive}
+              />
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
 
@@ -384,6 +368,27 @@ export function BouquetsPage({
                 <FieldSet>
                   <FieldLegend>Состав букета</FieldLegend>
                   <ProductCombobox products={products} disabled={pending} portalDropdown onSelect={addProduct} />
+                  {!draftAvailability.available && (
+                    <Alert className="border-amber-200 bg-amber-50 text-amber-950">
+                      <AlertTriangleIcon />
+                      <AlertTitle>Не хватает позиций</AlertTitle>
+                      <AlertDescription className="text-amber-900">
+                        <div className="mt-2 grid gap-1.5">
+                          {draftAvailability.missingItems.map((item) => (
+                            <div
+                              key={item.productCode}
+                              className="grid gap-1 rounded-md bg-white/70 p-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] sm:items-center"
+                            >
+                              <span className="min-w-0 truncate font-medium">{item.productName}</span>
+                              <span>нужно {formatNumber(item.requiredQty)}</span>
+                              <span>остаток {formatNumber(item.stock)}</span>
+                              <span>не хватает {formatNumber(item.missingQty)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </AlertDescription>
+                    </Alert>
+                  )}
                   {items.length === 0 ? (
                     <Empty className="min-h-32 rounded-lg border py-5">
                       <EmptyHeader>
@@ -396,10 +401,14 @@ export function BouquetsPage({
                       <div className="flex flex-col gap-2 p-2">
                         {items.map((item) => {
                           const qtyInvalid = item.qty < 1 || !Number.isInteger(item.qty)
+                          const missingQty = Math.max(0, item.qty - item.stock)
                           return (
                             <div
                               key={item.productCode}
-                              className="grid gap-3 rounded-lg bg-background p-2 sm:grid-cols-[minmax(0,1fr)_120px_40px] sm:items-center"
+                              className={cn(
+                                "grid gap-3 rounded-lg bg-background p-2 sm:grid-cols-[minmax(0,1fr)_120px_40px] sm:items-center",
+                                missingQty > 0 && "border border-amber-200 bg-amber-50/60"
+                              )}
                             >
                               <input type="hidden" name="itemProductCode" value={item.productCode} />
                               <div className="flex min-w-0 items-center gap-3">
@@ -409,6 +418,11 @@ export function BouquetsPage({
                                   <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
                                     <span>{item.productCode}</span>
                                     <span>Остаток {formatNumber(item.stock)}</span>
+                                    {missingQty > 0 && (
+                                      <span className="font-medium text-amber-700">
+                                        Не хватает {formatNumber(missingQty)}
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -452,6 +466,119 @@ export function BouquetsPage({
         </SheetContent>
       </Sheet>
     </div>
+  )
+}
+
+function BouquetsTable({
+  bouquets,
+  emptyTitle,
+  emptyDescription,
+  pending,
+  onEdit,
+  onToggleActive,
+}: {
+  bouquets: BouquetTemplate[]
+  emptyTitle: string
+  emptyDescription: string
+  pending: boolean
+  onEdit: (bouquet: BouquetTemplate) => void
+  onToggleActive: (bouquet: BouquetTemplate) => void
+}) {
+  if (!bouquets.length) {
+    return (
+      <Empty className="min-h-36 rounded-lg border py-6">
+        <EmptyHeader>
+          <EmptyTitle>{emptyTitle}</EmptyTitle>
+          <EmptyDescription>{emptyDescription}</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border">
+      <Table className="min-w-[960px]">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-16">Фото</TableHead>
+            <TableHead>Название</TableHead>
+            <TableHead className="w-32">Цена</TableHead>
+            <TableHead className="w-44">Статус</TableHead>
+            <TableHead className="w-28">Компоненты</TableHead>
+            <TableHead>Описание</TableHead>
+            <TableHead className="w-36">Обновлен</TableHead>
+            <TableHead className="w-40 text-right">Действия</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {bouquets.map((bouquet) => {
+            const availability = getBouquetAvailability(bouquet)
+
+            return (
+              <TableRow key={bouquet.id}>
+                <TableCell>
+                  <BouquetThumbnail name={bouquet.name} imagePath={bouquet.imagePath} size="lg" />
+                </TableCell>
+                <TableCell className="font-medium">
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <span className="truncate">{bouquet.name}</span>
+                    {!availability.available && (
+                      <span className="text-xs font-medium text-amber-700">
+                        Не хватает: {availability.missingItems.length} поз.
+                      </span>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell>{formatMoney(bouquet.price)}</TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap gap-1.5">
+                    <BouquetStatusBadge isActive={bouquet.isActive} />
+                    {!availability.available && (
+                      <Badge className="border-amber-200 bg-amber-50 text-amber-800">
+                        Не хватает позиций
+                      </Badge>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell>{bouquet.itemsCount}</TableCell>
+                <TableCell className="max-w-80">
+                  <span className="line-clamp-2 text-sm text-muted-foreground">
+                    {bouquet.description || "-"}
+                  </span>
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">{formatDateTime(bouquet.updatedAt)}</TableCell>
+                <TableCell>
+                  <div className="flex justify-end gap-1">
+                    <Button type="button" size="icon-sm" variant="ghost" disabled={pending} onClick={() => onEdit(bouquet)}>
+                      <PencilIcon />
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" disabled={pending} onClick={() => onToggleActive(bouquet)}>
+                      <PowerIcon data-icon="inline-start" />
+                      {bouquet.isActive ? "Выключить" : "Включить"}
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+function BouquetStatusBadge({ isActive }: { isActive: boolean }) {
+  return (
+    <Badge
+      variant="outline"
+      className={
+        isActive
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border-amber-200 bg-amber-50 text-amber-800"
+      }
+    >
+      {isActive ? "Активен" : "Выключен"}
+    </Badge>
   )
 }
 

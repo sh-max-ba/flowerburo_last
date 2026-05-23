@@ -27,6 +27,7 @@ import {
   updateDealItemAction,
 } from "@/app/actions"
 import type { Customer, Deal, DealItem, DealSource, DealStage } from "@/lib/crm"
+import { getBouquetAvailability } from "@/lib/bouquet-availability"
 import { calculateCommercialTotals, calculateLineTotal, type DiscountType } from "@/lib/pricing"
 import type { BouquetTemplate, CurrentUser, DealBouquetMessage, Order, PaymentMethod, Product } from "@/lib/db"
 import { getPaymentMethodLabel, paymentMethodOptions, sourceLabel as getSourceLabel } from "@/lib/labels"
@@ -524,7 +525,11 @@ export function DealDetailPage({
     }
   }
 
-  async function addBouquet(bouquet: BouquetTemplate) {
+  async function addBouquet(bouquet: BouquetTemplate, options: { showWarning?: boolean } = {}) {
+    if (options.showWarning !== false && !getBouquetAvailability(bouquet).available) {
+      toast.warning("На складе сейчас не хватает компонентов для этого букета.")
+    }
+
     const version = ++itemSaveVersionRef.current
     setItemSaveStatus("saving")
     setSaveError("")
@@ -544,6 +549,10 @@ export function DealDetailPage({
   }
 
   async function sendBouquet(bouquet: BouquetTemplate) {
+    if (!getBouquetAvailability(bouquet).available) {
+      toast.warning("На складе сейчас не хватает компонентов для этого букета.")
+    }
+
     setSendingBouquetId(bouquet.id)
     try {
       const result = await sendBouquetToDealChatAction(deal.id, bouquet.id)
@@ -1015,7 +1024,7 @@ export function DealDetailPage({
                 includeBouquets
                 portalDropdown
                 onSelect={addProduct}
-                onSelectBouquet={addBouquet}
+                onSelectBouquet={(bouquet) => void addBouquet(bouquet, { showWarning: false })}
               />
               <div className="overflow-x-auto rounded-lg border border-zinc-200">
                 <Table className="min-w-[620px]">
@@ -1228,46 +1237,71 @@ export function DealDetailPage({
 
               {suggestedBouquets.length ? (
                 <div className="flex flex-col gap-2">
-                  {suggestedBouquets.map((bouquet) => (
-                    <div key={bouquet.id} className="rounded-lg border border-zinc-200 p-3">
-                      <div className="flex min-w-0 gap-3">
-                        <BouquetThumbnail name={bouquet.name} imagePath={bouquet.imagePath} size="lg" />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="truncate font-medium text-zinc-950">{bouquet.name}</div>
-                              <div className="text-sm font-semibold text-zinc-950">{formatMoney(bouquet.price)}</div>
+                  {suggestedBouquets.map((bouquet) => {
+                    const availability = getBouquetAvailability(bouquet)
+
+                    return (
+                      <div key={bouquet.id} className="rounded-lg border border-zinc-200 p-3">
+                        <div className="flex min-w-0 gap-3">
+                          <BouquetThumbnail name={bouquet.name} imagePath={bouquet.imagePath} size="lg" />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="truncate font-medium text-zinc-950">{bouquet.name}</div>
+                                <div className="text-sm font-semibold text-zinc-950">{formatMoney(bouquet.price)}</div>
+                              </div>
+                              <div className="flex flex-wrap justify-end gap-1.5">
+                                <Badge variant="secondary">{bouquet.itemsCount} поз.</Badge>
+                                {!availability.available && (
+                                  <Badge className="border-amber-200 bg-amber-50 text-amber-800">
+                                    Не хватает компонентов
+                                  </Badge>
+                                )}
+                              </div>
                             </div>
-                            <Badge variant="secondary">{bouquet.itemsCount} поз.</Badge>
-                          </div>
-                          <div className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                            {bouquet.description || "Описание букета пока не заполнено."}
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <Button
-                              type="button"
-                              size="sm"
-                              disabled={sendingBouquetId !== null}
-                              onClick={() => void sendBouquet(bouquet)}
-                            >
-                              <SendIcon data-icon="inline-start" />
-                              {sendingBouquetId === bouquet.id ? "Отправляем..." : "Отправить в чат"}
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              disabled={itemSaveStatus === "saving" || hasPendingSaves}
-                              onClick={() => void addBouquet(bouquet)}
-                            >
-                              <PlusIcon data-icon="inline-start" />
-                              Добавить в сделку
-                            </Button>
+                            <div className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                              {bouquet.description || "Описание букета пока не заполнено."}
+                            </div>
+                            {!availability.available && (
+                              <Alert className="mt-2 border-amber-200 bg-amber-50 text-amber-950">
+                                <AlertTriangleIcon />
+                                <AlertTitle>На складе не хватает компонентов</AlertTitle>
+                                <AlertDescription className="text-amber-900">
+                                  {availability.missingItems.map((item) => (
+                                    <div key={item.productCode}>
+                                      {item.productName}: нужно {formatNumber(item.requiredQty)}, остаток{" "}
+                                      {formatNumber(item.stock)}, не хватает {formatNumber(item.missingQty)}
+                                    </div>
+                                  ))}
+                                </AlertDescription>
+                              </Alert>
+                            )}
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={sendingBouquetId !== null}
+                                onClick={() => void sendBouquet(bouquet)}
+                              >
+                                <SendIcon data-icon="inline-start" />
+                                {sendingBouquetId === bouquet.id ? "Отправляем..." : "Отправить в чат"}
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={itemSaveStatus === "saving" || hasPendingSaves}
+                                onClick={() => void addBouquet(bouquet)}
+                              >
+                                <PlusIcon data-icon="inline-start" />
+                                Добавить в сделку
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               ) : (
                 <div className="rounded-lg border border-dashed border-zinc-200 p-4 text-sm text-muted-foreground">
