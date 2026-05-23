@@ -229,6 +229,8 @@ export type OrderStatus =
   | "Выдан"
   | "Отменен"
 
+const activeDealOrderStatuses = ["Новый", "В работе", "Готов", "Передан курьеру", "new", "in_progress", "ready"]
+
 export type OrderItem = {
   id: number
   orderId: number
@@ -1836,6 +1838,11 @@ function normalizeOrderStatus(value: unknown): OrderStatus {
   }
 
   return legacy[status] ?? "Новый"
+}
+
+function normalizeDeliveryType(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase()
+  return normalized === "delivery" || normalized === "доставка" ? "delivery" : "pickup"
 }
 
 function orderStatusSort(status: OrderStatus) {
@@ -4984,8 +4991,9 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
   saveOrder()
 }
 
-export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
+export function createOrderFromDeal(formData: FormData, currentUser: CurrentUser) {
   const client = db()
+  const dealId = toNumber(formData.get("dealId"))
 
   if (!dealId) {
     throw new Error("Сделка не найдена.")
@@ -5000,9 +5008,19 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
       throw new Error("Сделка не найдена.")
     }
 
-    const existingOrderId = numberFromRow(deal.order_id)
-    if (existingOrderId > 0) {
-      return existingOrderId
+    const activeOrder = client
+      .prepare(
+        `SELECT id, status
+         FROM orders
+         WHERE deal_id = ?
+          AND status IN (${activeDealOrderStatuses.map(() => "?").join(", ")})
+         ORDER BY updated_at DESC, created_at DESC, id DESC
+         LIMIT 1`
+      )
+      .get(dealId, ...activeDealOrderStatuses) as { id: number; status: string } | undefined
+
+    if (activeOrder) {
+      throw new Error("По сделке уже есть активный заказ.")
     }
 
     const dealItems = client
@@ -5068,16 +5086,28 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
     const orderDiscountValue =
       orderDiscountType === "none" ? 0 : Math.max(0, numberFromRow(deal.deal_discount_value))
     const totals = calculateCommercialTotals(itemsForCommercialTotals(items), orderDiscountType, orderDiscountValue)
+    const deliveryPrice = toNumber(formData.get("deliveryPrice"))
+    const courierPayout = toNumber(formData.get("courierPayout"))
+    if (deliveryPrice < 0 || courierPayout < 0) {
+      throw new Error("Доставка и выплата курьеру не могут быть отрицательными.")
+    }
+
+    const orderTotal = totals.total + deliveryPrice
     const paid = Math.max(0, numberFromRow(deal.paid))
-    if (paid - totals.total > 0.009) {
+    if (paid - orderTotal > 0.009) {
       throw new Error("Оплата по сделке не может быть больше суммы заказа.")
     }
     const customer = cleanRowString(deal.customer_name) || "Клиент сделки"
     const phone = cleanRowString(deal.customer_phone)
-    const recipientPhone = cleanRowString(deal.recipient_phone)
-    const deliveryType = cleanRowString(deal.delivery_type) || "pickup"
-    const address = cleanRowString(deal.address)
-    const note = cleanRowString(deal.comment)
+    const recipientPhone = formData.has("recipientPhone")
+      ? clean(formData.get("recipientPhone"))
+      : cleanRowString(deal.recipient_phone)
+    const deliveryType = normalizeDeliveryType(
+      formData.has("deliveryType") ? clean(formData.get("deliveryType")) : cleanRowString(deal.delivery_type)
+    )
+    const address = formData.has("address") ? clean(formData.get("address")) : cleanRowString(deal.address)
+    const dueAt = formData.has("dueAt") ? clean(formData.get("dueAt")) : cleanRowString(deal.due_at)
+    const note = formData.has("comment") ? clean(formData.get("comment")) : cleanRowString(deal.comment)
 
     const order = client
       .prepare(
@@ -5090,7 +5120,7 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
           @createdByUserId, @updatedByUserId, @customerId, @dealId, @customer, @phone, @recipientPhone, 'deal',
           @deliveryType, @address, @dueAt, 'Новый', @itemsTotalBeforeDiscount, @itemsDiscountTotal,
           @orderDiscountType, @orderDiscountValue, @orderDiscountAmount, @totalBeforeDiscount,
-          @total, @prepaid, @paid, 0, 0, 1, @note, CURRENT_TIMESTAMP
+          @total, @prepaid, @paid, @deliveryPrice, @courierPayout, 1, @note, CURRENT_TIMESTAMP
         )`
       )
       .run({
@@ -5102,17 +5132,19 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
         phone,
         recipientPhone,
         deliveryType,
-        address,
-        dueAt: cleanRowString(deal.due_at),
+        address: deliveryType === "delivery" ? address : "",
+        dueAt,
         itemsTotalBeforeDiscount: totals.itemsTotalBeforeDiscount,
         itemsDiscountTotal: totals.itemsDiscountTotal,
         orderDiscountType,
         orderDiscountValue,
         orderDiscountAmount: totals.dealDiscountAmount,
-        totalBeforeDiscount: totals.itemsTotalBeforeDiscount,
-        total: totals.total,
+        totalBeforeDiscount: totals.itemsTotalBeforeDiscount + deliveryPrice,
+        total: orderTotal,
         prepaid: paid,
         paid,
+        deliveryPrice,
+        courierPayout,
         note,
       })
     const orderId = Number(order.lastInsertRowid)
@@ -5189,7 +5221,7 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
         orderDiscountType,
         orderDiscountValue,
         totals.dealDiscountAmount,
-        totals.total,
+        orderTotal,
         paid,
         dealId
       )
@@ -5197,7 +5229,7 @@ export function createOrderFromDeal(dealId: number, currentUser: CurrentUser) {
     addMovement(client, {
       userId: currentUser.id,
       type: "order_create",
-      total: totals.total,
+      total: orderTotal,
       note: `Создан заказ ${number} из сделки ${String(deal.number ?? `#${dealId}`)}: ${customer}`,
     })
 
@@ -5628,10 +5660,12 @@ export function closeDeliveredOrder(orderId: number, currentUser: CurrentUser) {
 export function cancelOrder(orderId: number, currentUser: CurrentUser) {
   const client = db()
   let alreadyBuilt = false
+  let dealId: number | null = null
 
   const cancel = client.transaction(() => {
     const { order, items } = getOrderWithItems(client, orderId)
     const wasReserved = Number(order.is_reserved ?? 0) === 1
+    dealId = numberFromRow(order.deal_id) || null
 
     if (["Выдан", "Отменен"].includes(order.status)) {
       return
@@ -5660,5 +5694,5 @@ export function cancelOrder(orderId: number, currentUser: CurrentUser) {
   })
 
   cancel()
-  return alreadyBuilt
+  return { alreadyBuilt, dealId }
 }

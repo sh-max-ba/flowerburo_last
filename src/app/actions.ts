@@ -592,9 +592,10 @@ export async function removeDealItemGroupAction(dealId: number, bouquetGroupId: 
   }, "Букет удален.")
 }
 
-export async function createOrderFromDealAction(dealId: number) {
+export async function createOrderFromDealAction(formData: FormData) {
   return runRoleAction(["owner", "manager"], (user) => {
-    const orderId = createOrderFromDeal(dealId, user)
+    const dealId = Number(String(formData.get("dealId") ?? ""))
+    const orderId = createOrderFromDeal(formData, user)
     revalidateCrm(null, dealId)
     revalidatePath("/orders")
     revalidatePath(`/orders?orderId=${orderId}`)
@@ -817,10 +818,15 @@ export async function closeDeliveredOrderAction(orderId: number) {
 export async function cancelOrderAction(orderId: number) {
   return runRoleAction(
     ["owner", "manager", "florist"],
-    (user) =>
-      cancelOrder(orderId, user)
+    (user) => {
+      const result = cancelOrder(orderId, user)
+      if (result.dealId) {
+        revalidateCrm(null, result.dealId)
+      }
+      return result.alreadyBuilt
         ? ["Букет уже собран, склад автоматически не восстанавливается", "Заказ отменен"]
-        : ["Заказ отменен"],
+        : ["Заказ отменен"]
+    },
     "Заказ отменен"
   )
 }

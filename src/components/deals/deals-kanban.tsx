@@ -42,6 +42,8 @@ import { Textarea } from "@/components/ui/textarea"
 
 type ActionResult = Awaited<ReturnType<typeof createDealAction>>
 
+const activeOrderStatuses = new Set(["Новый", "В работе", "Готов", "Передан курьеру", "new", "in_progress", "ready"])
+
 export function DealsKanban({
   board,
   customers,
@@ -316,6 +318,7 @@ function DealCard({
   const currentIndex = stages.findIndex((stage) => stage.id === deal.stageId)
   const balance = Math.max(0, deal.total - deal.paid)
   const isPaid = deal.total > 0 && deal.paid >= deal.total
+  const hasActiveOrder = Boolean(deal.orderId && activeOrderStatuses.has(deal.orderStatus ?? ""))
 
   return (
     <Card className="rounded-2xl border-zinc-200 bg-white shadow-sm">
@@ -356,8 +359,12 @@ function DealCard({
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {deal.orderId && <Badge className="bg-sky-100 text-sky-900">Есть заказ</Badge>}
-          {deal.orderId && deal.orderStatus && <Badge variant="outline">{deal.orderStatus}</Badge>}
+          {hasActiveOrder && <Badge className="bg-sky-100 text-sky-900">Есть заказ</Badge>}
+          {deal.orderId && deal.orderStatus === "Отменен" && <Badge variant="destructive">Заказ отменен</Badge>}
+          {deal.orderId && deal.orderStatus === "Выдан" && <Badge variant="outline">Заказ завершен</Badge>}
+          {deal.orderId && deal.orderStatus && !["Отменен", "Выдан"].includes(deal.orderStatus) && (
+            <Badge variant="outline">{deal.orderStatus}</Badge>
+          )}
           {balance > 0 && <Badge className="bg-amber-100 text-amber-900">Остаток {formatMoney(balance)}</Badge>}
           {isPaid && <Badge className="bg-emerald-100 text-emerald-900">Оплачено</Badge>}
           {deal.dealDiscountType === "percent" && deal.dealDiscountValue > 0 && (

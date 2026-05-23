@@ -5,6 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import {
+  AlertTriangleIcon,
   CheckCircle2Icon,
   ExternalLinkIcon,
   PlusIcon,
@@ -27,7 +28,7 @@ import {
 } from "@/app/actions"
 import type { Customer, Deal, DealItem, DealSource, DealStage } from "@/lib/crm"
 import { calculateCommercialTotals, calculateLineTotal, type DiscountType } from "@/lib/pricing"
-import type { BouquetTemplate, CurrentUser, DealBouquetMessage, PaymentMethod, Product } from "@/lib/db"
+import type { BouquetTemplate, CurrentUser, DealBouquetMessage, Order, PaymentMethod, Product } from "@/lib/db"
 import { getPaymentMethodLabel, paymentMethodOptions, sourceLabel as getSourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { BouquetThumbnail } from "@/components/bouquets/bouquet-thumbnail"
@@ -46,19 +47,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Field, FieldContent, FieldLabel } from "@/components/ui/field"
+import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 
 type SaveStatus = "saved" | "saving" | "error"
+type DealTab = "overview" | "composition" | "payment" | "bouquets"
 
 type DealDraft = {
   customerId: string
@@ -73,6 +77,17 @@ type DealDraft = {
   comment: string
   dealDiscountType: DiscountType
   dealDiscountValue: string
+}
+
+type CreateOrderDraft = {
+  dueDate: string
+  dueTime: string
+  deliveryType: "pickup" | "delivery"
+  address: string
+  recipientPhone: string
+  comment: string
+  deliveryPrice: string
+  courierPayout: string
 }
 
 type DealItemDraft = Omit<DealItem, "qty" | "price" | "discountValue"> & {
@@ -101,6 +116,13 @@ const discountOptions: Array<{ value: DiscountType; label: string }> = [
   { value: "amount", label: "Сумма" },
 ]
 
+const activeOrderStatuses = new Set(["Новый", "В работе", "Готов", "Передан курьеру", "new", "in_progress", "ready"])
+
+const deliveryOptions = [
+  { value: "pickup", label: "Самовывоз" },
+  { value: "delivery", label: "Доставка" },
+] as const
+
 export function DealDetailPage({
   deal,
   stages,
@@ -109,6 +131,7 @@ export function DealDetailPage({
   products,
   bouquets,
   bouquetMessages,
+  dealOrders,
   openShift,
 }: {
   deal: Deal
@@ -118,10 +141,12 @@ export function DealDetailPage({
   products: Product[]
   bouquets: BouquetTemplate[]
   bouquetMessages: DealBouquetMessage[]
+  dealOrders: Order[]
   openShift: { id: number; status: "open" | "closed" } | null
 }) {
   const router = useRouter()
   const [draft, setDraft] = useState(() => createDealDraft(deal))
+  const [activeTab, setActiveTab] = useState<DealTab>("overview")
   const [items, setItems] = useState(() => createItemDrafts(deal.items))
   const [fieldSaveStatus, setFieldSaveStatus] = useState<SaveStatus>("saved")
   const [itemSaveStatus, setItemSaveStatus] = useState<SaveStatus>("saved")
@@ -130,6 +155,8 @@ export function DealDetailPage({
   const [paymentAmount, setPaymentAmount] = useState("")
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
   const [paymentComment, setPaymentComment] = useState("")
+  const [createOrderDialogOpen, setCreateOrderDialogOpen] = useState(false)
+  const [orderDraft, setOrderDraft] = useState<CreateOrderDraft>(() => createOrderDraftFromDealDraft(createDealDraft(deal)))
   const [showShiftWarning, setShowShiftWarning] = useState(false)
   const [bouquetSearch, setBouquetSearch] = useState("")
   const [sendingBouquetId, setSendingBouquetId] = useState<number | null>(null)
@@ -148,8 +175,9 @@ export function DealDetailPage({
   useEffect(() => {
     const isNewDeal = deal.id !== currentDealIdRef.current
     if (isNewDeal) {
+      const nextDraft = createDealDraft(deal)
       currentDealIdRef.current = deal.id
-      setDraft(createDealDraft(deal))
+      setDraft(nextDraft)
       setItems(createItemDrafts(deal.items))
       fieldDirtyRef.current = false
       itemDirtyRef.current = false
@@ -169,7 +197,8 @@ export function DealDetailPage({
       return
     }
 
-    setDraft(createDealDraft(deal))
+    const nextDraft = createDealDraft(deal)
+    setDraft(nextDraft)
     setItems(createItemDrafts(deal.items))
   }, [deal, fieldSaveStatus, itemSaveStatus])
 
@@ -274,7 +303,20 @@ export function DealDetailPage({
   const balance = Math.max(0, totals.total - deal.paid)
   const hasPendingSaves = fieldSaveStatus === "saving" || itemSaveStatus === "saving"
   const hasItems = pricedItems.length > 0
-  const orderHref = deal.orderId ? `/orders?orderId=${deal.orderId}` : "/orders"
+  const activeDealOrder = useMemo(
+    () => dealOrders.find((order) => activeOrderStatuses.has(order.status)) ?? null,
+    [dealOrders]
+  )
+  const latestDealOrder = dealOrders[0] ?? null
+  const orderHref = activeDealOrder ? `/orders?orderId=${activeDealOrder.id}` : "/orders"
+  const orderDueAt = buildOrderDueAt(orderDraft)
+  const orderDeliveryPrice = normalizedPrice(orderDraft.deliveryPrice)
+  const orderCourierPayout = normalizedPrice(orderDraft.courierPayout)
+  const orderTotal = totals.total + orderDeliveryPrice
+  const orderBalance = Math.max(0, orderTotal - deal.paid)
+  const paidExceedsOrderTotal = deal.paid - orderTotal > 0.009
+  const missingOrderDueAt = !orderDueAt
+  const missingDeliveryAddress = orderDraft.deliveryType === "delivery" && !orderDraft.address.trim()
   const hasAppliedCustomerDiscount =
     Boolean(selectedCustomer?.defaultDiscountPercent) &&
     draft.dealDiscountType === "percent" &&
@@ -598,17 +640,48 @@ export function DealDetailPage({
     setPaymentDialogOpen(true)
   }
 
-  function createOrderFromDeal() {
+  function updateOrderDraftField<K extends keyof CreateOrderDraft>(key: K, value: CreateOrderDraft[K]) {
+    setOrderDraft((current) => ({ ...current, [key]: value }))
+  }
+
+  function openCreateOrderDialog() {
     if (!hasItems) {
       toast.error("Добавьте товары в сделку перед созданием заказа")
       return
     }
 
+    if (activeDealOrder) {
+      toast.error("По сделке уже есть активный заказ")
+      return
+    }
+
+    setOrderDraft(createOrderDraftFromDealDraft(draft))
+    setCreateOrderDialogOpen(true)
+  }
+
+  function submitCreateOrder(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!hasItems) {
+      toast.error("Добавьте товары в сделку перед созданием заказа")
+      return
+    }
+
+    if (activeDealOrder) {
+      toast.error("По сделке уже есть активный заказ")
+      return
+    }
+
+    if (paidExceedsOrderTotal) {
+      toast.error("Оплата по сделке не может быть больше суммы заказа.")
+      return
+    }
+
     startActionTransition(async () => {
       await flushPendingSaves()
-      const result = await createOrderFromDealAction(deal.id)
+      const result = await createOrderFromDealAction(createOrderFromDealFormData(deal.id, orderDraft))
       if (result.ok) {
         toast.success(result.message)
+        setCreateOrderDialogOpen(false)
         router.refresh()
       } else {
         toast.error(result.message)
@@ -660,20 +733,63 @@ export function DealDetailPage({
           </div>
         </section>
 
-        <aside className="flex min-w-0 flex-col gap-4 overflow-visible xl:min-h-0 xl:overflow-y-auto xl:pr-2">
+        <aside className="flex min-w-0 flex-col gap-4 overflow-visible xl:min-h-0 xl:overflow-hidden xl:pr-2">
           <div className="overflow-visible rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-xs text-muted-foreground">{deal.number || `Сделка #${deal.id}`}</div>
-              <div className="truncate text-lg font-semibold text-zinc-950">
-                {draft.title || customerLabel(draft.customerId, customersById, deal) || "Без названия"}
+              <div className="min-w-0">
+                <div className="text-xs text-muted-foreground">{deal.number || `Сделка #${deal.id}`}</div>
+                <div className="truncate text-lg font-semibold text-zinc-950">
+                  {draft.title || customerLabel(draft.customerId, customersById, deal) || "Без названия"}
+                </div>
               </div>
-            </div>
-            <SaveIndicator status={mergeStatus(fieldSaveStatus, itemSaveStatus)} error={saveError} />
+              <SaveIndicator status={mergeStatus(fieldSaveStatus, itemSaveStatus)} error={saveError} />
             </div>
           </div>
 
-          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as DealTab)}
+            className="min-h-0 flex-1 gap-4 overflow-visible"
+          >
+            <div className="overflow-visible rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="overview" className="min-w-0 px-1">
+                  Обзор
+                </TabsTrigger>
+                <TabsTrigger value="composition" className="min-w-0 px-1">
+                  <span className="truncate">Состав</span>
+                  {pricedItems.length > 0 && (
+                    <Badge variant="secondary" className="h-5 px-1.5 text-xs">
+                      {pricedItems.length}
+                    </Badge>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="payment" className="min-w-0 px-1">
+                  <span className="truncate">Оплата</span>
+                  {balance > 0 && (
+                    <Badge variant="secondary" className="hidden h-5 px-1.5 text-xs sm:inline-flex">
+                      Остаток
+                    </Badge>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="bouquets" className="min-w-0 px-1">
+                  <span className="truncate">Букеты</span>
+                  {bouquetMessages.length > 0 && (
+                    <Badge variant="secondary" className="h-5 px-1.5 text-xs">
+                      {bouquetMessages.length}
+                    </Badge>
+                  )}
+                </TabsTrigger>
+              </TabsList>
+            </div>
+
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-visible xl:overflow-y-auto xl:pr-1">
+          <Card
+            className={cn(
+              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              activeTab !== "overview" && "hidden"
+            )}
+          >
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Клиент</CardTitle>
               <CardDescription>Контакт и персональная скидка</CardDescription>
@@ -732,7 +848,12 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+          <Card
+            className={cn(
+              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              activeTab !== "overview" && "hidden"
+            )}
+          >
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Детали сделки</CardTitle>
               <CardDescription>Основные поля сохраняются автоматически</CardDescription>
@@ -877,7 +998,12 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+          <Card
+            className={cn(
+              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              activeTab !== "composition" && "hidden"
+            )}
+          >
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Состав</CardTitle>
               <CardDescription>Позиции и скидки сохраняются после изменения</CardDescription>
@@ -1078,7 +1204,12 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+          <Card
+            className={cn(
+              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              activeTab !== "bouquets" && "hidden"
+            )}
+          >
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Предложить букет</CardTitle>
               <CardDescription>Отправка активного букета клиенту в Wazzup</CardDescription>
@@ -1096,7 +1227,7 @@ export function DealDetailPage({
               </Field>
 
               {suggestedBouquets.length ? (
-                <div className="flex max-h-[420px] flex-col gap-2 overflow-y-auto pr-1">
+                <div className="flex flex-col gap-2">
                   {suggestedBouquets.map((bouquet) => (
                     <div key={bouquet.id} className="rounded-lg border border-zinc-200 p-3">
                       <div className="flex min-w-0 gap-3">
@@ -1146,7 +1277,12 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+          <Card
+            className={cn(
+              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              activeTab !== "bouquets" && "hidden"
+            )}
+          >
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Отправленные букеты</CardTitle>
               <CardDescription>История предложений клиенту</CardDescription>
@@ -1187,7 +1323,12 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+          <Card
+            className={cn(
+              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              activeTab !== "composition" && "hidden"
+            )}
+          >
             <CardHeader className="pb-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle className="text-base font-semibold text-zinc-950">Скидка на чек</CardTitle>
@@ -1251,7 +1392,12 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+          <Card
+            className={cn(
+              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              activeTab !== "payment" && "hidden"
+            )}
+          >
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Оплата</CardTitle>
               <CardDescription>Оплаты проходят через открытую смену кассы</CardDescription>
@@ -1262,23 +1408,28 @@ export function DealDetailPage({
                 <SummaryBox label="Оплачено" value={formatMoney(deal.paid)} />
                 <SummaryBox label="Остаток" value={formatMoney(balance)} strong={balance > 0} />
               </div>
-              {balance <= 0 && totals.total > 0 ? (
+              {balance <= 0 ? (
                 <Badge className="w-fit bg-emerald-100 text-emerald-900">
                   <CheckCircle2Icon data-icon="inline-start" />
                   Оплачено
                 </Badge>
               ) : (
-                <Button
-                  type="button"
-                  disabled={actionPending || hasPendingSaves}
-                  className="h-10 bg-zinc-950 text-white hover:bg-zinc-800"
-                  onClick={openPaymentDialog}
-                >
-                  <ReceiptTextIcon data-icon="inline-start" />
-                  Принять оплату
-                </Button>
+                <>
+                  <Badge variant="outline" className="w-fit border-amber-200 bg-amber-50 text-amber-900">
+                    Остаток {formatMoney(balance)}
+                  </Badge>
+                  <Button
+                    type="button"
+                    disabled={actionPending || hasPendingSaves}
+                    className="h-10 bg-zinc-950 text-white hover:bg-zinc-800"
+                    onClick={openPaymentDialog}
+                  >
+                    <ReceiptTextIcon data-icon="inline-start" />
+                    Принять оплату
+                  </Button>
+                </>
               )}
-              {showShiftWarning && (
+              {(showShiftWarning || (!openShift && balance > 0)) && (
                 <Alert className="border-amber-200 bg-amber-50 text-amber-950">
                   <AlertTitle>Смена не открыта</AlertTitle>
                   <AlertDescription>Откройте смену в кассе, чтобы принять оплату по сделке.</AlertDescription>
@@ -1287,21 +1438,26 @@ export function DealDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+          <Card
+            className={cn(
+              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              activeTab !== "payment" && "hidden"
+            )}
+          >
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold text-zinc-950">Заказ</CardTitle>
               <CardDescription>Создание заказа из текущей сделки</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3 overflow-visible text-sm">
-              {deal.orderId ? (
+              {activeDealOrder ? (
                 <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
-                  <div className="text-xs font-medium uppercase text-sky-900">Связанный заказ</div>
+                  <div className="text-xs font-medium uppercase text-sky-900">Активный заказ</div>
                   <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
                     <div className="min-w-0">
                       <div className="font-semibold text-sky-950">
-                        {deal.orderNumber || `Заказ #${deal.orderId}`}
+                        {activeDealOrder.number || `Заказ #${activeDealOrder.id}`}
                       </div>
-                      <div className="text-xs text-sky-800">{deal.orderStatus || "Статус не указан"}</div>
+                      <div className="text-xs text-sky-800">{activeDealOrder.status}</div>
                     </div>
                     <Button size="sm" variant="outline" render={<Link href={orderHref} />}>
                       <ExternalLinkIcon data-icon="inline-start" />
@@ -1309,29 +1465,84 @@ export function DealDetailPage({
                     </Button>
                   </div>
                 </div>
-              ) : (
-                <>
-                  <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-zinc-600">
-                    Заказ еще не создан
-                  </div>
-                  <Button
-                    type="button"
-                    disabled={!hasItems || actionPending || hasPendingSaves}
-                    className="h-10 bg-zinc-950 text-white hover:bg-zinc-800"
-                    onClick={createOrderFromDeal}
+              ) : latestDealOrder ? (
+                <div
+                  className={cn(
+                    "rounded-lg border p-3",
+                    latestDealOrder.status === "Отменен"
+                      ? "border-red-200 bg-red-50"
+                      : "border-zinc-200 bg-zinc-50"
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "text-xs font-medium uppercase",
+                      latestDealOrder.status === "Отменен" ? "text-red-900" : "text-zinc-700"
+                    )}
                   >
-                    <ShoppingBagIcon data-icon="inline-start" />
-                    Создать заказ
-                  </Button>
-                  {!hasItems && <div className="text-xs text-zinc-500">Добавьте товары, чтобы создать заказ</div>}
-                </>
+                    {latestDealOrder.status === "Отменен" ? "Заказ отменен" : "Последний заказ не активен"}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-zinc-950">
+                        {latestDealOrder.number || `Заказ #${latestDealOrder.id}`}
+                      </div>
+                      <div className="text-xs text-zinc-600">{latestDealOrder.status}</div>
+                    </div>
+                    <Badge variant="outline">Можно создать новый</Badge>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-zinc-600">
+                  Заказ еще не создан
+                </div>
+              )}
+              <Button
+                type="button"
+                disabled={!hasItems || Boolean(activeDealOrder) || actionPending || hasPendingSaves}
+                className="h-10 bg-zinc-950 text-white hover:bg-zinc-800"
+                onClick={openCreateOrderDialog}
+              >
+                <ShoppingBagIcon data-icon="inline-start" />
+                {latestDealOrder && !activeDealOrder ? "Создать новый заказ" : "Создать заказ"}
+              </Button>
+              {activeDealOrder && (
+                <div className="text-xs text-zinc-500">Новый заказ можно создать после отмены или завершения активного.</div>
+              )}
+              <div className="text-xs text-zinc-500">Перед созданием откроется проверка данных заказа.</div>
+              {!hasItems && <div className="text-xs text-zinc-500">Добавьте товары, чтобы создать заказ</div>}
+              {dealOrders.length > 0 && (
+                <div className="mt-2 grid gap-2">
+                  <div className="text-xs font-medium uppercase text-zinc-500">История заказов сделки</div>
+                  {dealOrders.map((order) => (
+                    <div
+                      key={order.id}
+                      className="grid gap-1 rounded-lg border border-zinc-200 bg-white p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate font-medium text-zinc-950">
+                          {order.number || `Заказ #${order.id}`}
+                        </div>
+                        <div className="text-xs text-zinc-500">
+                          {order.dueAt ? formatDateTime(order.dueAt) : "Без срока"} · {formatMoney(order.total)}
+                        </div>
+                      </div>
+                      <Badge variant={order.status === "Отменен" ? "destructive" : "outline"}>{order.status}</Badge>
+                    </div>
+                  ))}
+                </div>
               )}
             </CardContent>
           </Card>
 
-          <Card className="overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm">
+          <Card
+            className={cn(
+              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              activeTab !== "composition" && "hidden"
+            )}
+          >
             <CardHeader className="pb-3">
-              <CardTitle className="text-base font-semibold text-zinc-950">Итог</CardTitle>
+              <CardTitle className="text-base font-semibold text-zinc-950">Итог по составу</CardTitle>
               <CardDescription>Суммы считаются текущими правилами расчета</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-2 overflow-visible text-sm">
@@ -1339,45 +1550,10 @@ export function DealDetailPage({
               <SummaryRow label="Скидки по позициям" value={formatMoney(totals.itemsDiscountTotal)} />
               <SummaryRow label="Скидка на чек" value={formatMoney(totals.dealDiscountAmount)} />
               <SummaryRow label="Итого" value={formatMoney(totals.total)} strong total />
-              <SummaryRow label="Оплачено" value={formatMoney(deal.paid)} />
-              <SummaryRow label="Остаток" value={formatMoney(balance)} strong danger={balance > 0} />
-
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                {deal.orderId ? (
-                  <Button type="button" variant="outline" render={<Link href={orderHref} />}>
-                    <ExternalLinkIcon data-icon="inline-start" />
-                    Открыть заказ
-                  </Button>
-                ) : (
-                  <Button
-                    type="button"
-                    disabled={!hasItems || actionPending || hasPendingSaves}
-                    className="bg-zinc-950 text-white hover:bg-zinc-800"
-                    onClick={createOrderFromDeal}
-                  >
-                    Создать заказ
-                  </Button>
-                )}
-                {balance <= 0 ? (
-                  <div className="flex h-10 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-sm font-medium text-emerald-900">
-                    <CheckCircle2Icon data-icon="inline-start" />
-                    Оплачено
-                  </div>
-                ) : (
-                  <Button
-                    type="button"
-                    disabled={actionPending || hasPendingSaves}
-                    className="bg-zinc-950 text-white hover:bg-zinc-800"
-                    onClick={openPaymentDialog}
-                  >
-                    <ReceiptTextIcon data-icon="inline-start" />
-                    Принять оплату
-                  </Button>
-                )}
-              </div>
-              {!hasItems && <div className="text-xs text-zinc-500">Добавьте товары, чтобы создать заказ</div>}
             </CardContent>
           </Card>
+            </div>
+          </Tabs>
         </aside>
       </div>
 
@@ -1447,6 +1623,214 @@ export function DealDetailPage({
               </Button>
               <Button type="submit" disabled={actionPending}>
                 Принять оплату
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={createOrderDialogOpen} onOpenChange={setCreateOrderDialogOpen}>
+        <DialogContent className="sm:max-w-3xl">
+          <form onSubmit={submitCreateOrder}>
+            <DialogHeader>
+              <DialogTitle>Создание заказа из сделки</DialogTitle>
+              <DialogDescription>{deal.number || `Сделка #${deal.id}`}</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm sm:grid-cols-5">
+                <SummaryBox label="Состав" value={formatMoney(totals.total)} />
+                <SummaryBox label="Доставка" value={formatMoney(orderDeliveryPrice)} />
+                <SummaryBox label="Курьеру" value={formatMoney(orderCourierPayout)} />
+                <SummaryBox label="Итого" value={formatMoney(orderTotal)} strong />
+                <SummaryBox label="Остаток" value={formatMoney(orderBalance)} strong={orderBalance > 0} />
+              </div>
+
+              <FieldGroup>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field>
+                    <FieldLabel>Клиент</FieldLabel>
+                    <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm">
+                      <div className="font-medium text-zinc-950">{deal.customerName || "Клиент сделки"}</div>
+                      <div className="text-xs text-zinc-500">{deal.customerPhone || "Телефон не указан"}</div>
+                    </div>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="deal-order-recipient-phone">Номер получателя</FieldLabel>
+                    <FieldContent>
+                      <Input
+                        id="deal-order-recipient-phone"
+                        value={orderDraft.recipientPhone}
+                        placeholder="Например, +996 ..."
+                        onChange={(event) => updateOrderDraftField("recipientPhone", event.target.value)}
+                      />
+                    </FieldContent>
+                  </Field>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field data-invalid={missingOrderDueAt ? true : undefined}>
+                    <FieldLabel>Дата и время</FieldLabel>
+                    <FieldContent>
+                      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px]">
+                        <Input
+                          type="date"
+                          value={orderDraft.dueDate}
+                          aria-invalid={missingOrderDueAt}
+                          onChange={(event) => updateOrderDraftField("dueDate", event.target.value)}
+                        />
+                        <Input
+                          type="time"
+                          step="900"
+                          value={orderDraft.dueTime}
+                          aria-invalid={missingOrderDueAt}
+                          onChange={(event) => updateOrderDraftField("dueTime", event.target.value)}
+                        />
+                      </div>
+                      {missingOrderDueAt && <FieldDescription>Срок не указан, заказ уйдет на стол без даты.</FieldDescription>}
+                    </FieldContent>
+                  </Field>
+                  <Field>
+                    <FieldLabel>Тип получения</FieldLabel>
+                    <FieldContent>
+                      <Select
+                        value={orderDraft.deliveryType}
+                        onValueChange={(value) => updateOrderDraftField("deliveryType", normalizeDeliveryTypeValue(value))}
+                      >
+                        <SelectTrigger className="h-10 w-full bg-white">
+                          <SelectValue>{(value) => deliveryTypeLabel(String(value ?? "pickup"))}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent align="start">
+                          <SelectGroup>
+                            {deliveryOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </FieldContent>
+                  </Field>
+                </div>
+
+                {orderDraft.deliveryType === "delivery" && (
+                  <Field data-invalid={missingDeliveryAddress ? true : undefined}>
+                    <FieldLabel htmlFor="deal-order-address">Адрес доставки</FieldLabel>
+                    <FieldContent>
+                      <Input
+                        id="deal-order-address"
+                        value={orderDraft.address}
+                        aria-invalid={missingDeliveryAddress}
+                        onChange={(event) => updateOrderDraftField("address", event.target.value)}
+                      />
+                      {missingDeliveryAddress && <FieldDescription>Адрес не указан для доставки.</FieldDescription>}
+                    </FieldContent>
+                  </Field>
+                )}
+
+                <Field>
+                  <FieldLabel htmlFor="deal-order-comment">Комментарий для заказа</FieldLabel>
+                  <FieldContent>
+                    <Textarea
+                      id="deal-order-comment"
+                      rows={3}
+                      value={orderDraft.comment}
+                      onChange={(event) => updateOrderDraftField("comment", event.target.value)}
+                    />
+                  </FieldContent>
+                </Field>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="deal-order-delivery-price">Платит клиент за доставку</FieldLabel>
+                    <FieldContent>
+                      <Input
+                        id="deal-order-delivery-price"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={orderDraft.deliveryPrice}
+                        onChange={(event) => updateOrderDraftField("deliveryPrice", event.target.value)}
+                        onBlur={(event) =>
+                          updateOrderDraftField("deliveryPrice", String(normalizedPrice(event.currentTarget.value)))
+                        }
+                      />
+                    </FieldContent>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="deal-order-courier-payout">Выдать курьеру из кассы</FieldLabel>
+                    <FieldContent>
+                      <Input
+                        id="deal-order-courier-payout"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={orderDraft.courierPayout}
+                        onChange={(event) => updateOrderDraftField("courierPayout", event.target.value)}
+                        onBlur={(event) =>
+                          updateOrderDraftField("courierPayout", String(normalizedPrice(event.currentTarget.value)))
+                        }
+                      />
+                    </FieldContent>
+                  </Field>
+                </div>
+              </FieldGroup>
+
+              <div className="grid gap-2 rounded-xl border border-zinc-200 p-3 text-sm">
+                <div className="font-medium text-zinc-950">Состав заказа</div>
+                {pricedItems.length ? (
+                  pricedItems.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-zinc-950">{item.productName}</div>
+                        <div className="text-xs text-zinc-500">
+                          {formatNumber(item.qtyNumber)} шт · {discountLabel(item.discountType)}
+                          {item.bouquetGroupId ? ` · ${item.bouquetName || "Букет"}` : ""}
+                        </div>
+                      </div>
+                      <div className="shrink-0 font-medium text-zinc-950">{formatMoney(item.line.total)}</div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-zinc-500">Состав пуст</div>
+                )}
+              </div>
+
+              <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm">
+                <SummaryRow label="Товары до скидки" value={formatMoney(totals.itemsTotalBeforeDiscount)} />
+                <SummaryRow label="Скидки по позициям" value={formatMoney(totals.itemsDiscountTotal)} />
+                <SummaryRow label="Скидка на чек" value={formatMoney(totals.dealDiscountAmount)} />
+                <SummaryRow label="Доставка" value={formatMoney(orderDeliveryPrice)} />
+                <SummaryRow label="Курьеру из кассы" value={formatMoney(orderCourierPayout)} />
+                <SummaryRow label="Итого" value={formatMoney(orderTotal)} strong total />
+                <SummaryRow label="Оплачено" value={formatMoney(deal.paid)} />
+                <SummaryRow label="Остаток" value={formatMoney(orderBalance)} strong danger={orderBalance > 0} />
+              </div>
+
+              {activeDealOrder && (
+                <Alert className="border-amber-200 bg-amber-50 text-amber-950">
+                  <AlertTriangleIcon />
+                  <AlertTitle>У сделки уже есть активный заказ</AlertTitle>
+                  <AlertDescription>Создать новый заказ можно после отмены или завершения активного.</AlertDescription>
+                </Alert>
+              )}
+              {paidExceedsOrderTotal && (
+                <Alert variant="destructive">
+                  <AlertTriangleIcon />
+                  <AlertTitle>Оплата выше итога заказа</AlertTitle>
+                  <AlertDescription>Увеличьте итог заказа или разберите оплату перед созданием.</AlertDescription>
+                </Alert>
+              )}
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setCreateOrderDialogOpen(false)}>
+                Отмена
+              </Button>
+              <Button
+                type="submit"
+                disabled={!hasItems || Boolean(activeDealOrder) || paidExceedsOrderTotal || actionPending}
+              >
+                Создать заказ
               </Button>
             </DialogFooter>
           </form>
@@ -1535,6 +1919,21 @@ function createDealDraft(deal: Deal): DealDraft {
   }
 }
 
+function createOrderDraftFromDealDraft(draft: DealDraft): CreateOrderDraft {
+  const [dueDate, dueTime] = splitDatetimeLocal(draft.dueAt)
+
+  return {
+    dueDate,
+    dueTime,
+    deliveryType: normalizeDeliveryTypeValue(draft.deliveryType),
+    address: draft.address ?? "",
+    recipientPhone: draft.recipientPhone ?? "",
+    comment: draft.comment ?? "",
+    deliveryPrice: "0",
+    courierPayout: "0",
+  }
+}
+
 function createItemDrafts(items: DealItem[]): DealItemDraft[] {
   return items.map((item) => ({
     ...item,
@@ -1582,6 +1981,20 @@ function createDealFormData(dealId: number, draft: DealDraft) {
   formData.set("comment", draft.comment ?? "")
   formData.set("dealDiscountType", draft.dealDiscountType ?? "none")
   formData.set("dealDiscountValue", String(normalizedPrice(draft.dealDiscountValue)))
+
+  return formData
+}
+
+function createOrderFromDealFormData(dealId: number, draft: CreateOrderDraft) {
+  const formData = new FormData()
+  formData.set("dealId", String(dealId))
+  formData.set("dueAt", buildOrderDueAt(draft))
+  formData.set("deliveryType", draft.deliveryType)
+  formData.set("address", draft.address.trim())
+  formData.set("recipientPhone", draft.recipientPhone.trim())
+  formData.set("comment", draft.comment.trim())
+  formData.set("deliveryPrice", String(normalizedPrice(draft.deliveryPrice)))
+  formData.set("courierPayout", String(normalizedPrice(draft.courierPayout)))
 
   return formData
 }
@@ -1637,6 +2050,15 @@ function discountLabel(value: string) {
   return discountOptions.find((option) => option.value === value)?.label ?? "Без скидки"
 }
 
+function deliveryTypeLabel(value: string) {
+  return deliveryOptions.find((option) => option.value === value)?.label ?? "Самовывоз"
+}
+
+function normalizeDeliveryTypeValue(value: string | null | undefined): CreateOrderDraft["deliveryType"] {
+  const normalized = String(value ?? "").trim().toLowerCase()
+  return normalized === "delivery" || normalized === "доставка" ? "delivery" : "pickup"
+}
+
 function normalizeSourceValue(value: string | null): DealSource {
   return value || "manual"
 }
@@ -1680,6 +2102,20 @@ function formatDateTime(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date)
+}
+
+function splitDatetimeLocal(value: string) {
+  if (!value) {
+    return ["", ""] as const
+  }
+
+  const normalized = value.includes("T") ? value : toDatetimeLocal(value)
+  const [date = "", rawTime = ""] = normalized.split("T")
+  return [date, rawTime.slice(0, 5)] as const
+}
+
+function buildOrderDueAt(draft: CreateOrderDraft) {
+  return draft.dueDate && draft.dueTime ? `${draft.dueDate}T${draft.dueTime}` : ""
 }
 
 function mergeStatus(fieldStatus: SaveStatus, itemStatus: SaveStatus): SaveStatus {

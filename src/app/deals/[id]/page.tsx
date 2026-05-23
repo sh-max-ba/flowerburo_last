@@ -4,7 +4,7 @@ import { CrmShell } from "@/components/crm-shell"
 import { DealDetailPage } from "@/components/deals/deal-detail-page"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getShiftShellContext } from "@/lib/app-shell"
-import { getDeal, listCustomers, listDealStages, listProducts } from "@/lib/crm"
+import { getDeal, listCustomers, listDealOrders, listDealStages, listProducts } from "@/lib/crm"
 import { getOpenShift, listBouquetTemplates, listDealBouquetMessages, listUsers } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
@@ -41,6 +41,7 @@ export default async function DealDetailRoute({ params }: { params: Promise<{ id
         products={listProducts()}
         bouquets={listBouquetTemplates({ activeOnly: true })}
         bouquetMessages={listDealBouquetMessages(deal.id)}
+        dealOrders={listDealOrders(deal.id)}
         openShift={getOpenShift() ?? null}
       />
     </CrmShell>

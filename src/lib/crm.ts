@@ -321,6 +321,73 @@ export function listCustomerOrders(customerId: number): Order[] {
   }))
 }
 
+export function listDealOrders(dealId: number): Order[] {
+  const rows = db()
+    .prepare(
+      `SELECT id, number, customer_id as customerId, deal_id as dealId,
+        created_by_user_id as createdByUserId, updated_by_user_id as updatedByUserId,
+        customer, phone, COALESCE(recipient_phone, '') as recipientPhone,
+        COALESCE(source, '') as source, COALESCE(delivery_type, '') as deliveryType,
+        COALESCE(address, '') as address, due_at as dueAt, status,
+        COALESCE(NULLIF(items_total_before_discount, 0), total) as itemsTotalBeforeDiscount,
+        COALESCE(items_discount_total, 0) as itemsDiscountTotal,
+        COALESCE(order_discount_type, 'none') as orderDiscountType,
+        COALESCE(order_discount_value, 0) as orderDiscountValue,
+        COALESCE(order_discount_amount, 0) as orderDiscountAmount,
+        COALESCE(NULLIF(total_before_discount, 0), total) as totalBeforeDiscount,
+        total, COALESCE(prepaid, 0) as prepaid,
+        COALESCE(paid, 0) as paid, COALESCE(delivery_price, 0) as deliveryPrice,
+        COALESCE(courier_payout, 0) as courierPayout,
+        COALESCE(delivery_payout_paid, 0) as deliveryPayoutPaid,
+        COALESCE(is_reserved, 0) as isReserved, note, ready_at as readyAt,
+        handed_to_courier_at as handedToCourierAt, completed_at as completedAt,
+        COALESCE(courier_name, '') as courierName, created_at as createdAt, updated_at as updatedAt
+       FROM orders
+       WHERE deal_id = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT 20`
+    )
+    .all(dealId) as Array<Record<string, unknown>>
+
+  return rows.map((row) => ({
+    id: toNumber(row.id),
+    number: row.number === null ? null : String(row.number ?? ""),
+    createdByUserId: row.createdByUserId === null ? null : toNumber(row.createdByUserId),
+    updatedByUserId: row.updatedByUserId === null ? null : toNumber(row.updatedByUserId),
+    customerId: row.customerId === null ? null : toNumber(row.customerId),
+    dealId: row.dealId === null ? null : toNumber(row.dealId),
+    customer: String(row.customer ?? ""),
+    phone: String(row.phone ?? ""),
+    recipientPhone: String(row.recipientPhone ?? ""),
+    source: String(row.source ?? ""),
+    deliveryType: String(row.deliveryType ?? ""),
+    address: String(row.address ?? ""),
+    dueAt: String(row.dueAt ?? ""),
+    status: String(row.status ?? "Новый") as Order["status"],
+    itemsTotalBeforeDiscount: toNumber(row.itemsTotalBeforeDiscount) || toNumber(row.total),
+    itemsDiscountTotal: toNumber(row.itemsDiscountTotal),
+    orderDiscountType: normalizeDiscountType(String(row.orderDiscountType ?? "none")),
+    orderDiscountValue: toNumber(row.orderDiscountValue),
+    orderDiscountAmount: toNumber(row.orderDiscountAmount),
+    totalBeforeDiscount: toNumber(row.totalBeforeDiscount) || toNumber(row.total),
+    total: toNumber(row.total),
+    prepaid: toNumber(row.prepaid),
+    paid: toNumber(row.paid),
+    deliveryPrice: toNumber(row.deliveryPrice),
+    courierPayout: toNumber(row.courierPayout),
+    deliveryPayoutPaid: toNumber(row.deliveryPayoutPaid) === 1,
+    isReserved: toNumber(row.isReserved) === 1,
+    note: String(row.note ?? ""),
+    readyAt: row.readyAt === null ? null : String(row.readyAt ?? ""),
+    handedToCourierAt: row.handedToCourierAt === null ? null : String(row.handedToCourierAt ?? ""),
+    completedAt: row.completedAt === null ? null : String(row.completedAt ?? ""),
+    courierName: String(row.courierName ?? ""),
+    createdAt: String(row.createdAt ?? ""),
+    updatedAt: row.updatedAt === null ? null : String(row.updatedAt ?? ""),
+    items: [],
+  }))
+}
+
 export function listCustomerSales(customerId: number): Sale[] {
   const rows = db()
     .prepare(
