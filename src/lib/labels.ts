@@ -24,8 +24,6 @@ export function getPaymentMethodLabel(method: PaymentMethod | string) {
   return labels[method as PaymentMethod] ?? method
 }
 
-export const paymentMethodLabel = getPaymentMethodLabel
-
 export function cashTransactionTypeLabel(type: CashTransactionType | string) {
   const labels: Record<CashTransactionType, string> = {
     sale: "Продажа",

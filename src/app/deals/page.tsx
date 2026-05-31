@@ -3,7 +3,7 @@ import { CrmShell } from "@/components/crm-shell"
 import { DealsAutoRefresh } from "@/components/deals/deals-auto-refresh"
 import { DealsKanban } from "@/components/deals/deals-kanban"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
-import { getShiftShellContext } from "@/lib/app-shell"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDealBoardData, listCustomers } from "@/lib/crm"
 import { listUsers } from "@/lib/db"
 
@@ -16,7 +16,13 @@ export default async function DealsPage() {
   }
 
   return (
-    <CrmShell user={user} active="deals" title="Сделки" shiftContext={getShiftShellContext(user)}>
+    <CrmShell
+      user={user}
+      active="deals"
+      title="Сделки"
+      shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
+    >
       <DealsAutoRefresh />
       <DealsKanban
         board={getDealBoardData()}

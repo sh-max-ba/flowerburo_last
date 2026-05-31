@@ -242,7 +242,7 @@ function ProductComboboxDropdown({
 }) {
   return (
     <div
-      className={`rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 ${className ?? ""}`}
+      className={`rounded-lg bg-white p-1 text-popover-foreground shadow-xl ring-1 ring-zinc-300 ${className ?? ""}`}
       style={style}
     >
       {results.length > 0 ? (

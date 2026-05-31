@@ -137,8 +137,23 @@ function signSessionPayload(payload: string) {
   return crypto.createHmac("sha256", getSessionSecret()).update(payload).digest("base64url")
 }
 
+const DEV_SESSION_SECRET_FALLBACK = "flower-ops-local-session-secret"
+
 function getSessionSecret() {
-  return process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || "flower-ops-local-session-secret"
+  const secret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET
+
+  if (process.env.NODE_ENV === "production") {
+    if (!secret || secret.length < 32) {
+      throw new Error(
+        "AUTH_SECRET (или NEXTAUTH_SECRET) обязателен в production и должен быть не короче 32 символов. " +
+          "Сгенерируйте секрет (например: openssl rand -base64 48) и задайте его в окружении."
+      )
+    }
+
+    return secret
+  }
+
+  return secret || DEV_SESSION_SECRET_FALLBACK
 }
 
 async function shouldUseSecureSessionCookie() {
@@ -146,8 +161,13 @@ async function shouldUseSecureSessionCookie() {
   if (override === "true" || override === "1") {
     return true
   }
+  if (override === "false" || override === "0") {
+    return false
+  }
 
-  return false
+  // Secure by default in production. If the app is served over plain HTTP
+  // (temporary VPS without TLS), set SESSION_COOKIE_SECURE=false, otherwise login will not work.
+  return process.env.NODE_ENV === "production"
 }
 
 function timingSafeEqual(actual: string, expected: string) {

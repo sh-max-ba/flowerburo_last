@@ -6,7 +6,7 @@ import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { getShiftShellContext } from "@/lib/app-shell"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getHistoryReportData, type Movement } from "@/lib/db"
 
@@ -21,7 +21,13 @@ export default async function StockMovementsPage() {
   const report = getHistoryReportData()
 
   return (
-    <CrmShell user={user} active="history" title="История склада" shiftContext={getShiftShellContext(user)}>
+    <CrmShell
+      user={user}
+      active="history"
+      title="История склада"
+      shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
+    >
       <div className="flex justify-end">
         <Link href="/stock" className={buttonVariants({ variant: "outline", size: "sm" })}>
           Вернуться на склад

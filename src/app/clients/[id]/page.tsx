@@ -3,7 +3,7 @@ import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { CustomerDetailPage } from "@/components/clients/customer-detail-page"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
-import { getShiftShellContext } from "@/lib/app-shell"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getCustomer, listCustomerOrders, listCustomerSales, listDeals } from "@/lib/crm"
 
 export const dynamic = "force-dynamic"
@@ -26,7 +26,13 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ i
   }
 
   return (
-    <CrmShell user={user} active="clients" title={`Клиент: ${customer.name}`} shiftContext={getShiftShellContext(user)}>
+    <CrmShell
+      user={user}
+      active="clients"
+      title={`Клиент: ${customer.name}`}
+      shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
+    >
       <CustomerDetailPage
         customer={customer}
         deals={listDeals({ customerId })}

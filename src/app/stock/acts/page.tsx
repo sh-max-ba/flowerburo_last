@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { getShiftShellContext } from "@/lib/app-shell"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { listStockDocuments, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
 import { stockDocumentStatusLabel, stockDocumentTypeLabel } from "@/lib/labels"
@@ -35,7 +35,13 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
   const documents = listStockDocuments({ type, status, query })
 
   return (
-    <CrmShell user={user} active="stock-acts" title="Акты склада" shiftContext={getShiftShellContext(user)}>
+    <CrmShell
+      user={user}
+      active="stock-acts"
+      title="Акты склада"
+      shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
+    >
       <div className="flex justify-end">
         <Link href="/stock" className={buttonVariants({ variant: "outline", size: "sm" })}>
           Вернуться на склад

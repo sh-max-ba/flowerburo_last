@@ -58,7 +58,6 @@ import {
   openShift,
   applyWarehouseImport,
   previewWarehouseImport,
-  replenishProductStock,
   postStockDocument,
   saveStockDocumentDraft,
   clearProductCategory,
@@ -71,7 +70,6 @@ import {
   updateBouquetTemplate,
   upsertSupplier,
   upsertProduct,
-  writeOffProductStock,
   type StockDocumentType,
   type UserRole,
   type CurrentUser,
@@ -209,6 +207,45 @@ async function runCashAction(
   }, message)
 }
 
+async function runDataAction<T>(
+  roles: UserRole[],
+  fn: (user: CurrentUser) => T | Promise<T>,
+  message: string,
+  errorMessage?: string
+): Promise<DataActionResult<T>> {
+  try {
+    const user = await requireActionRole(roles)
+    const data = await fn(user)
+    return { ok: true, message, data }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : errorMessage ?? "Операция не выполнена.",
+    }
+  }
+}
+
+async function runMessageAction(
+  roles: UserRole[],
+  fn: () => ActionResult | Promise<ActionResult>,
+  errorMessage: string,
+  { revalidate = true }: { revalidate?: boolean } = {}
+): Promise<ActionResult> {
+  try {
+    await requireActionRole(roles)
+    const result = await fn()
+    if (revalidate) {
+      revalidatePath("/settings")
+    }
+    return result
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : errorMessage,
+    }
+  }
+}
+
 export async function saveProductAction(formData: FormData) {
   return runRoleAction(["owner"], (user) => upsertProduct(formData, user), "Товар сохранен.")
 }
@@ -254,20 +291,19 @@ export async function saveWazzupSettingsAction(formData: FormData) {
 }
 
 export async function getSecureWazzupWebhookUrlAction(): Promise<DataActionResult<{ url: string }>> {
-  try {
-    await requireActionRole(["owner"])
-    const url = getSecureWazzupWebhookUrlForOwner()
-    if (!url.includes("?key=")) {
-      return { ok: false, message: "CRM key не настроен." }
-    }
+  return runDataAction(
+    ["owner"],
+    () => {
+      const url = getSecureWazzupWebhookUrlForOwner()
+      if (!url.includes("?key=")) {
+        throw new Error("CRM key не настроен.")
+      }
 
-    return { ok: true, message: "Защищенный webhook URL скопирован.", data: { url } }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Защищенный webhook URL не получен.",
-    }
-  }
+      return { url }
+    },
+    "Защищенный webhook URL скопирован.",
+    "Защищенный webhook URL не получен."
+  )
 }
 
 export async function generateWazzupCrmKeyAction() {
@@ -283,165 +319,119 @@ export async function clearWazzupApiKeyAction() {
 }
 
 export async function testWazzupApiKeyAction(): Promise<ActionResult> {
-  try {
-    await requireActionRole(["owner"])
-    const result = await testWazzupApiKey()
-    revalidatePath("/settings")
-    return result
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "API key не проверен.",
-    }
-  }
+  return runMessageAction(["owner"], () => testWazzupApiKey(), "API key не проверен.")
 }
 
 export async function testLocalWazzupWebhookAction(): Promise<ActionResult> {
-  try {
-    await requireActionRole(["owner"])
-    const result = testLocalWazzupWebhook()
-    revalidatePath("/settings")
-    return result
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Webhook endpoint не проверен.",
-    }
-  }
+  return runMessageAction(["owner"], () => testLocalWazzupWebhook(), "Webhook endpoint не проверен.")
 }
 
 export async function checkWazzupWebhookSubscriptionsAction(): Promise<ActionResult> {
-  try {
-    await requireActionRole(["owner"])
-    const config = await getWazzupWebhookSubscriptions()
-    const messages = webhookConfigMessages("Текущие подписки Wazzup", config)
-    revalidatePath("/settings")
-    return { ok: true, message: messages.join("\n"), messages }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Подписки Wazzup не проверены.",
-    }
-  }
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const config = await getWazzupWebhookSubscriptions()
+      const messages = webhookConfigMessages("Текущие подписки Wazzup", config)
+      return { ok: true, message: messages.join("\n"), messages }
+    },
+    "Подписки Wazzup не проверены."
+  )
 }
 
 export async function connectWazzupWebhookAction(): Promise<ActionResult> {
-  try {
-    await requireActionRole(["owner"])
-    const result = await connectWazzupWebhookSubscriptions()
-    const messages = [
-      "Webhook subscriptions обновлены в Wazzup.",
-      ...webhookConfigMessages("До PATCH", result.before),
-      `PATCH: HTTP ${result.patch.status}, body: ${result.patch.body}`,
-      ...webhookConfigMessages("После PATCH", result.after),
-    ]
-    revalidatePath("/settings")
-    return { ok: true, message: messages.join("\n"), messages }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Webhook subscriptions не подключены.",
-    }
-  }
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await connectWazzupWebhookSubscriptions()
+      const messages = [
+        "Webhook subscriptions обновлены в Wazzup.",
+        ...webhookConfigMessages("До PATCH", result.before),
+        `PATCH: HTTP ${result.patch.status}, body: ${result.patch.body}`,
+        ...webhookConfigMessages("После PATCH", result.after),
+      ]
+      return { ok: true, message: messages.join("\n"), messages }
+    },
+    "Webhook subscriptions не подключены."
+  )
 }
 
 export async function checkWazzupChannelsAction(): Promise<ActionResult> {
-  try {
-    await requireActionRole(["owner"])
-    const channels = await listWazzupChannels()
-    const activeWhatsappChannels = channels.filter((channel) => channel.transport === "whatsapp" && channel.state === "active")
-    const messages = channels.length
-      ? channels.map(
-          (channel) =>
-            `${channel.channelId || "-"} · ${channel.transport || "-"} · ${channel.plainId || "-"} · ${
-              channel.state || "-"
-            }${channel.state && channel.state !== "active" ? " · warning: channel is not active" : ""}`
-        )
-      : ["Каналы Wazzup не найдены."]
-    if (activeWhatsappChannels.length > 1) {
-      messages.push("warning: для iframe будет использован первый active whatsapp channel")
-    }
-    return { ok: true, message: messages.join("\n"), messages }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Каналы Wazzup не проверены.",
-    }
-  }
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const channels = await listWazzupChannels()
+      const activeWhatsappChannels = channels.filter((channel) => channel.transport === "whatsapp" && channel.state === "active")
+      const messages = channels.length
+        ? channels.map(
+            (channel) =>
+              `${channel.channelId || "-"} · ${channel.transport || "-"} · ${channel.plainId || "-"} · ${
+                channel.state || "-"
+              }${channel.state && channel.state !== "active" ? " · warning: channel is not active" : ""}`
+          )
+        : ["Каналы Wazzup не найдены."]
+      if (activeWhatsappChannels.length > 1) {
+        messages.push("warning: для iframe будет использован первый active whatsapp channel")
+      }
+      return { ok: true, message: messages.join("\n"), messages }
+    },
+    "Каналы Wazzup не проверены.",
+    { revalidate: false }
+  )
 }
 
 export async function syncWazzupUsersAction(): Promise<ActionResult> {
-  try {
-    await requireActionRole(["owner"])
-    const result = await syncWazzupUsers()
-    revalidatePath("/settings")
-    return {
-      ok: result.ok,
-      message: result.message,
-      messages: result.messages,
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Пользователи Wazzup не синхронизированы.",
-    }
-  }
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await syncWazzupUsers()
+      return { ok: result.ok, message: result.message, messages: result.messages }
+    },
+    "Пользователи Wazzup не синхронизированы."
+  )
 }
 
 export async function syncWazzupPipelinesAction(): Promise<ActionResult> {
-  try {
-    await requireActionRole(["owner"])
-    const result = await syncWazzupPipelines()
-    revalidatePath("/settings")
-    return { ok: result.ok, message: result.message, messages: result.messages }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Воронки Wazzup не синхронизированы.",
-    }
-  }
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await syncWazzupPipelines()
+      return { ok: result.ok, message: result.message, messages: result.messages }
+    },
+    "Воронки Wazzup не синхронизированы."
+  )
 }
 
 export async function syncWazzupContactsAction(): Promise<ActionResult> {
-  try {
-    await requireActionRole(["owner"])
-    const result = await syncWazzupContacts()
-    revalidatePath("/settings")
-    return { ok: result.ok, message: result.message, messages: result.messages }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Клиенты Wazzup не синхронизированы.",
-    }
-  }
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await syncWazzupContacts()
+      return { ok: result.ok, message: result.message, messages: result.messages }
+    },
+    "Клиенты Wazzup не синхронизированы."
+  )
 }
 
 export async function syncWazzupDealsAction(): Promise<ActionResult> {
-  try {
-    await requireActionRole(["owner"])
-    const result = await syncWazzupDeals()
-    revalidatePath("/settings")
-    return { ok: result.ok, message: result.message, messages: result.messages }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Сделки Wazzup не синхронизированы.",
-    }
-  }
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await syncWazzupDeals()
+      return { ok: result.ok, message: result.message, messages: result.messages }
+    },
+    "Сделки Wazzup не синхронизированы."
+  )
 }
 
 export async function syncWazzupAllAction(): Promise<ActionResult> {
-  try {
-    await requireActionRole(["owner"])
-    const result = await syncWazzupAll()
-    revalidatePath("/settings")
-    return { ok: result.ok, message: result.message, messages: result.messages }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Полная синхронизация Wazzup не выполнена.",
-    }
-  }
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await syncWazzupAll()
+      return { ok: result.ok, message: result.message, messages: result.messages }
+    },
+    "Полная синхронизация Wazzup не выполнена."
+  )
 }
 
 function webhookConfigMessages(title: string, config: WazzupWebhookConfig) {
@@ -482,34 +472,29 @@ export async function createCustomerAction(formData: FormData) {
 }
 
 export async function createCashCustomerAction(formData: FormData): Promise<DataActionResult<CustomerOption>> {
-  try {
-    await requireActionRole(["owner", "manager"])
-    const customerId = createCustomer(formData)
-    const customer = getCustomer(customerId)
-    if (!customer) {
-      throw new Error("Клиент создан, но не найден.")
-    }
+  return runDataAction<CustomerOption>(
+    ["owner", "manager"],
+    () => {
+      const customerId = createCustomer(formData)
+      const customer = getCustomer(customerId)
+      if (!customer) {
+        throw new Error("Клиент создан, но не найден.")
+      }
 
-    revalidateCrm(customerId, null)
-    revalidatePath("/cash")
-    revalidatePath("/orders")
+      revalidateCrm(customerId, null)
+      revalidatePath("/cash")
+      revalidatePath("/orders")
 
-    return {
-      ok: true,
-      message: "Клиент создан",
-      data: {
+      return {
         id: customer.id,
         name: customer.name,
         phone: customer.phone,
         defaultDiscountPercent: customer.defaultDiscountPercent,
-      },
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Клиент не создан.",
-    }
-  }
+      }
+    },
+    "Клиент создан",
+    "Клиент не создан."
+  )
 }
 
 export async function updateCustomerAction(formData: FormData) {
@@ -617,14 +602,6 @@ export async function deleteProductAction(code: string) {
   return runRoleAction(["owner"], (user) => deleteProduct(code, user), "Товар удален.")
 }
 
-export async function replenishProductStockAction(formData: FormData) {
-  return runRoleAction(["owner"], (user) => replenishProductStock(formData, user), "Товар пополнен")
-}
-
-export async function writeOffProductStockAction(formData: FormData) {
-  return runRoleAction(["owner"], (user) => writeOffProductStock(formData, user), "Товар списан")
-}
-
 export async function createStockDocumentAction(type: StockDocumentType, formData: FormData) {
   const message = type === "stock_in" ? "Акт пополнения проведен" : "Акт списания проведен"
 
@@ -707,58 +684,48 @@ export async function setSupplierActiveAction(supplierId: number, isActive: bool
 }
 
 export async function previewWarehouseImportAction(formData: FormData) {
-  try {
-    const user = await requireActionRole(["owner"])
-    const file = formData.get("file")
-    if (!(file instanceof File) || file.size === 0) {
-      throw new Error("Выберите XLSX файл.")
-    }
-    if (!file.name.toLowerCase().endsWith(".xlsx")) {
-      throw new Error("Загрузите файл в формате .xlsx.")
-    }
+  return runDataAction(
+    ["owner"],
+    async (user) => {
+      const file = formData.get("file")
+      if (!(file instanceof File) || file.size === 0) {
+        throw new Error("Выберите XLSX файл.")
+      }
+      if (!file.name.toLowerCase().endsWith(".xlsx")) {
+        throw new Error("Загрузите файл в формате .xlsx.")
+      }
 
-    const preview = previewWarehouseImport({
-      filename: file.name,
-      buffer: await file.arrayBuffer(),
-      currentUser: user,
-    })
+      const preview = previewWarehouseImport({
+        filename: file.name,
+        buffer: await file.arrayBuffer(),
+        currentUser: user,
+      })
 
-    revalidatePath("/stock")
-    revalidatePath("/warehouse/imports")
+      revalidatePath("/stock")
+      revalidatePath("/warehouse/imports")
 
-    return {
-      ok: true,
-      message: "Предпросмотр импорта сформирован.",
-      data: preview,
-    } satisfies DataActionResult<typeof preview>
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Не удалось прочитать XLSX.",
-    }
-  }
+      return preview
+    },
+    "Предпросмотр импорта сформирован.",
+    "Не удалось прочитать XLSX."
+  )
 }
 
 export async function applyWarehouseImportAction(importId: number) {
-  try {
-    const user = await requireActionRole(["owner"])
-    const preview = applyWarehouseImport(importId, user)
+  return runDataAction(
+    ["owner"],
+    (user) => {
+      const preview = applyWarehouseImport(importId, user)
 
-    revalidatePath("/stock")
-    revalidatePath("/warehouse/imports")
-    revalidatePath(`/warehouse/imports/${importId}`)
+      revalidatePath("/stock")
+      revalidatePath("/warehouse/imports")
+      revalidatePath(`/warehouse/imports/${importId}`)
 
-    return {
-      ok: true,
-      message: "Импорт применен.",
-      data: preview,
-    } satisfies DataActionResult<typeof preview>
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Импорт не применен.",
-    }
-  }
+      return preview
+    },
+    "Импорт применен.",
+    "Импорт не применен."
+  )
 }
 
 export async function createSaleAction(formData: FormData) {
@@ -823,9 +790,15 @@ export async function cancelOrderAction(orderId: number) {
       if (result.dealId) {
         revalidateCrm(null, result.dealId)
       }
-      return result.alreadyBuilt
-        ? ["Букет уже собран, склад автоматически не восстанавливается", "Заказ отменен"]
-        : ["Заказ отменен"]
+      const messages: string[] = []
+      if (result.alreadyBuilt) {
+        messages.push("Букет уже собран, склад автоматически не восстанавливается")
+      }
+      if (result.refunded > 0) {
+        messages.push(`Возврат ${new Intl.NumberFormat("ru-RU").format(result.refunded)} сом проведён`)
+      }
+      messages.push("Заказ отменен")
+      return messages
     },
     "Заказ отменен"
   )

@@ -15,8 +15,29 @@ const noStoreHeaders = {
   "Cache-Control": "no-store",
 }
 
+const MAX_WEBHOOK_BODY_BYTES = 1_000_000
+
 export async function POST(request: NextRequest) {
+  // Авторизация ДО чтения и записи тела: неавторизованный запрос ничего не пишет в БД.
+  const auth = isWazzupWebhookAuthorized({
+    authorization: request.headers.get("authorization"),
+    queryKey: request.nextUrl.searchParams.get("key") ?? request.nextUrl.searchParams.get("crmKey"),
+  })
+
+  if (!auth.authorized) {
+    console.info("Wazzup webhook rejected", {
+      hasAuthorization: auth.hasAuthorization,
+      authMethod: auth.method,
+      error: auth.error,
+    })
+    return json({ ok: false }, 401)
+  }
+
   const rawPayload = await request.text()
+  if (rawPayload.length > MAX_WEBHOOK_BODY_BYTES) {
+    return json({ ok: false, error: "payload_too_large" }, 413)
+  }
+
   const payload = parseJson(rawPayload)
   if (!payload.ok) {
     return json({ ok: false, error: "invalid_json" }, 400)
@@ -25,17 +46,13 @@ export async function POST(request: NextRequest) {
   const eventType = detectWazzupEventType(payload.value)
   const eventHash = createWazzupEventHash(payload.value)
   const saved = saveWazzupWebhookEvent({ eventHash, eventType, rawPayload })
-  const auth = isWazzupWebhookAuthorized({
-    authorization: request.headers.get("authorization"),
-    queryKey: request.nextUrl.searchParams.get("key") ?? request.nextUrl.searchParams.get("crmKey"),
-  })
 
   logWebhookDecision({
     request,
     payload: payload.value,
     eventType,
     duplicate: saved.duplicate,
-    statusDecision: auth.authorized ? "accepted" : "unauthorized",
+    statusDecision: "accepted",
     auth,
   })
 
@@ -44,13 +61,6 @@ export async function POST(request: NextRequest) {
       markWazzupWebhookEvent(saved.eventId, "processed", auth.warning)
     }
     return json({ ok: true })
-  }
-
-  if (!auth.authorized) {
-    if (!saved.duplicate && saved.eventId) {
-      markWazzupWebhookEvent(saved.eventId, "failed", auth.error)
-    }
-    return json({ ok: false }, 401)
   }
 
   const settings = getWazzupSettingsForServer()

@@ -1,0 +1,612 @@
+"use client"
+
+import { useEffect } from "react"
+import { useRouter } from "next/navigation"
+import { ArrowLeftIcon, ArrowRightIcon, CalendarDaysIcon, CheckCircle2Icon, ListIcon } from "lucide-react"
+import type { Order, OrderItem, OrderStatus } from "@/lib/db"
+import { deliveryTypeLabel } from "@/lib/labels"
+import { cn, formatMoney } from "@/lib/utils"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ProductThumbnail } from "@/components/products/product-thumbnail"
+
+export type OrderSortMode = "default" | "due" | "new"
+export type OrderViewMode = "list" | "calendar"
+
+export const orderRealtimeRefreshMs = 5000
+export const noDueDateKey = "__no_due_at__"
+
+export const orderSortOptions: Array<{ label: string; value: OrderSortMode }> = [
+  { label: "По умолчанию", value: "default" },
+  { label: "Сначала ближайшие", value: "due" },
+  { label: "Сначала новые", value: "new" },
+]
+
+// PERF-2: общий 5-сек поллер активности заказов. Опрашивает /api/orders/activity,
+// вызывает router.refresh() только при изменении ревизии. Используется как клиентский
+// остров на страницах /orders и /ready-orders (вместо монолитного useEffect).
+export function OrdersActivityRefresh() {
+  const router = useRouter()
+
+  useEffect(() => {
+    let lastRevision: string | null = null
+    let active = true
+
+    async function checkForUpdates() {
+      if (document.visibilityState !== "visible") {
+        return
+      }
+
+      try {
+        const response = await fetch("/api/orders/activity", { cache: "no-store" })
+        if (!response.ok) {
+          return
+        }
+        const payload = (await response.json()) as { revision?: string }
+        const revision = String(payload.revision ?? "")
+        if (lastRevision === null) {
+          lastRevision = revision
+          return
+        }
+        if (revision !== lastRevision) {
+          lastRevision = revision
+          if (active) {
+            router.refresh()
+          }
+        }
+      } catch {
+        // Polling should never break the UI.
+      }
+    }
+
+    const interval = window.setInterval(checkForUpdates, orderRealtimeRefreshMs)
+
+    return () => {
+      active = false
+      window.clearInterval(interval)
+    }
+  }, [router])
+
+  return null
+}
+
+function padDatePart(value: number) {
+  return String(value).padStart(2, "0")
+}
+
+function dateInputValue(date: Date) {
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`
+}
+
+export function startOfLocalDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+export function addDays(date: Date, days: number) {
+  const nextDate = new Date(date)
+  nextDate.setDate(nextDate.getDate() + days)
+  return nextDate
+}
+
+function dateKey(date: Date) {
+  return dateInputValue(startOfLocalDay(date))
+}
+
+function dateKeyFromValue(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return noDueDateKey
+  }
+
+  return dateKey(date)
+}
+
+function timeValue(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return "-"
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
+}
+
+function dayLabel(date: Date) {
+  return new Intl.DateTimeFormat("ru-RU", {
+    weekday: "short",
+    day: "2-digit",
+    month: "2-digit",
+  }).format(date)
+}
+
+function weekRangeLabel(startDate: Date) {
+  const endDate = addDays(startDate, 6)
+  const formatter = new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "long",
+  })
+  return `${formatter.format(startDate)} - ${formatter.format(endDate)}`
+}
+
+function timestamp(value: string | null | undefined) {
+  if (!value) {
+    return Number.POSITIVE_INFINITY
+  }
+
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? Number.POSITIVE_INFINITY : date.getTime()
+}
+
+function newestTimestamp(value: string | null | undefined) {
+  const parsed = timestamp(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function compareDueAt(left: Order, right: Order) {
+  const leftDue = timestamp(left.dueAt)
+  const rightDue = timestamp(right.dueAt)
+  const dueCompare = leftDue === rightDue ? 0 : leftDue - rightDue
+  if (dueCompare !== 0) {
+    return dueCompare
+  }
+
+  return newestTimestamp(right.createdAt) - newestTimestamp(left.createdAt)
+}
+
+function compareCreatedAtDesc(left: Order, right: Order) {
+  return newestTimestamp(right.createdAt) - newestTimestamp(left.createdAt)
+}
+
+function workOrderStatusRank(status: OrderStatus) {
+  const ranks: Partial<Record<OrderStatus, number>> = {
+    "Новый": 0,
+    "В работе": 1,
+    "Готов": 2,
+  }
+
+  return ranks[status] ?? 99
+}
+
+function readyOrderStatusRank(status: OrderStatus) {
+  const ranks: Partial<Record<OrderStatus, number>> = {
+    "Готов": 0,
+    "Передан курьеру": 1,
+  }
+
+  return ranks[status] ?? 99
+}
+
+export function sortWorkOrders(orders: Order[], sortMode: OrderSortMode) {
+  return [...orders].sort((left, right) => {
+    if (sortMode === "new") {
+      return compareCreatedAtDesc(left, right)
+    }
+
+    if (sortMode === "due") {
+      return compareDueAt(left, right)
+    }
+
+    const statusCompare = workOrderStatusRank(left.status) - workOrderStatusRank(right.status)
+    if (statusCompare !== 0) {
+      return statusCompare
+    }
+
+    return compareDueAt(left, right)
+  })
+}
+
+export function sortReadyOrders(orders: Order[], sortMode: OrderSortMode) {
+  return [...orders].sort((left, right) => {
+    if (sortMode === "new") {
+      return newestTimestamp(right.readyAt ?? right.createdAt) - newestTimestamp(left.readyAt ?? left.createdAt)
+    }
+
+    if (sortMode === "due") {
+      const dueCompare = compareDueAt(left, right)
+      if (dueCompare !== 0) {
+        return dueCompare
+      }
+
+      return newestTimestamp(right.readyAt ?? right.createdAt) - newestTimestamp(left.readyAt ?? left.createdAt)
+    }
+
+    const statusCompare = readyOrderStatusRank(left.status) - readyOrderStatusRank(right.status)
+    if (statusCompare !== 0) {
+      return statusCompare
+    }
+
+    const leftDue = timestamp(left.dueAt)
+    const rightDue = timestamp(right.dueAt)
+    const dueCompare = leftDue === rightDue ? 0 : leftDue - rightDue
+    if (dueCompare !== 0) {
+      return dueCompare
+    }
+
+    return newestTimestamp(right.readyAt ?? right.createdAt) - newestTimestamp(left.readyAt ?? left.createdAt)
+  })
+}
+
+export function OrderToolbar({
+  sortMode,
+  viewMode,
+  onSortModeChange,
+  onViewModeChange,
+}: {
+  sortMode: OrderSortMode
+  viewMode: OrderViewMode
+  onSortModeChange: (value: OrderSortMode) => void
+  onViewModeChange: (value: OrderViewMode) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-muted-foreground">Сортировка</span>
+        <Select
+          value={sortMode}
+          onValueChange={(value) => onSortModeChange((value ?? "default") as OrderSortMode)}
+        >
+          <SelectTrigger size="sm" className="min-w-44">
+            <SelectValue placeholder="Сортировка" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {orderSortOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </div>
+      <Tabs
+        value={viewMode}
+        onValueChange={(value) => onViewModeChange((value ?? "list") as OrderViewMode)}
+      >
+        <TabsList>
+          <TabsTrigger value="list">
+            <ListIcon data-icon="inline-start" />
+            Список
+          </TabsTrigger>
+          <TabsTrigger value="calendar">
+            <CalendarDaysIcon data-icon="inline-start" />
+            Календарь
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+    </div>
+  )
+}
+
+export function OrderCalendarView({
+  orders,
+  weekStart,
+  showMoney,
+  onToday,
+  onPreviousWeek,
+  onNextWeek,
+  onOpenOrder,
+}: {
+  orders: Order[]
+  weekStart: Date
+  showMoney: boolean
+  onToday: () => void
+  onPreviousWeek: () => void
+  onNextWeek: () => void
+  onOpenOrder: (order: Order) => void
+}) {
+  const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index))
+  const dayKeys = new Set(days.map(dateKey))
+  const ordersByDate = new Map<string, Order[]>()
+  const ordersWithoutDate: Order[] = []
+
+  for (const order of orders) {
+    const key = order.dueAt ? dateKeyFromValue(order.dueAt) : noDueDateKey
+    if (key === noDueDateKey) {
+      ordersWithoutDate.push(order)
+      continue
+    }
+
+    if (!dayKeys.has(key)) {
+      continue
+    }
+
+    ordersByDate.set(key, [...(ordersByDate.get(key) ?? []), order])
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="text-sm font-medium">Неделя</div>
+          <div className="text-sm text-muted-foreground">{weekRangeLabel(weekStart)}</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={onToday}>
+            Сегодня
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={onPreviousWeek}>
+            <ArrowLeftIcon data-icon="inline-start" />
+            Неделя
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={onNextWeek}>
+            Неделя
+            <ArrowRightIcon data-icon="inline-end" />
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-7">
+        {days.map((day) => {
+          const key = dateKey(day)
+          const dayOrders = ordersByDate.get(key) ?? []
+
+          return (
+            <div key={key} className="flex min-h-40 flex-col gap-2 rounded-lg border bg-background p-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium capitalize">{dayLabel(day)}</div>
+                <Badge variant="outline">{dayOrders.length}</Badge>
+              </div>
+              {dayOrders.length ? (
+                <div className="flex flex-col gap-2">
+                  {dayOrders.map((order) => (
+                    <OrderCalendarCard
+                      key={order.id}
+                      order={order}
+                      showMoney={showMoney}
+                      onOpenOrder={onOpenOrder}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <Empty className="min-h-24 rounded-lg border py-3">
+                  <EmptyHeader>
+                    <EmptyTitle className="text-sm">На этот день заказов нет</EmptyTitle>
+                  </EmptyHeader>
+                </Empty>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {ordersWithoutDate.length > 0 && (
+        <div className="flex flex-col gap-2 rounded-lg border bg-background p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-medium">Без даты</div>
+            <Badge variant="outline">{ordersWithoutDate.length}</Badge>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {ordersWithoutDate.map((order) => (
+              <OrderCalendarCard
+                key={order.id}
+                order={order}
+                showMoney={showMoney}
+                onOpenOrder={onOpenOrder}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function OrderCalendarCard({
+  order,
+  showMoney,
+  onOpenOrder,
+}: {
+  order: Order
+  showMoney: boolean
+  onOpenOrder: (order: Order) => void
+}) {
+  const balance = order.total - order.paid
+
+  return (
+    <div className={cn("flex flex-col gap-2 rounded-lg border bg-white p-3 text-xs", orderUrgencyClass(order))}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate font-medium">{order.number || `#${order.id}`}</div>
+          <div className="text-muted-foreground">{order.dueAt ? timeValue(order.dueAt) : "Без срока"}</div>
+        </div>
+        {order.status === "Готов" || order.status === "Передан курьеру" ? (
+          <ReadyStatusBadge status={order.status} />
+        ) : (
+          <OrderBadge status={order.status} />
+        )}
+      </div>
+      <div className="min-w-0">
+        <div className="truncate font-medium">{order.customer || "Клиент не указан"}</div>
+        {order.recipientPhone && (
+          <div className="truncate text-muted-foreground">Получатель: {order.recipientPhone}</div>
+        )}
+        <div className="truncate text-muted-foreground">{deliveryTypeLabel(order.deliveryType)}</div>
+      </div>
+      {showMoney && (
+        <div className="grid grid-cols-2 gap-2 rounded-md bg-muted p-2">
+          <Info label="Сумма" value={formatMoney(order.total)} />
+          <Info label="Остаток" value={formatMoney(balance)} />
+        </div>
+      )}
+      <Button type="button" size="sm" variant="outline" className="mt-auto" onClick={() => onOpenOrder(order)}>
+        К списку
+      </Button>
+    </div>
+  )
+}
+
+function orderUrgencyClass(order: Order) {
+  if (!order.dueAt) {
+    return ""
+  }
+
+  const dueAt = new Date(order.dueAt)
+  if (Number.isNaN(dueAt.getTime())) {
+    return ""
+  }
+
+  const now = new Date()
+  if (dueAt.getTime() < now.getTime()) {
+    return "border-destructive bg-destructive/5"
+  }
+
+  if (dateKey(dueAt) === dateKey(now)) {
+    return "border-amber-300 bg-amber-50"
+  }
+
+  return ""
+}
+
+export function OrderComposition({ items, compact = false }: { items: OrderItem[]; compact?: boolean }) {
+  const groups = groupOrderItems(items)
+
+  if (!groups.length) {
+    return (
+      <div className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
+        Состав не указан
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn("flex flex-col rounded-lg bg-muted p-3 text-sm", compact ? "gap-1" : "gap-2")}>
+      {groups.map((group) => {
+        if (group.type === "bouquet") {
+          return (
+            <div key={group.key} className="flex flex-col gap-1 rounded-md bg-background/70 p-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="min-w-0 font-medium">
+                  Букет &ldquo;{group.bouquetName || "Без названия"}&rdquo;
+                </span>
+                <span className="shrink-0 text-muted-foreground">{formatMoney(group.total)}</span>
+              </div>
+              <div className="grid gap-1 pl-2">
+                {group.items.map((item) => (
+                  <div key={item.id} className="flex items-center justify-between gap-3 text-muted-foreground">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <ProductThumbnail name={item.name} imagePath={item.imagePath} size="xs" />
+                      <span className="truncate">{item.name}</span>
+                    </span>
+                    <span className="shrink-0">{number(item.qty)} шт</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        }
+
+        const item = group.item
+        return (
+          <div key={group.key} className="flex items-center justify-between gap-3">
+            <span className="flex min-w-0 items-center gap-2">
+              <ProductThumbnail name={item.name} imagePath={item.imagePath} size="xs" />
+              <span className="truncate">{item.name}</span>
+            </span>
+            <span className="shrink-0">{number(item.qty)} шт</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function groupOrderItems(items: OrderItem[]) {
+  const groups: Array<
+    | { type: "single"; key: string; item: OrderItem }
+    | { type: "bouquet"; key: string; bouquetName: string; total: number; items: OrderItem[] }
+  > = []
+  const bouquetGroups = new Map<string, Extract<(typeof groups)[number], { type: "bouquet" }>>()
+
+  for (const item of items) {
+    if (!item.bouquetGroupId) {
+      groups.push({ type: "single", key: `item-${item.id}`, item })
+      continue
+    }
+
+    let group = bouquetGroups.get(item.bouquetGroupId)
+    if (!group) {
+      group = {
+        type: "bouquet",
+        key: item.bouquetGroupId,
+        bouquetName: item.bouquetName,
+        total: 0,
+        items: [],
+      }
+      bouquetGroups.set(item.bouquetGroupId, group)
+      groups.push(group)
+    }
+    group.items.push(item)
+    group.total += item.total
+  }
+
+  return groups
+}
+
+export function OrderBadge({ status }: { status: OrderStatus }) {
+  if (status === "Выдан") {
+    return (
+      <Badge variant="secondary">
+        <CheckCircle2Icon data-icon="inline-start" />
+        {status}
+      </Badge>
+    )
+  }
+
+  if (status === "Отменен") {
+    return <Badge variant="destructive">{status}</Badge>
+  }
+
+  return <Badge variant="outline">{status}</Badge>
+}
+
+export function ReadyStatusBadge({ status }: { status: OrderStatus }) {
+  if (status === "Готов") {
+    return <Badge className="bg-emerald-100 text-emerald-900 hover:bg-emerald-100">Готов</Badge>
+  }
+
+  if (status === "Передан курьеру") {
+    return <Badge className="bg-amber-100 text-amber-900 hover:bg-amber-100">Передан курьеру</Badge>
+  }
+
+  return <OrderBadge status={status} />
+}
+
+export function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs text-zinc-500">{label}</div>
+      <div className="font-semibold text-zinc-950">{value}</div>
+    </div>
+  )
+}
+
+export function number(value: number) {
+  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value)
+}
+
+export function dateTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
+}

@@ -3,7 +3,7 @@ import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { DealDetailPage } from "@/components/deals/deal-detail-page"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
-import { getShiftShellContext } from "@/lib/app-shell"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDeal, listCustomers, listDealOrders, listDealStages, listProducts } from "@/lib/crm"
 import { getOpenShift, listBouquetTemplates, listDealBouquetMessages, listUsers } from "@/lib/db"
 
@@ -32,6 +32,7 @@ export default async function DealDetailRoute({ params }: { params: Promise<{ id
       active="deals"
       title={`Сделка ${deal.number || `#${deal.id}`}`}
       shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
     >
       <DealDetailPage
         deal={deal}

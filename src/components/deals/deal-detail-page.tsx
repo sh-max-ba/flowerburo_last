@@ -30,7 +30,7 @@ import type { Customer, Deal, DealItem, DealSource, DealStage } from "@/lib/crm"
 import { getBouquetAvailability } from "@/lib/bouquet-availability"
 import { calculateCommercialTotals, calculateLineTotal, type DiscountType } from "@/lib/pricing"
 import type { BouquetTemplate, CurrentUser, DealBouquetMessage, Order, PaymentMethod, Product } from "@/lib/db"
-import { getPaymentMethodLabel, paymentMethodOptions, sourceLabel as getSourceLabel } from "@/lib/labels"
+import { deliveryTypeLabel, getPaymentMethodLabel, paymentMethodOptions, sourceLabel as getSourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { BouquetThumbnail } from "@/components/bouquets/bouquet-thumbnail"
 import { WazzupDealFrame } from "@/components/deals/wazzup-deal-frame"
@@ -2082,10 +2082,6 @@ function responsibleLabel(value: string, usersById: Map<string, CurrentUser>, de
 
 function discountLabel(value: string) {
   return discountOptions.find((option) => option.value === value)?.label ?? "Без скидки"
-}
-
-function deliveryTypeLabel(value: string) {
-  return deliveryOptions.find((option) => option.value === value)?.label ?? "Самовывоз"
 }
 
 function normalizeDeliveryTypeValue(value: string | null | undefined): CreateOrderDraft["deliveryType"] {

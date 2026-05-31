@@ -42,43 +42,40 @@ export type WazzupWebhookAuthResult = {
   warning?: string
 }
 
+function safeKeyEqual(a: string, b: string) {
+  const bufferA = Buffer.from(a)
+  const bufferB = Buffer.from(b)
+  return bufferA.length === bufferB.length && crypto.timingSafeEqual(bufferA, bufferB)
+}
+
 export function isWazzupWebhookAuthorized(input: {
   authorization: string | null
   queryKey?: string | null
 }): WazzupWebhookAuthResult {
-  const { crmKey, webhookAuthRequired } = getWazzupSettingsForServer()
+  const { crmKey } = getWazzupSettingsForServer()
   const authorization = clean(input.authorization)
   const queryKey = clean(input.queryKey)
   const hasAuthorization = Boolean(authorization)
 
+  // Без настроенного CRM key webhook отклоняется — он не должен быть открытым.
+  // Сгенерируйте CRM key в /settings → Wazzup и переподключите webhook.
   if (!crmKey) {
     return {
-      authorized: true,
-      required: false,
+      authorized: false,
+      required: true,
       method: "none",
       hasAuthorization,
-      warning: "CRM key не настроен; webhook принят без проверки ключа.",
+      error: "CRM key не настроен: webhook отклонён.",
     }
   }
 
-  if (authorization === `Bearer ${crmKey}`) {
-    return { authorized: true, required: webhookAuthRequired, method: "bearer", hasAuthorization }
+  const bearerToken = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : ""
+  if (bearerToken && safeKeyEqual(bearerToken, crmKey)) {
+    return { authorized: true, required: true, method: "bearer", hasAuthorization }
   }
 
-  if (queryKey === crmKey) {
-    return { authorized: true, required: webhookAuthRequired, method: "query", hasAuthorization }
-  }
-
-  if (!webhookAuthRequired) {
-    return {
-      authorized: true,
-      required: false,
-      method: "none",
-      hasAuthorization,
-      warning: hasAuthorization
-        ? "Webhook принят без совпадающего CRM key; обязательная проверка выключена."
-        : "Webhook принят без Authorization; обязательная проверка выключена.",
-    }
+  if (queryKey && safeKeyEqual(queryKey, crmKey)) {
+    return { authorized: true, required: true, method: "query", hasAuthorization }
   }
 
   return {
@@ -86,7 +83,7 @@ export function isWazzupWebhookAuthorized(input: {
     required: true,
     method: "none",
     hasAuthorization,
-    error: "unauthorized webhook: missing or invalid Authorization",
+    error: "unauthorized webhook: missing or invalid CRM key",
   }
 }
 

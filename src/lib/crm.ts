@@ -1,5 +1,8 @@
 import type Database from "better-sqlite3"
 import { initDb, listUsers, type CurrentUser, type Order, type Product, type Sale } from "@/lib/db"
+import { mapOrderRow } from "@/lib/db-row"
+import { parseForm } from "@/lib/forms/parse"
+import { CustomerCreateSchema, CustomerUpdateSchema } from "@/lib/forms/schemas"
 import {
   calculateCommercialTotals,
   calculateLineTotal,
@@ -190,22 +193,21 @@ export function getCustomer(customerId: number) {
 }
 
 export function createCustomer(formData: FormData) {
+  const input = parseForm(CustomerCreateSchema, formData)
   return insertCustomer({
-    name: clean(formData.get("name")),
-    phone: clean(formData.get("phone")),
-    instagram: clean(formData.get("instagram")),
-    source: clean(formData.get("source")),
-    defaultDiscountPercent: clampPercent(toNumber(formData.get("defaultDiscountPercent"))),
-    comment: clean(formData.get("comment")),
+    name: input.name,
+    phone: input.phone,
+    instagram: input.instagram,
+    source: input.source,
+    defaultDiscountPercent: clampPercent(input.defaultDiscountPercent),
+    comment: input.comment,
   })
 }
 
 export function updateCustomer(formData: FormData) {
-  const id = toNumber(formData.get("customerId"))
-  const name = clean(formData.get("name"))
-  if (!id || !name) {
-    throw new Error("Укажите клиента и имя.")
-  }
+  const input = parseForm(CustomerUpdateSchema, formData)
+  const id = input.customerId
+  const name = input.name
 
   const client = db()
   const update = client.transaction(() => {
@@ -216,7 +218,7 @@ export function updateCustomer(formData: FormData) {
       throw new Error("Клиент не найден.")
     }
 
-    const phone = clean(formData.get("phone"))
+    const phone = input.phone
     const customerChanged = clean(existing.name) !== name || clean(existing.phone) !== phone
 
     client
@@ -232,10 +234,10 @@ export function updateCustomer(formData: FormData) {
         name,
         phone,
         normalizedPhone: normalizePhone(phone),
-        instagram: clean(formData.get("instagram")),
-        source: clean(formData.get("source")),
-        defaultDiscountPercent: clampPercent(toNumber(formData.get("defaultDiscountPercent"))),
-        comment: clean(formData.get("comment")),
+        instagram: input.instagram,
+        source: input.source,
+        defaultDiscountPercent: clampPercent(input.defaultDiscountPercent),
+        comment: input.comment,
       })
 
     if (customerChanged) {
@@ -260,7 +262,7 @@ export function listCustomerOrders(customerId: number): Order[] {
       `SELECT id, number, customer_id as customerId, deal_id as dealId,
         created_by_user_id as createdByUserId, updated_by_user_id as updatedByUserId,
         customer, phone, COALESCE(recipient_phone, '') as recipientPhone,
-        COALESCE(source, '') as source, COALESCE(delivery_type, '') as deliveryType,
+        COALESCE(source, '') as source, COALESCE(delivery_type, 'pickup') as deliveryType,
         COALESCE(address, '') as address, due_at as dueAt, status,
         COALESCE(NULLIF(items_total_before_discount, 0), total) as itemsTotalBeforeDiscount,
         COALESCE(items_discount_total, 0) as itemsDiscountTotal,
@@ -282,43 +284,7 @@ export function listCustomerOrders(customerId: number): Order[] {
     )
     .all(customerId) as Array<Record<string, unknown>>
 
-  return rows.map((row) => ({
-    id: toNumber(row.id),
-    number: row.number === null ? null : String(row.number ?? ""),
-    createdByUserId: row.createdByUserId === null ? null : toNumber(row.createdByUserId),
-    updatedByUserId: row.updatedByUserId === null ? null : toNumber(row.updatedByUserId),
-    customerId: row.customerId === null ? null : toNumber(row.customerId),
-    dealId: row.dealId === null ? null : toNumber(row.dealId),
-    customer: String(row.customer ?? ""),
-    phone: String(row.phone ?? ""),
-    recipientPhone: String(row.recipientPhone ?? ""),
-    source: String(row.source ?? ""),
-    deliveryType: String(row.deliveryType ?? ""),
-    address: String(row.address ?? ""),
-    dueAt: String(row.dueAt ?? ""),
-    status: String(row.status ?? "Новый") as Order["status"],
-    itemsTotalBeforeDiscount: toNumber(row.itemsTotalBeforeDiscount) || toNumber(row.total),
-    itemsDiscountTotal: toNumber(row.itemsDiscountTotal),
-    orderDiscountType: normalizeDiscountType(String(row.orderDiscountType ?? "none")),
-    orderDiscountValue: toNumber(row.orderDiscountValue),
-    orderDiscountAmount: toNumber(row.orderDiscountAmount),
-    totalBeforeDiscount: toNumber(row.totalBeforeDiscount) || toNumber(row.total),
-    total: toNumber(row.total),
-    prepaid: toNumber(row.prepaid),
-    paid: toNumber(row.paid),
-    deliveryPrice: toNumber(row.deliveryPrice),
-    courierPayout: toNumber(row.courierPayout),
-    deliveryPayoutPaid: toNumber(row.deliveryPayoutPaid) === 1,
-    isReserved: toNumber(row.isReserved) === 1,
-    note: String(row.note ?? ""),
-    readyAt: row.readyAt === null ? null : String(row.readyAt ?? ""),
-    handedToCourierAt: row.handedToCourierAt === null ? null : String(row.handedToCourierAt ?? ""),
-    completedAt: row.completedAt === null ? null : String(row.completedAt ?? ""),
-    courierName: String(row.courierName ?? ""),
-    createdAt: String(row.createdAt ?? ""),
-    updatedAt: row.updatedAt === null ? null : String(row.updatedAt ?? ""),
-    items: [],
-  }))
+  return rows.map((row) => mapOrderRow(row))
 }
 
 export function listDealOrders(dealId: number): Order[] {
@@ -327,7 +293,7 @@ export function listDealOrders(dealId: number): Order[] {
       `SELECT id, number, customer_id as customerId, deal_id as dealId,
         created_by_user_id as createdByUserId, updated_by_user_id as updatedByUserId,
         customer, phone, COALESCE(recipient_phone, '') as recipientPhone,
-        COALESCE(source, '') as source, COALESCE(delivery_type, '') as deliveryType,
+        COALESCE(source, '') as source, COALESCE(delivery_type, 'pickup') as deliveryType,
         COALESCE(address, '') as address, due_at as dueAt, status,
         COALESCE(NULLIF(items_total_before_discount, 0), total) as itemsTotalBeforeDiscount,
         COALESCE(items_discount_total, 0) as itemsDiscountTotal,
@@ -349,43 +315,7 @@ export function listDealOrders(dealId: number): Order[] {
     )
     .all(dealId) as Array<Record<string, unknown>>
 
-  return rows.map((row) => ({
-    id: toNumber(row.id),
-    number: row.number === null ? null : String(row.number ?? ""),
-    createdByUserId: row.createdByUserId === null ? null : toNumber(row.createdByUserId),
-    updatedByUserId: row.updatedByUserId === null ? null : toNumber(row.updatedByUserId),
-    customerId: row.customerId === null ? null : toNumber(row.customerId),
-    dealId: row.dealId === null ? null : toNumber(row.dealId),
-    customer: String(row.customer ?? ""),
-    phone: String(row.phone ?? ""),
-    recipientPhone: String(row.recipientPhone ?? ""),
-    source: String(row.source ?? ""),
-    deliveryType: String(row.deliveryType ?? ""),
-    address: String(row.address ?? ""),
-    dueAt: String(row.dueAt ?? ""),
-    status: String(row.status ?? "Новый") as Order["status"],
-    itemsTotalBeforeDiscount: toNumber(row.itemsTotalBeforeDiscount) || toNumber(row.total),
-    itemsDiscountTotal: toNumber(row.itemsDiscountTotal),
-    orderDiscountType: normalizeDiscountType(String(row.orderDiscountType ?? "none")),
-    orderDiscountValue: toNumber(row.orderDiscountValue),
-    orderDiscountAmount: toNumber(row.orderDiscountAmount),
-    totalBeforeDiscount: toNumber(row.totalBeforeDiscount) || toNumber(row.total),
-    total: toNumber(row.total),
-    prepaid: toNumber(row.prepaid),
-    paid: toNumber(row.paid),
-    deliveryPrice: toNumber(row.deliveryPrice),
-    courierPayout: toNumber(row.courierPayout),
-    deliveryPayoutPaid: toNumber(row.deliveryPayoutPaid) === 1,
-    isReserved: toNumber(row.isReserved) === 1,
-    note: String(row.note ?? ""),
-    readyAt: row.readyAt === null ? null : String(row.readyAt ?? ""),
-    handedToCourierAt: row.handedToCourierAt === null ? null : String(row.handedToCourierAt ?? ""),
-    completedAt: row.completedAt === null ? null : String(row.completedAt ?? ""),
-    courierName: String(row.courierName ?? ""),
-    createdAt: String(row.createdAt ?? ""),
-    updatedAt: row.updatedAt === null ? null : String(row.updatedAt ?? ""),
-    items: [],
-  }))
+  return rows.map((row) => mapOrderRow(row))
 }
 
 export function listCustomerSales(customerId: number): Sale[] {
@@ -628,10 +558,30 @@ export function updateDealStage(dealId: number, stageId: number) {
   update()
 }
 
+// BL-6: после создания заказа по сделке её позиции фиксируются — иначе сделка и заказ
+// (и зарезервированный склад) разъезжаются. Редактирование снова доступно, если заказ отменён.
+function assertDealItemsEditable(client: Database.Database, dealId: number) {
+  const row = client.prepare("SELECT order_id FROM deals WHERE id = ?").get(dealId) as
+    | { order_id: number | null }
+    | undefined
+  const orderId = row ? toNumber(row.order_id) : 0
+  if (!orderId) {
+    return
+  }
+
+  const order = client.prepare("SELECT status FROM orders WHERE id = ?").get(orderId) as
+    | { status: string }
+    | undefined
+  if (order && order.status !== "Отменен") {
+    throw new Error("Нельзя менять позиции: по сделке создан заказ. Измените или отмените заказ.")
+  }
+}
+
 export function addDealItem(dealId: number, productCode: string) {
   const client = db()
   const add = client.transaction(() => {
     getDealRecord(client, dealId)
+    assertDealItemsEditable(client, dealId)
     const product = getProduct(client, productCode)
     if (!product) {
       throw new Error("Товар не найден.")
@@ -662,6 +612,7 @@ export function addDealBouquet(dealId: number, bouquetId: number) {
   const client = db()
   const add = client.transaction(() => {
     getDealRecord(client, dealId)
+    assertDealItemsEditable(client, dealId)
     const bouquet = getBouquetTemplateForDeal(client, bouquetId)
     if (!bouquet) {
       throw new Error("Букет не найден.")
@@ -727,6 +678,7 @@ export function updateDealItem(formData: FormData) {
   const client = db()
   const update = client.transaction(() => {
     getDealRecord(client, dealId)
+    assertDealItemsEditable(client, dealId)
     client
       .prepare(
         `UPDATE deal_items
@@ -755,6 +707,7 @@ export function removeDealItem(dealId: number, itemId: number) {
   const client = db()
   const remove = client.transaction(() => {
     getDealRecord(client, dealId)
+    assertDealItemsEditable(client, dealId)
     const item = client
       .prepare("SELECT COALESCE(bouquet_group_id, '') as bouquetGroupId FROM deal_items WHERE id = ? AND deal_id = ?")
       .get(itemId, dealId) as { bouquetGroupId: string } | undefined
@@ -774,6 +727,7 @@ export function removeDealItemGroup(dealId: number, bouquetGroupId: string) {
   const client = db()
   const remove = client.transaction(() => {
     getDealRecord(client, dealId)
+    assertDealItemsEditable(client, dealId)
     const groupId = clean(bouquetGroupId)
     if (!groupId) {
       throw new Error("Группа букета не найдена.")

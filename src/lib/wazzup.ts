@@ -219,7 +219,7 @@ export function getWazzupSettingsForServer(): WazzupServerSettings {
     apiKey: clean(row?.api_key) || clean(process.env.WAZZUP_API_KEY),
     crmKey: clean(row?.crm_key) || clean(process.env.WAZZUP_CRM_KEY),
     webhookUrl,
-    webhookAuthRequired: row ? row.webhook_auth_required === 1 : false,
+    webhookAuthRequired: row ? row.webhook_auth_required === 1 : true,
     isEnabled: row ? row.is_enabled === 1 : Boolean(clean(process.env.WAZZUP_API_KEY)),
     appUrlConfigured: Boolean(appUrl),
   }
