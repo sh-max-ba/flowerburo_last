@@ -16,15 +16,37 @@ import {
   type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core"
-import { PlusIcon } from "lucide-react"
+import {
+  AlertTriangleIcon,
+  CalendarClockIcon,
+  ClockIcon,
+  MoveRightIcon,
+  PlusIcon,
+} from "lucide-react"
 import { toast } from "sonner"
-import { createDealAction } from "@/app/actions"
+import { createDealAction, updateDealStageAction } from "@/app/actions"
 import type { Customer, Deal, DealBoardData, DealSource, DealStage } from "@/lib/crm"
 import type { CurrentUser } from "@/lib/db"
 import { sourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import {
   Dialog,
   DialogContent,
@@ -44,6 +66,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 
 type ActionResult = Awaited<ReturnType<typeof createDealAction>>
+type StageActionResult = Awaited<ReturnType<typeof updateDealStageAction>>
 
 const activeOrderStatuses = new Set(["Новый", "В работе", "Готов", "Передан курьеру", "new", "in_progress", "ready"])
 const stageDroppableId = (stageId: number) => `stage:${stageId}`
@@ -121,6 +144,25 @@ export function DealsKanban({
     }
   }, [activeDealId])
 
+  // Once a refreshed board reflects an optimistic move (or the deal is gone), drop the stale overlay.
+  useEffect(() => {
+    setOptimisticStages((current) => {
+      const dealStageById = new Map(board.deals.map((deal) => [deal.id, deal.stageId]))
+      let changed = false
+      const next: Record<number, OptimisticStage> = {}
+      for (const [id, optimistic] of Object.entries(current)) {
+        const dealId = Number(id)
+        const serverStageId = dealStageById.get(dealId)
+        if (serverStageId === undefined || serverStageId === optimistic.stageId) {
+          changed = true
+          continue
+        }
+        next[dealId] = optimistic
+      }
+      return changed ? next : current
+    })
+  }, [board.deals])
+
   const dealsByStage = useMemo(() => {
     const map = new Map<number, Deal[]>()
     for (const stage of stages) {
@@ -131,8 +173,22 @@ export function DealsKanban({
         map.set(deal.stageId, [...(map.get(deal.stageId) ?? []), deal])
       }
     }
+    // Anchor the most time-critical deals to the top of each column.
+    for (const [stageId, stageDeals] of map) {
+      map.set(stageId, [...stageDeals].sort(byDueUrgency))
+    }
     return map
   }, [filteredDeals, stages])
+
+  const hasStages = stages.length > 0
+  const hasFilters = responsibleFilter !== allFilterValue || sourceFilter !== allFilterValue
+  const boardIsEmpty = visibleDeals.length === 0
+  const filteredBoardIsEmpty = !boardIsEmpty && filteredDeals.length === 0
+
+  function resetFilters() {
+    setResponsibleFilter(allFilterValue)
+    setSourceFilter(allFilterValue)
+  }
 
   function run(action: () => Promise<ActionResult>, after?: () => void) {
     startTransition(async () => {
@@ -158,8 +214,9 @@ export function DealsKanban({
       return
     }
 
-    // UI-only movement for now; persisted transitions should validate allowed status changes server-side.
     const targetStage = stages.find((stage) => stage.id === stageId)
+
+    // Optimistic move so the card lands instantly, then persist via the server action.
     setOptimisticStages((current) => ({
       ...current,
       [deal.id]: {
@@ -168,6 +225,30 @@ export function DealsKanban({
         stagePosition: targetStage?.position ?? deal.stagePosition,
       },
     }))
+
+    startTransition(async () => {
+      let result: StageActionResult
+      try {
+        result = await updateDealStageAction(deal.id, stageId)
+      } catch {
+        result = { ok: false, message: "Не удалось переместить сделку. Попробуйте еще раз." }
+      }
+
+      if (result.ok) {
+        toast.success(targetStage ? `Перемещено в «${targetStage.name}»` : result.message)
+        // Keep the optimistic stage until the refreshed board reflects the new stage,
+        // so the card doesn't flicker back to its old column during the round-trip.
+        router.refresh()
+      } else {
+        // Roll back the optimistic move on failure.
+        setOptimisticStages((current) => {
+          const next = { ...current }
+          delete next[deal.id]
+          return next
+        })
+        toast.error(result.message)
+      }
+    })
   }
 
   function handleDragStart(event: DragStartEvent) {
@@ -251,6 +332,60 @@ export function DealsKanban({
             data-kanban-board
             className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden border-y border-zinc-200 bg-white"
           >
+            {!hasStages ? (
+              <div className="flex h-full items-center justify-center p-6">
+                <Empty className="max-w-md">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <CalendarClockIcon />
+                    </EmptyMedia>
+                    <EmptyTitle>Воронка не настроена</EmptyTitle>
+                    <EmptyDescription>
+                      В выбранной воронке пока нет этапов. Настройте этапы, чтобы вести сделки на доске.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              </div>
+            ) : boardIsEmpty ? (
+              <div className="flex h-full items-center justify-center p-6">
+                <Empty className="max-w-md">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <PlusIcon />
+                    </EmptyMedia>
+                    <EmptyTitle>Сделок пока нет</EmptyTitle>
+                    <EmptyDescription>
+                      Создайте первую сделку — новые входящие из чатов тоже появятся здесь автоматически.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent>
+                    <Button onClick={() => setDialogOpen(true)}>
+                      <PlusIcon data-icon="inline-start" />
+                      Новая сделка
+                    </Button>
+                  </EmptyContent>
+                </Empty>
+              </div>
+            ) : filteredBoardIsEmpty ? (
+              <div className="flex h-full items-center justify-center p-6">
+                <Empty className="max-w-md">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <CalendarClockIcon />
+                    </EmptyMedia>
+                    <EmptyTitle>Ничего не найдено</EmptyTitle>
+                    <EmptyDescription>
+                      Под выбранные фильтры нет ни одной сделки. Сбросьте фильтры, чтобы увидеть все сделки.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent>
+                    <Button variant="outline" onClick={resetFilters}>
+                      Сбросить фильтры
+                    </Button>
+                  </EmptyContent>
+                </Empty>
+              </div>
+            ) : (
             <div className="flex h-full min-w-max">
               {stages.map((stage) => {
                 const deals = dealsByStage.get(stage.id) ?? []
@@ -270,13 +405,17 @@ export function DealsKanban({
                           key={deal.id}
                           deal={deal}
                           pending={pending}
+                          stages={stages}
+                          onMoveToStage={moveDealToStage}
                         />
                       ))
                     ) : (
                       <Empty className="mx-3 min-h-28 rounded-lg border border-dashed border-zinc-300 bg-white/70">
                         <EmptyHeader>
                           <EmptyTitle className="text-sm">Сделок нет</EmptyTitle>
-                          <EmptyDescription className="text-xs text-zinc-600">Перетащите сделку сюда</EmptyDescription>
+                          <EmptyDescription className="text-xs text-zinc-600">
+                            Перетащите сделку сюда или используйте «Переместить» на карточке
+                          </EmptyDescription>
                         </EmptyHeader>
                       </Empty>
                     )}
@@ -284,6 +423,7 @@ export function DealsKanban({
                 )
               })}
             </div>
+            )}
           </div>
           <DragOverlay>
             {activeDeal ? (
@@ -490,6 +630,8 @@ function KanbanColumn({
 function DraggableDealCard(props: {
   deal: Deal
   pending: boolean
+  stages: DealStage[]
+  onMoveToStage: (deal: Deal, stageId: number) => void
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: dealDraggableId(props.deal.id),
@@ -500,6 +642,15 @@ function DraggableDealCard(props: {
       stageId: props.deal.stageId,
     },
   })
+
+  const moveMenu = (
+    <DealStageMenu
+      deal={props.deal}
+      stages={props.stages}
+      pending={props.pending}
+      onMoveToStage={props.onMoveToStage}
+    />
+  )
 
   return (
     <div
@@ -515,9 +666,74 @@ function DraggableDealCard(props: {
         className="block rounded-lg focus-visible:ring-3 focus-visible:ring-zinc-300 focus-visible:outline-none"
         onClickCapture={(event) => event.stopPropagation()}
       >
-        <DealCard {...props} isDragging={isDragging} />
+        <DealCard deal={props.deal} pending={props.pending} isDragging={isDragging} headerAction={moveMenu} />
       </a>
     </div>
+  )
+}
+
+// A touch/keyboard alternative to drag-and-drop: pick the target stage from a menu.
+function DealStageMenu({
+  deal,
+  stages,
+  pending,
+  onMoveToStage,
+}: {
+  deal: Deal
+  stages: DealStage[]
+  pending: boolean
+  onMoveToStage: (deal: Deal, stageId: number) => void
+}) {
+  const otherStages = stages.filter((stage) => stage.id !== deal.stageId)
+
+  // The trigger lives inside a draggable <a>; stop drag/navigation from intercepting the tap.
+  const stopBubble = (event: React.SyntheticEvent) => event.stopPropagation()
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={pending}
+            aria-label="Переместить сделку в другой этап"
+          />
+        }
+        onPointerDown={stopBubble}
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+        }}
+      >
+        <MoveRightIcon />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="w-52"
+        onPointerDown={stopBubble}
+        onClick={stopBubble}
+      >
+        <DropdownMenuLabel>Переместить в…</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {otherStages.length ? (
+          otherStages.map((stage) => (
+            <DropdownMenuItem
+              key={stage.id}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                onMoveToStage(deal, stage.id)
+              }}
+            >
+              {stage.name}
+            </DropdownMenuItem>
+          ))
+        ) : (
+          <DropdownMenuItem disabled>Других этапов нет</DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -526,11 +742,13 @@ function DealCard({
   pending,
   isDragging = false,
   dragOverlay = false,
+  headerAction,
 }: {
   deal: Deal
   pending: boolean
   isDragging?: boolean
   dragOverlay?: boolean
+  headerAction?: React.ReactNode
 }) {
   const due = getDueStatus(deal.dueAt)
   const note = getCardNote(deal)
@@ -543,9 +761,15 @@ function DealCard({
         "w-full rounded-lg border border-zinc-200 bg-white p-3 text-left text-sm shadow-xs transition-[border-color,box-shadow,opacity,transform] hover:border-zinc-300 hover:shadow-sm focus-visible:ring-3 focus-visible:ring-zinc-300 focus-visible:outline-none",
         pending && !dragOverlay && "pointer-events-none opacity-60",
         isDragging && "scale-[0.99] opacity-45",
-        dragOverlay && "shadow-xl ring-2 ring-zinc-300"
+        dragOverlay && "shadow-xl ring-2 ring-zinc-300",
+        due.level === "overdue" && "border-destructive/40"
       )}
     >
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <DueDateBadge due={due} />
+        {headerAction ? <div className="-mr-1 -my-1 shrink-0">{headerAction}</div> : null}
+      </div>
+
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate font-semibold text-zinc-950">{deal.title || deal.customerName || "Без названия"}</div>
@@ -567,13 +791,49 @@ function DealCard({
           <span className="truncate font-medium text-zinc-900">{nextAction}</span>
         </div>
         <div className="flex items-center justify-between gap-3">
-          <span className={cn("truncate", due.urgent && "font-medium text-amber-700")}>{due.label}</span>
-          <span className="truncate text-zinc-500">{status}</span>
+          <span className="truncate">Статус</span>
+          <span className="truncate font-medium text-zinc-900">{status}</span>
         </div>
       </div>
 
       {note ? <div className="mt-3 line-clamp-2 border-t border-zinc-100 pt-2 text-xs text-zinc-600">{note}</div> : null}
     </div>
+  )
+}
+
+function DueDateBadge({ due }: { due: DueStatus }) {
+  if (due.level === "overdue") {
+    return (
+      <Badge variant="destructive" className="min-w-0">
+        <AlertTriangleIcon data-icon="inline-start" />
+        <span className="truncate">{due.pillLabel}</span>
+      </Badge>
+    )
+  }
+
+  if (due.level === "today") {
+    return (
+      <Badge variant="secondary" className="min-w-0 font-semibold">
+        <ClockIcon data-icon="inline-start" />
+        <span className="truncate">{due.pillLabel}</span>
+      </Badge>
+    )
+  }
+
+  if (due.level === "soon") {
+    return (
+      <Badge variant="outline" className="min-w-0 text-zinc-600">
+        <CalendarClockIcon data-icon="inline-start" />
+        <span className="truncate">{due.pillLabel}</span>
+      </Badge>
+    )
+  }
+
+  return (
+    <Badge variant="outline" className="min-w-0 border-dashed text-zinc-500">
+      <CalendarClockIcon data-icon="inline-start" />
+      <span className="truncate">{due.pillLabel}</span>
+    </Badge>
   )
 }
 
@@ -651,22 +911,66 @@ function compactText(value: string) {
   return value.replace(/\s+/g, " ").trim()
 }
 
-function getDueStatus(value: string) {
+type DueLevel = "overdue" | "today" | "soon" | "none"
+
+const dueLevelOrder: Record<DueLevel, number> = { overdue: 0, today: 1, soon: 2, none: 3 }
+
+// Sort overdue/today deals to the top of a column; within the same urgency keep the earliest due first.
+function byDueUrgency(a: Deal, b: Deal) {
+  const aDue = getDueStatus(a.dueAt)
+  const bDue = getDueStatus(b.dueAt)
+  if (aDue.level !== bDue.level) {
+    return dueLevelOrder[aDue.level] - dueLevelOrder[bDue.level]
+  }
+
+  const aTime = parseDueTime(a.dueAt)
+  const bTime = parseDueTime(b.dueAt)
+  if (aTime !== bTime) {
+    return aTime - bTime
+  }
+
+  return 0
+}
+
+function parseDueTime(value: string) {
   if (!value) {
-    return { label: "Срок не указан", urgent: false }
+    return Number.POSITIVE_INFINITY
+  }
+  const time = new Date(value).getTime()
+  return Number.isNaN(time) ? Number.POSITIVE_INFINITY : time
+}
+
+type DueStatus = {
+  /** Short label for the top pill, e.g. "Просрочено · 31.05 14:00". */
+  pillLabel: string
+  level: DueLevel
+}
+
+function getDueStatus(value: string): DueStatus {
+  if (!value) {
+    return { pillLabel: "Срок не указан", level: "none" }
   }
 
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
-    return { label: value, urgent: false }
+    return { pillLabel: value, level: "none" }
   }
 
   const now = new Date()
-  const isOverdue = date.getTime() < now.getTime()
-  return {
-    label: `${isOverdue ? "Просрочено" : "Срок"}: ${formatDateTime(value)}`,
-    urgent: isOverdue,
+  const formatted = formatDateTime(value)
+  if (date.getTime() < now.getTime()) {
+    return { pillLabel: `Просрочено · ${formatted}`, level: "overdue" }
   }
+
+  const isSameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  if (isSameDay) {
+    return { pillLabel: `Сегодня · ${formatted}`, level: "today" }
+  }
+
+  return { pillLabel: `Срок · ${formatted}`, level: "soon" }
 }
 
 function formatDateTime(value: string) {

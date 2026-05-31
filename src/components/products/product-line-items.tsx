@@ -1,6 +1,6 @@
 "use client"
 
-import { MinusIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import { AlertTriangleIcon, MinusIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import type { BouquetTemplate, Product } from "@/lib/db"
 import { calculateLineTotal, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
 import { cn, formatMoney } from "@/lib/utils"
@@ -113,6 +113,21 @@ export function ProductLineItems({
               if (group.type === "bouquet") {
                 const bouquetTotal = group.items.reduce((sum, item) => sum + calculateProductLineTotal(item).total, 0)
                 const bouquetPrice = group.items.reduce((sum, item) => sum + item.price, 0)
+                // Aggregate required qty per component code within the bouquet, then
+                // compare to the on-hand stock to flag components short on stock.
+                const requiredByCode = new Map<string, number>()
+                for (const item of group.items) {
+                  const qty = Number.isFinite(item.qty) ? item.qty : 0
+                  requiredByCode.set(item.productCode, (requiredByCode.get(item.productCode) ?? 0) + qty)
+                }
+                const shortfallByCode = new Map<string, number>()
+                for (const [code, requiredQty] of requiredByCode) {
+                  const shortfall = getShortfall(requiredQty, productByCode.get(code))
+                  if (shortfall > 0) {
+                    shortfallByCode.set(code, shortfall)
+                  }
+                }
+                const bouquetShort = shortfallByCode.size > 0
 
                 return (
                   <TableRow key={group.key}>
@@ -128,6 +143,9 @@ export function ProductLineItems({
                               <div className="truncate font-medium">
                                 {group.bouquetName || "Букет"}
                               </div>
+                              {bouquetShort && (
+                                <InsufficientStockBadge label="Не хватает компонентов" />
+                              )}
                             </div>
                             <div className="mt-1 text-sm text-muted-foreground">
                               Цена букета {formatMoney(bouquetPrice)}
@@ -141,6 +159,7 @@ export function ProductLineItems({
                         <div className="grid gap-1 rounded-lg bg-muted/50 p-2 text-sm">
                           {group.items.map((item) => {
                             const product = productByCode.get(item.productCode)
+                            const componentShort = shortfallByCode.get(item.productCode) ?? 0
                             return (
                               <div key={getLineKey(item)} className="flex items-center justify-between gap-3">
                                 <span className="flex min-w-0 items-center gap-2">
@@ -150,6 +169,9 @@ export function ProductLineItems({
                                     size="xs"
                                   />
                                   <span className="min-w-0 truncate">{item.name}</span>
+                                  {componentShort > 0 && (
+                                    <InsufficientStockBadge label={`Не хватает: ${formatNumber(componentShort)}`} />
+                                  )}
                                 </span>
                                 <span className="shrink-0 text-muted-foreground">
                                   {formatNumber(item.qty)} шт
@@ -180,6 +202,7 @@ export function ProductLineItems({
 
               const item = group.item
               const product = productByCode.get(item.productCode)
+              const shortfall = getShortfall(item.qty, product)
               const qtyInvalid = item.qty < 1 || !Number.isInteger(item.qty)
               const priceInvalid = item.price < 0
               const discountType = normalizeDiscountType(item.discountType)
@@ -209,6 +232,11 @@ export function ProductLineItems({
                         {product && (
                           <div className="mt-1 text-xs text-muted-foreground">
                             Остаток {formatNumber(product.stock)}
+                          </div>
+                        )}
+                        {shortfall > 0 && (
+                          <div className="mt-1.5">
+                            <InsufficientStockBadge label={`Не хватает: ${formatNumber(shortfall)}`} />
                           </div>
                         )}
                       </div>
@@ -496,4 +524,28 @@ function createBouquetGroupId(bouquetId: number) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value)
+}
+
+// Shortfall = requested qty above what is on hand. Returns 0 when there's no
+// product data (we never warn on missing stock info) or stock is sufficient.
+function getShortfall(requestedQty: number, product: Product | undefined) {
+  if (!product) {
+    return 0
+  }
+
+  const qty = Number.isFinite(requestedQty) ? requestedQty : 0
+  const stock = Number.isFinite(product.stock) ? product.stock : 0
+  return Math.max(0, qty - stock)
+}
+
+function InsufficientStockBadge({ label }: { label: string }) {
+  return (
+    <Badge
+      variant="outline"
+      className="gap-1 border-amber-200 bg-amber-50 text-amber-800"
+    >
+      <AlertTriangleIcon className="size-3" />
+      {label}
+    </Badge>
+  )
 }

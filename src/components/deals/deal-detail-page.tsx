@@ -6,7 +6,10 @@ import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import {
   AlertTriangleIcon,
+  ArrowRightIcon,
   CheckCircle2Icon,
+  CheckIcon,
+  ChevronDownIcon,
   ExternalLinkIcon,
   PlusIcon,
   ReceiptTextIcon,
@@ -58,9 +61,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 type SaveStatus = "saved" | "saving" | "error"
 type DealTab = "overview" | "composition" | "payment" | "bouquets"
@@ -322,6 +334,30 @@ export function DealDetailPage({
     Boolean(selectedCustomer?.defaultDiscountPercent) &&
     draft.dealDiscountType === "percent" &&
     normalizedPrice(draft.dealDiscountValue) === selectedCustomer?.defaultDiscountPercent
+
+  // Reasons the primary actions are unavailable — surfaced as tooltips in the sticky header.
+  const paymentDisabledReason = !openShift
+    ? "Откройте смену в кассе, чтобы принять оплату"
+    : balance <= 0
+      ? "Сделка уже полностью оплачена"
+      : hasPendingSaves
+        ? "Дождитесь сохранения изменений"
+        : null
+  const createOrderDisabledReason = !hasItems
+    ? "Добавьте товары, чтобы создать заказ"
+    : activeDealOrder
+      ? "По сделке уже есть активный заказ"
+      : hasPendingSaves
+        ? "Дождитесь сохранения изменений"
+        : null
+  const orderButtonLabel = latestDealOrder && !activeDealOrder ? "Создать новый заказ" : "Создать заказ"
+
+  const currentStageIndex = stages.findIndex((stage) => String(stage.id) === draft.stageId)
+  const nextStage = currentStageIndex >= 0 ? stages[currentStageIndex + 1] ?? null : null
+
+  function advanceStage(stageId: number) {
+    updateDraftField("stageId", String(stageId), { immediate: true })
+  }
 
   function updateDraftField<K extends keyof DealDraft>(
     key: K,
@@ -743,7 +779,7 @@ export function DealDetailPage({
         </section>
 
         <aside className="flex min-w-0 flex-col gap-4 overflow-visible xl:min-h-0 xl:overflow-hidden xl:pr-2">
-          <div className="overflow-visible rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="sticky top-0 z-20 grid gap-3 overflow-visible rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-xs text-muted-foreground">{deal.number || `Сделка #${deal.id}`}</div>
@@ -752,6 +788,42 @@ export function DealDetailPage({
                 </div>
               </div>
               <SaveIndicator status={mergeStatus(fieldSaveStatus, itemSaveStatus)} error={saveError} />
+            </div>
+
+            <StageStepper
+              stages={stages}
+              currentStageId={draft.stageId}
+              nextStage={nextStage}
+              disabled={actionPending}
+              onSelectStage={advanceStage}
+            />
+
+            <div className="flex flex-wrap items-center gap-2">
+              <ActionButton
+                icon={<ReceiptTextIcon data-icon="inline-start" />}
+                label="Принять оплату"
+                disabledReason={paymentDisabledReason}
+                disabled={actionPending || hasPendingSaves || balance <= 0 || !openShift}
+                onClick={openPaymentDialog}
+              />
+              <ActionButton
+                icon={<ShoppingBagIcon data-icon="inline-start" />}
+                label={orderButtonLabel}
+                variant="outline"
+                disabledReason={createOrderDisabledReason}
+                disabled={actionPending || hasPendingSaves || !hasItems || Boolean(activeDealOrder)}
+                onClick={openCreateOrderDialog}
+              />
+              {balance > 0 ? (
+                <Badge variant="outline" className="ml-auto">
+                  Остаток {formatMoney(balance)}
+                </Badge>
+              ) : (
+                <Badge variant="secondary" className="ml-auto">
+                  <CheckCircle2Icon data-icon="inline-start" />
+                  Оплачено
+                </Badge>
+              )}
             </div>
           </div>
 
@@ -1872,6 +1944,138 @@ export function DealDetailPage({
       </Dialog>
     </div>
   )
+}
+
+// Horizontal pipeline progress with a one-tap "next stage" affordance and a full stage picker.
+function StageStepper({
+  stages,
+  currentStageId,
+  nextStage,
+  disabled,
+  onSelectStage,
+}: {
+  stages: DealStage[]
+  currentStageId: string
+  nextStage: DealStage | null
+  disabled: boolean
+  onSelectStage: (stageId: number) => void
+}) {
+  if (stages.length === 0) {
+    return null
+  }
+
+  const currentIndex = stages.findIndex((stage) => String(stage.id) === currentStageId)
+
+  return (
+    <div className="grid gap-2">
+      <div className="flex items-center gap-1 overflow-x-auto pb-1">
+        {stages.map((stage, index) => {
+          const isCurrent = index === currentIndex
+          const isDone = currentIndex >= 0 && index < currentIndex
+          return (
+            <button
+              key={stage.id}
+              type="button"
+              disabled={disabled || isCurrent}
+              onClick={() => onSelectStage(stage.id)}
+              title={stage.name}
+              aria-current={isCurrent ? "step" : undefined}
+              className={cn(
+                "flex h-7 min-w-0 shrink-0 items-center gap-1 rounded-full border px-2.5 text-xs font-medium transition-colors disabled:cursor-default",
+                isCurrent
+                  ? "border-zinc-950 bg-zinc-950 text-white"
+                  : isDone
+                    ? "border-zinc-300 bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
+                    : "border-zinc-200 bg-white text-zinc-500 hover:border-zinc-300 hover:text-zinc-800"
+              )}
+            >
+              {isDone ? <CheckIcon className="size-3" /> : null}
+              <span className="max-w-[8rem] truncate">{stage.name}</span>
+            </button>
+          )
+        })}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {nextStage ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={disabled}
+            onClick={() => onSelectStage(nextStage.id)}
+          >
+            <ArrowRightIcon data-icon="inline-start" />
+            В этап «{nextStage.name}»
+          </Button>
+        ) : null}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={<Button type="button" size="sm" variant="outline" disabled={disabled} />}
+          >
+            Сменить этап
+            <ChevronDownIcon data-icon="inline-end" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuLabel>Перевести сделку в…</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {stages.map((stage) => {
+              const isCurrent = String(stage.id) === currentStageId
+              return (
+                <DropdownMenuItem
+                  key={stage.id}
+                  disabled={isCurrent}
+                  onClick={() => onSelectStage(stage.id)}
+                >
+                  {isCurrent ? <CheckIcon /> : <span className="size-4" />}
+                  {stage.name}
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
+  )
+}
+
+// A primary action button that, when disabled, explains why via a tooltip on a wrapper.
+function ActionButton({
+  icon,
+  label,
+  disabled,
+  disabledReason,
+  variant = "default",
+  onClick,
+}: {
+  icon: React.ReactNode
+  label: string
+  disabled: boolean
+  disabledReason: string | null
+  variant?: "default" | "outline"
+  onClick: () => void
+}) {
+  const button = (
+    <Button type="button" variant={variant} className="h-10" disabled={disabled} onClick={onClick}>
+      {icon}
+      {label}
+    </Button>
+  )
+
+  if (disabled && disabledReason) {
+    // base-ui tooltips don't fire on a disabled button, so anchor on a focusable wrapper.
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={<span tabIndex={0} className="inline-flex cursor-help rounded-lg" />}
+        >
+          {button}
+        </TooltipTrigger>
+        <TooltipContent>{disabledReason}</TooltipContent>
+      </Tooltip>
+    )
+  }
+
+  return button
 }
 
 function SaveIndicator({ status, error }: { status: SaveStatus; error: string }) {

@@ -28,7 +28,7 @@ export default async function Page() {
       canAccessCash={canAccessCash}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
     >
-      <OrdersPage orders={data.orders} />
+      <OrdersPage orders={data.orders} hasOpenShift={Boolean(data.stats.openShift)} />
     </CrmShell>
   )
 }

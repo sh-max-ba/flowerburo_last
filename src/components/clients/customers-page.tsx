@@ -1,15 +1,26 @@
 "use client"
 
 import type React from "react"
-import { useState, useTransition } from "react"
+import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { AlertTriangleIcon, ExternalLinkIcon, PlusIcon, SearchIcon } from "lucide-react"
+import {
+  AlertTriangleIcon,
+  ArrowDownIcon,
+  ArrowUpDownIcon,
+  ExternalLinkIcon,
+  AtSignIcon,
+  PhoneIcon,
+  PlusIcon,
+  SearchIcon,
+  XIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 import { createCustomerAction } from "@/app/actions"
 import type { Customer } from "@/lib/crm"
 import { sourceLabel, sourceOptions } from "@/lib/labels"
-import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -20,7 +31,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import { Field, FieldContent, FieldLabel } from "@/components/ui/field"
+import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -32,8 +43,21 @@ import {
 } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 type ActionResult = Awaited<ReturnType<typeof createCustomerAction>>
+
+const LIST_LIMIT = 200
+const NO_SOURCE = "__all__"
+
+type SortKey = "recent" | "name" | "activity" | "discount"
+
+const sortOptions: Array<{ value: SortKey; label: string }> = [
+  { value: "recent", label: "Сначала новые" },
+  { value: "name", label: "По имени" },
+  { value: "activity", label: "По активности" },
+  { value: "discount", label: "По скидке" },
+]
 
 export function CustomersPage({
   customers,
@@ -45,6 +69,76 @@ export function CustomersPage({
   const router = useRouter()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [pending, startTransition] = useTransition()
+
+  // Search is server-driven (the page reads ?search=). We mirror it locally for the
+  // debounced auto-submit + clear affordance.
+  const [searchInput, setSearchInput] = useState(search)
+  const [searchPending, startSearchTransition] = useTransition()
+  const initialSearch = useRef(search)
+
+  // Filter/sort run fully client-side over the already-fetched rows.
+  const [sourceFilter, setSourceFilter] = useState<string>(NO_SOURCE)
+  const [sortKey, setSortKey] = useState<SortKey>("recent")
+
+  // Keep the input in sync if the server search changes (e.g. browser navigation).
+  useEffect(() => {
+    setSearchInput(search)
+    initialSearch.current = search
+  }, [search])
+
+  // Debounced auto-submit: push ?search= once the user pauses typing.
+  useEffect(() => {
+    const trimmed = searchInput.trim()
+    if (trimmed === initialSearch.current.trim()) {
+      return
+    }
+    const handle = setTimeout(() => {
+      startSearchTransition(() => {
+        router.push(trimmed ? `/clients?search=${encodeURIComponent(trimmed)}` : "/clients")
+      })
+    }, 300)
+    return () => clearTimeout(handle)
+  }, [searchInput, router])
+
+  const visibleCustomers = useMemo(() => {
+    const filtered =
+      sourceFilter === NO_SOURCE
+        ? customers
+        : customers.filter((customer) => customer.source === sourceFilter)
+
+    const sorted = [...filtered]
+    switch (sortKey) {
+      case "name":
+        sorted.sort((a, b) => a.name.localeCompare(b.name, "ru"))
+        break
+      case "activity":
+        sorted.sort((a, b) => activityScore(b) - activityScore(a))
+        break
+      case "discount":
+        sorted.sort((a, b) => b.defaultDiscountPercent - a.defaultDiscountPercent)
+        break
+      case "recent":
+      default:
+        // Already created_at DESC from the server.
+        break
+    }
+    return sorted
+  }, [customers, sourceFilter, sortKey])
+
+  const isCapped = customers.length >= LIST_LIMIT
+  const isFiltered = sourceFilter !== NO_SOURCE
+  const countLabel = search
+    ? `найдено ${visibleCustomers.length}`
+    : isCapped
+      ? `показано ${visibleCustomers.length} из ${LIST_LIMIT}+`
+      : `${visibleCustomers.length} в списке`
+
+  function clearSearch() {
+    setSearchInput("")
+    startSearchTransition(() => {
+      router.push("/clients")
+    })
+  }
 
   function submitCustomer(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -67,80 +161,134 @@ export function CustomersPage({
 
   return (
     <>
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <form action="/clients" className="relative max-w-xl flex-1">
-          <SearchIcon className="pointer-events-none absolute left-3 top-3 size-4 text-muted-foreground" />
-          <Input name="search" defaultValue={search} placeholder="Поиск по имени или телефону" className="h-10 pl-9" />
-        </form>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative max-w-md flex-1">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              name="search"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Поиск по имени или телефону"
+              className="h-10 pl-9 pr-9"
+              aria-label="Поиск клиентов"
+            />
+            {searchInput ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={clearSearch}
+                className="absolute right-1 top-1/2 size-7 -translate-y-1/2 text-muted-foreground"
+              >
+                <XIcon className="size-4" />
+                <span className="sr-only">Очистить поиск</span>
+              </Button>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            <Select value={sourceFilter} onValueChange={(value) => setSourceFilter(value ?? NO_SOURCE)}>
+              <SelectTrigger className="h-10 w-[150px]" aria-label="Фильтр по источнику">
+                <SelectValue placeholder="Источник" />
+              </SelectTrigger>
+              <SelectContent align="start">
+                <SelectGroup>
+                  <SelectItem value={NO_SOURCE}>Все источники</SelectItem>
+                  {sourceOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select value={sortKey} onValueChange={(value) => setSortKey((value ?? "recent") as SortKey)}>
+              <SelectTrigger className="h-10 w-[160px]" aria-label="Сортировка">
+                <SelectValue placeholder="Сортировка" />
+              </SelectTrigger>
+              <SelectContent align="start">
+                <SelectGroup>
+                  {sortOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">{customers.length} в списке</Badge>
-          <Button className="h-10 bg-zinc-950 text-white hover:bg-zinc-800" onClick={() => setDialogOpen(true)}>
+          <Badge variant={searchPending ? "secondary" : "outline"}>
+            {searchPending ? "Поиск…" : countLabel}
+          </Badge>
+          <Button className="h-10" onClick={() => setDialogOpen(true)}>
             <PlusIcon data-icon="inline-start" />
             Новый клиент
           </Button>
         </div>
       </div>
 
+      {isCapped && !search ? (
+        <p className="text-xs text-muted-foreground">
+          Показаны первые {LIST_LIMIT} клиентов. Чтобы найти остальных, уточните поиск по имени или телефону.
+        </p>
+      ) : null}
+
       <Card className="rounded-2xl border-zinc-200 bg-white">
-        <CardContent>
-          {customers.length ? (
-            <div className="overflow-x-auto">
-              <Table className="min-w-[900px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Имя</TableHead>
-                    <TableHead>Телефон</TableHead>
-                    <TableHead>Скидка</TableHead>
-                    <TableHead>Активность</TableHead>
-                    <TableHead>Источник</TableHead>
-                    <TableHead>Комментарий</TableHead>
-                    <TableHead>Создан</TableHead>
-                    <TableHead className="text-right">Действие</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {customers.map((customer) => (
-                    <TableRow key={customer.id}>
-                      <TableCell className="font-medium text-zinc-950">{customer.name}</TableCell>
-                      <TableCell>
-                        {customer.phone ? (
-                          customer.phone
-                        ) : (
-                          <Badge className="border-amber-300 bg-amber-100 text-amber-900">
-                            <AlertTriangleIcon />
-                            Нет телефона
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <span className="font-semibold">{customer.defaultDiscountPercent}%</span>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1.5">
-                          <Badge variant="secondary">{customer.dealsCount ?? 0} сделок</Badge>
-                          <Badge variant="outline">{customer.ordersCount ?? 0} заказов</Badge>
-                          <Badge variant="outline">{customer.salesCount ?? 0} продаж</Badge>
-                        </div>
-                      </TableCell>
-                      <TableCell>{sourceLabel(customer.source)}</TableCell>
-                      <TableCell className="max-w-72 truncate">{customer.comment || "-"}</TableCell>
-                      <TableCell>{formatDate(customer.createdAt)}</TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="outline" size="sm" render={<Link href={`/clients/${customer.id}`} />}>
-                          <ExternalLinkIcon data-icon="inline-start" />
-                          Открыть
-                        </Button>
-                      </TableCell>
+        <CardContent className="p-0">
+          {visibleCustomers.length ? (
+            <>
+              {/* Desktop / tablet wide: table */}
+              <div className="hidden overflow-x-auto md:block">
+                <Table className="min-w-[820px]">
+                  <TableHeader>
+                    <TableRow>
+                      <SortableHead label="Имя" active={sortKey === "name"} onClick={() => setSortKey("name")} />
+                      <TableHead>Телефон</TableHead>
+                      <SortableHead
+                        label="Скидка"
+                        active={sortKey === "discount"}
+                        onClick={() => setSortKey("discount")}
+                      />
+                      <SortableHead
+                        label="Активность"
+                        active={sortKey === "activity"}
+                        onClick={() => setSortKey("activity")}
+                      />
+                      <TableHead>Источник</TableHead>
+                      <SortableHead
+                        label="Создан"
+                        active={sortKey === "recent"}
+                        onClick={() => setSortKey("recent")}
+                      />
+                      <TableHead className="text-right">Связь</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                  </TableHeader>
+                  <TableBody>
+                    {visibleCustomers.map((customer) => (
+                      <CustomerRow key={customer.id} customer={customer} router={router} />
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Narrow: card list */}
+              <div className="flex flex-col divide-y divide-zinc-200 md:hidden">
+                {visibleCustomers.map((customer) => (
+                  <CustomerCardRow key={customer.id} customer={customer} />
+                ))}
+              </div>
+            </>
           ) : (
             <Empty className="min-h-56">
               <EmptyHeader>
                 <EmptyTitle>Клиенты не найдены</EmptyTitle>
-                <EmptyDescription>Создайте клиента или измените поисковый запрос.</EmptyDescription>
+                <EmptyDescription>
+                  {search || isFiltered
+                    ? "Измените поисковый запрос или фильтр."
+                    : "Создайте первого клиента, чтобы он появился здесь."}
+                </EmptyDescription>
               </EmptyHeader>
             </Empty>
           )}
@@ -158,7 +306,7 @@ export function CustomersPage({
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
                 Отмена
               </Button>
-              <Button type="submit" disabled={pending} className="bg-zinc-950 text-white hover:bg-zinc-800">
+              <Button type="submit" disabled={pending}>
                 Создать
               </Button>
             </DialogFooter>
@@ -166,6 +314,200 @@ export function CustomersPage({
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+function CustomerRow({
+  customer,
+  router,
+}: {
+  customer: Customer
+  router: ReturnType<typeof useRouter>
+}) {
+  const href = `/clients/${customer.id}`
+  const telHref = telLink(customer.phone)
+  const igHref = instagramLink(customer.instagram)
+
+  function navigate() {
+    router.push(href)
+  }
+
+  return (
+    <TableRow
+      className="cursor-pointer"
+      role="link"
+      tabIndex={0}
+      onClick={navigate}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault()
+          navigate()
+        }
+      }}
+    >
+      <TableCell className="font-medium text-zinc-950">
+        <Link
+          href={href}
+          className="hover:underline"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {customer.name}
+        </Link>
+      </TableCell>
+      <TableCell onClick={(event) => event.stopPropagation()}>
+        {customer.phone ? (
+          telHref ? (
+            <a href={telHref} className="font-medium text-zinc-950 hover:underline">
+              {customer.phone}
+            </a>
+          ) : (
+            customer.phone
+          )
+        ) : (
+          <Badge variant="outline" className="text-muted-foreground">
+            <AlertTriangleIcon />
+            Нет телефона
+          </Badge>
+        )}
+      </TableCell>
+      <TableCell>
+        {customer.defaultDiscountPercent > 0 ? (
+          <Badge variant="secondary">{customer.defaultDiscountPercent}%</Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell>
+        <div className="flex flex-wrap gap-1.5">
+          <Badge variant="outline">{pluralize(customer.dealsCount ?? 0, dealForms)}</Badge>
+          <Badge variant="outline">{pluralize(customer.ordersCount ?? 0, orderForms)}</Badge>
+          <Badge variant="outline">{pluralize(customer.salesCount ?? 0, saleForms)}</Badge>
+        </div>
+      </TableCell>
+      <TableCell>{sourceLabel(customer.source)}</TableCell>
+      <TableCell>{dateShort(customer.createdAt)}</TableCell>
+      <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-end gap-1">
+          {telHref ? (
+            <IconLink href={telHref} label="Позвонить">
+              <PhoneIcon className="size-4" />
+            </IconLink>
+          ) : null}
+          {igHref ? (
+            <IconLink href={igHref} label="Открыть Instagram" external>
+              <AtSignIcon className="size-4" />
+            </IconLink>
+          ) : null}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Link
+                  href={href}
+                  className={cn(buttonVariants({ variant: "outline", size: "icon" }), "size-8")}
+                  onClick={(event) => event.stopPropagation()}
+                />
+              }
+            >
+              <ExternalLinkIcon className="size-4" />
+              <span className="sr-only">Открыть карточку</span>
+            </TooltipTrigger>
+            <TooltipContent>Открыть карточку</TooltipContent>
+          </Tooltip>
+        </div>
+      </TableCell>
+    </TableRow>
+  )
+}
+
+function CustomerCardRow({ customer }: { customer: Customer }) {
+  const href = `/clients/${customer.id}`
+  const telHref = telLink(customer.phone)
+
+  return (
+    <div className="flex items-start justify-between gap-3 p-4">
+      <Link href={href} className="min-w-0 flex-1">
+        <div className="truncate font-medium text-zinc-950">{customer.name}</div>
+        <div className="mt-0.5 truncate text-sm text-muted-foreground">
+          {customer.phone || "Телефон не указан"}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {customer.defaultDiscountPercent > 0 ? (
+            <Badge variant="secondary">{customer.defaultDiscountPercent}%</Badge>
+          ) : null}
+          <Badge variant="outline">{pluralize(customer.dealsCount ?? 0, dealForms)}</Badge>
+          <Badge variant="outline">{pluralize(customer.ordersCount ?? 0, orderForms)}</Badge>
+        </div>
+      </Link>
+      <div className="flex shrink-0 items-center gap-1">
+        {telHref ? (
+          <IconLink href={telHref} label="Позвонить">
+            <PhoneIcon className="size-4" />
+          </IconLink>
+        ) : null}
+        <Button variant="outline" size="icon" className="size-9" render={<Link href={href} />}>
+          <ExternalLinkIcon className="size-4" />
+          <span className="sr-only">Открыть карточку</span>
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function IconLink({
+  href,
+  label,
+  external,
+  children,
+}: {
+  href: string
+  label: string
+  external?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <a
+            href={href}
+            target={external ? "_blank" : undefined}
+            rel={external ? "noopener noreferrer" : undefined}
+            className={cn(buttonVariants({ variant: "outline", size: "icon" }), "size-8")}
+            onClick={(event) => event.stopPropagation()}
+          />
+        }
+      >
+        {children}
+        <span className="sr-only">{label}</span>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function SortableHead({
+  label,
+  active,
+  onClick,
+}: {
+  label: string
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <TableHead>
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "inline-flex items-center gap-1 transition-colors hover:text-zinc-950",
+          active ? "font-semibold text-zinc-950" : "text-muted-foreground"
+        )}
+      >
+        {label}
+        {active ? <ArrowDownIcon className="size-3.5" /> : <ArrowUpDownIcon className="size-3.5 opacity-50" />}
+      </button>
+    </TableHead>
   )
 }
 
@@ -185,13 +527,21 @@ export function CustomerFields({ customer }: { customer?: Customer }) {
         <Field>
           <FieldLabel htmlFor="phone">Телефон</FieldLabel>
           <FieldContent>
-            <Input id="phone" name="phone" defaultValue={customer?.phone ?? ""} />
+            <Input
+              id="phone"
+              name="phone"
+              type="tel"
+              inputMode="tel"
+              placeholder="+7 999 123-45-67"
+              defaultValue={customer?.phone ?? ""}
+            />
+            <FieldDescription>Любой формат — номер нормализуется автоматически.</FieldDescription>
           </FieldContent>
         </Field>
         <Field>
           <FieldLabel htmlFor="instagram">Instagram</FieldLabel>
           <FieldContent>
-            <Input id="instagram" name="instagram" defaultValue={customer?.instagram ?? ""} />
+            <Input id="instagram" name="instagram" placeholder="@username" defaultValue={customer?.instagram ?? ""} />
           </FieldContent>
         </Field>
       </div>
@@ -231,6 +581,7 @@ export function CustomerFields({ customer }: { customer?: Customer }) {
               step="0.01"
               defaultValue={customer?.defaultDiscountPercent ?? 0}
             />
+            <FieldDescription>Допустимо 0–100%.</FieldDescription>
           </FieldContent>
         </Field>
       </div>
@@ -244,14 +595,77 @@ export function CustomerFields({ customer }: { customer?: Customer }) {
   )
 }
 
-function formatDate(value: string) {
-  if (!value) {
-    return "-"
-  }
+function activityScore(customer: Customer) {
+  return (customer.dealsCount ?? 0) + (customer.ordersCount ?? 0) + (customer.salesCount ?? 0)
+}
 
+// --- Shared contact/format helpers (also re-used by the detail card) ---
+
+export function telLink(phone: string | null | undefined) {
+  if (!phone) {
+    return null
+  }
+  const digits = phone.replace(/[^\d+]/g, "")
+  return digits ? `tel:${digits}` : null
+}
+
+export function instagramLink(instagram: string | null | undefined) {
+  const value = (instagram ?? "").trim()
+  if (!value) {
+    return null
+  }
+  if (/^https?:\/\//i.test(value)) {
+    return value
+  }
+  return `https://instagram.com/${value.replace(/^@/, "")}`
+}
+
+type PluralForms = [one: string, few: string, many: string]
+
+const dealForms: PluralForms = ["сделка", "сделки", "сделок"]
+const orderForms: PluralForms = ["заказ", "заказа", "заказов"]
+const saleForms: PluralForms = ["продажа", "продажи", "продаж"]
+
+export function pluralize(count: number, [one, few, many]: PluralForms) {
+  const mod10 = count % 10
+  const mod100 = count % 100
+  let word = many
+  if (mod10 === 1 && mod100 !== 11) {
+    word = one
+  } else if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
+    word = few
+  }
+  return `${count} ${word}`
+}
+
+export function dateShort(value: string) {
+  if (!value) {
+    return "—"
+  }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
   return new Intl.DateTimeFormat("ru-RU", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
-  }).format(new Date(value))
+  }).format(date)
+}
+
+export function dateTime(value: string) {
+  if (!value) {
+    return "—"
+  }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
 }

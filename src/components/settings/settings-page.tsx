@@ -1,15 +1,21 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useEffect, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import {
+  AlertCircleIcon,
   AlertTriangleIcon,
+  CheckCircle2Icon,
   CopyIcon,
+  EyeIcon,
+  EyeOffIcon,
   KeyRoundIcon,
+  MinusCircleIcon,
   PencilIcon,
   PlusIcon,
   UserCheckIcon,
   UserXIcon,
+  XCircleIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import {
@@ -47,9 +53,18 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group"
 import {
   Sheet,
   SheetContent,
@@ -61,6 +76,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 type Result = Awaited<ReturnType<typeof saveSupplierAction>>
 
@@ -325,7 +341,15 @@ function SupplierSheet({
               </Field>
               <Field>
                 <FieldLabel htmlFor="supplier-phone">Телефон</FieldLabel>
-                <Input id="supplier-phone" name="phone" defaultValue={supplier?.phone} disabled={pending} />
+                <Input
+                  id="supplier-phone"
+                  name="phone"
+                  type="tel"
+                  inputMode="tel"
+                  placeholder="+7 (___) ___-__-__"
+                  defaultValue={supplier?.phone}
+                  disabled={pending}
+                />
               </Field>
               <Field>
                 <FieldLabel htmlFor="supplier-comment">Комментарий</FieldLabel>
@@ -356,15 +380,38 @@ function SupplierSheet({
   )
 }
 
+type ApiResultState = {
+  title: string
+  lines: string[]
+  ok: boolean
+  at: string
+} | null
+
 function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
   const router = useRouter()
   const [apiKey, setApiKey] = useState("")
+  const [showApiKey, setShowApiKey] = useState(false)
   const [isEnabled, setIsEnabled] = useState(status.isEnabled)
   const [webhookAuthRequired, setWebhookAuthRequired] = useState(status.webhookAuthRequired)
   const [clearDialogOpen, setClearDialogOpen] = useState(false)
-  const [wazzupApiResult, setWazzupApiResult] = useState<string[]>([])
+  const [apiResult, setApiResult] = useState<ApiResultState>(null)
   const [pending, startTransition] = useTransition()
   const connectionState = getWazzupConnectionState(status)
+
+  // Когда статус пересчитывается с сервера, локальные переключатели снова считаются "сохранёнными".
+  useEffect(() => {
+    setIsEnabled(status.isEnabled)
+    setWebhookAuthRequired(status.webhookAuthRequired)
+  }, [status.isEnabled, status.webhookAuthRequired])
+
+  const isDirty =
+    apiKey.trim().length > 0 || isEnabled !== status.isEnabled || webhookAuthRequired !== status.webhookAuthRequired
+
+  // Причины блокировки кнопок — выводятся в Tooltip над disabled-кнопкой.
+  const apiKeyReason = !status.apiKeyConfigured ? "Сначала сохраните API key" : null
+  const enabledReason = !status.isEnabled ? "Включите интеграцию Wazzup" : null
+  const syncReason = apiKeyReason ?? enabledReason
+  const secureUrlReason = !status.crmKeyConfigured ? "Сначала сгенерируйте CRM key" : null
 
   function copyWebhookUrl() {
     void navigator.clipboard.writeText(status.webhookUrl)
@@ -397,10 +444,20 @@ function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
     })
   }
 
-  function runWazzupApi(action: () => Promise<{ ok: boolean; message: string; messages?: string[] }>) {
+  function runWazzupApi(
+    title: string,
+    action: () => Promise<{ ok: boolean; message: string; messages?: string[] }>
+  ) {
+    // Очищаем предыдущий вывод сразу, чтобы под новым действием не оставался устаревший ответ.
+    setApiResult(null)
     startTransition(async () => {
       const result = await action()
-      setWazzupApiResult(result.messages ?? [result.message])
+      setApiResult({
+        title,
+        lines: result.messages ?? [result.message],
+        ok: result.ok,
+        at: new Date().toISOString(),
+      })
       if (result.ok) {
         toast.success(result.message)
         router.refresh()
@@ -426,442 +483,534 @@ function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <Card className="rounded-2xl border bg-white">
-        <CardHeader>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <CardTitle>Статус подключения</CardTitle>
-              <CardDescription>Без показа полных ключей в интерфейсе</CardDescription>
-            </div>
-            <Badge variant={connectionState.variant}>{connectionState.label}</Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {!status.appUrlConfigured ? (
-            <Alert>
-              <AlertTriangleIcon />
-              <AlertTitle>NEXT_PUBLIC_APP_URL не задан</AlertTitle>
-              <AlertDescription>Укажите NEXT_PUBLIC_APP_URL для корректного webhook URL.</AlertDescription>
-            </Alert>
-          ) : null}
-          <div className="grid gap-3 md:grid-cols-3">
-            <StatusTile label="API key" value={status.apiKeyConfigured ? "Настроен" : "Не настроен"} />
-            <StatusTile label="CRM key" value={status.crmKeyConfigured ? "Настроен" : "Не настроен"} />
-            <StatusTile label="Webhook auth" value={status.webhookAuthRequired ? "Обязателен" : "Гибкий"} />
-            <StatusTile label="Последняя проверка" value={lastCheckLabel(status)} />
-          </div>
-          {status.lastCheckMessage ? (
-            <Alert variant={status.lastCheckStatus === "error" ? "destructive" : "default"}>
-              <AlertTitle>{status.lastCheckStatus === "error" ? "Ошибка проверки" : "Проверка выполнена"}</AlertTitle>
-              <AlertDescription>{status.lastCheckMessage}</AlertDescription>
-            </Alert>
-          ) : null}
-          <WebhookUrlRow label="Public webhook URL" webhookUrl={status.webhookUrl} onCopy={copyWebhookUrl} />
-          <WebhookUrlRow
-            label="Secure webhook URL"
-            webhookUrl={status.secureWebhookUrlMasked}
-            onCopy={copySecureWebhookUrl}
-            copyLabel="Скопировать защищенный URL"
-            disabled={!status.crmKeyConfigured || pending}
-          />
-        </CardContent>
-      </Card>
+      <Tabs defaultValue="connection" className="gap-4">
+        <TabsList className="h-10 w-full justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit">
+          <TabsTrigger value="connection">Подключение</TabsTrigger>
+          <TabsTrigger value="operations">Синхронизация и диагностика</TabsTrigger>
+        </TabsList>
 
-      <Card className="rounded-2xl border bg-white">
-        <CardHeader>
-          <CardTitle>Ключи</CardTitle>
-          <CardDescription>Ключи сохраняются server-side и показываются только в маске</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="flex flex-col gap-4" onSubmit={submitSettings}>
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="wazzup-api-key">Wazzup API key</FieldLabel>
-                <Input
-                  id="wazzup-api-key"
-                  type="password"
-                  value={apiKey}
-                  placeholder={status.apiKeyConfigured ? "Ключ сохранен" : "Вставьте API key"}
-                  autoComplete="off"
-                  onChange={(event) => setApiKey(event.target.value)}
-                  disabled={pending}
-                />
-                <FieldDescription>
-                  Текущий ключ: {status.apiKeyMasked ?? "не настроен"}. Пустое поле не затирает сохраненный ключ.
-                </FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="wazzup-crm-key">CRM key</FieldLabel>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Input
-                    id="wazzup-crm-key"
-                    type="password"
-                    readOnly
-                    value={status.crmKeyMasked ?? ""}
-                    placeholder="CRM key не настроен"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={pending}
-                    onClick={() => run(generateWazzupCrmKeyAction)}
-                  >
-                    <KeyRoundIcon data-icon="inline-start" />
-                    Сгенерировать новый
-                  </Button>
+        <TabsContent value="connection" className="flex flex-col gap-4">
+          <Card className="rounded-2xl border bg-white">
+            <CardHeader>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle>Статус подключения</CardTitle>
+                  <CardDescription>Без показа полных ключей в интерфейсе</CardDescription>
                 </div>
-                <FieldDescription>CRM key проверяется по Authorization Bearer или query key в защищенном webhook URL.</FieldDescription>
-              </Field>
-              <Field orientation="horizontal">
-                <Checkbox
-                  id="wazzup-is-enabled"
-                  checked={isEnabled}
-                  onCheckedChange={(checked) => setIsEnabled(checked === true)}
-                  disabled={pending}
+                <ConnectionBadge state={connectionState} />
+              </div>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              {!status.appUrlConfigured ? (
+                <Alert>
+                  <AlertTriangleIcon />
+                  <AlertTitle>NEXT_PUBLIC_APP_URL не задан</AlertTitle>
+                  <AlertDescription>Укажите NEXT_PUBLIC_APP_URL для корректного webhook URL.</AlertDescription>
+                </Alert>
+              ) : null}
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
+                <StatusTile
+                  label="API key"
+                  value={status.apiKeyConfigured ? "Настроен" : "Не настроен"}
+                  tone={status.apiKeyConfigured ? "positive" : "muted"}
                 />
-                <FieldContent>
-                  <FieldLabel htmlFor="wazzup-is-enabled">Интеграция включена</FieldLabel>
-                  <FieldDescription>Если выключить, реальные webhooks будут сохранены как ignored.</FieldDescription>
-                </FieldContent>
-              </Field>
-              <Field orientation="horizontal">
-                <Checkbox
-                  id="wazzup-webhook-auth-required"
-                  checked={webhookAuthRequired}
-                  onCheckedChange={(checked) => setWebhookAuthRequired(checked === true)}
-                  disabled={pending}
+                <StatusTile
+                  label="CRM key"
+                  value={status.crmKeyConfigured ? "Настроен" : "Не настроен"}
+                  tone={status.crmKeyConfigured ? "positive" : "muted"}
                 />
-                <FieldContent>
-                  <FieldLabel htmlFor="wazzup-webhook-auth-required">Требовать CRM key для webhook</FieldLabel>
-                  <FieldDescription>
-                    Если выключено, сообщения без Authorization принимаются и помечаются предупреждением в диагностике.
-                  </FieldDescription>
-                </FieldContent>
-              </Field>
-            </FieldGroup>
-            <div className="flex flex-wrap gap-2">
-              <Button type="submit" disabled={pending}>
-                Сохранить настройки
-              </Button>
+                <StatusTile
+                  label="Webhook auth"
+                  value={status.webhookAuthRequired ? "Обязателен" : "Гибкий"}
+                  tone={status.webhookAuthRequired ? "positive" : "neutral"}
+                />
+                <StatusTile
+                  label="Последняя проверка"
+                  value={lastCheckLabel(status)}
+                  tone={status.lastCheckStatus === "error" ? "negative" : status.lastCheckAt ? "neutral" : "muted"}
+                />
+              </div>
+              {status.lastCheckMessage ? (
+                <Alert variant={status.lastCheckStatus === "error" ? "destructive" : "default"}>
+                  <AlertTitle>{status.lastCheckStatus === "error" ? "Ошибка проверки" : "Проверка выполнена"}</AlertTitle>
+                  <AlertDescription>{status.lastCheckMessage}</AlertDescription>
+                </Alert>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-2xl border bg-white">
+            <CardHeader>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle>Ключи</CardTitle>
+                  <CardDescription>Ключи сохраняются server-side и показываются только в маске</CardDescription>
+                </div>
+                {isDirty ? (
+                  <Badge variant="outline">
+                    <AlertCircleIcon data-icon="inline-start" />
+                    Несохраненные изменения
+                  </Badge>
+                ) : null}
+              </div>
+            </CardHeader>
+            <CardContent>
+              <form className="flex flex-col gap-4" onSubmit={submitSettings}>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="wazzup-api-key">Wazzup API key</FieldLabel>
+                    <InputGroup>
+                      <InputGroupInput
+                        id="wazzup-api-key"
+                        type={showApiKey ? "text" : "password"}
+                        value={apiKey}
+                        placeholder={status.apiKeyConfigured ? "Ключ сохранен" : "Вставьте API key"}
+                        autoComplete="off"
+                        onChange={(event) => setApiKey(event.target.value)}
+                        disabled={pending}
+                      />
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupButton
+                          size="icon-xs"
+                          aria-label={showApiKey ? "Скрыть ключ" : "Показать ключ"}
+                          aria-pressed={showApiKey}
+                          onClick={() => setShowApiKey((value) => !value)}
+                          disabled={pending}
+                        >
+                          {showApiKey ? <EyeOffIcon /> : <EyeIcon />}
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    </InputGroup>
+                    <FieldDescription>
+                      Текущий ключ: {status.apiKeyMasked ?? "не настроен"}. Пустое поле не затирает сохраненный ключ.
+                    </FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="wazzup-crm-key">CRM key</FieldLabel>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input
+                        id="wazzup-crm-key"
+                        type="password"
+                        readOnly
+                        value={status.crmKeyMasked ?? ""}
+                        placeholder="CRM key не настроен"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={pending}
+                        onClick={() => run(generateWazzupCrmKeyAction)}
+                      >
+                        <KeyRoundIcon data-icon="inline-start" />
+                        Сгенерировать новый
+                      </Button>
+                    </div>
+                    <FieldDescription>CRM key проверяется по Authorization Bearer или query key в защищенном webhook URL.</FieldDescription>
+                  </Field>
+                  <Field orientation="horizontal">
+                    <Checkbox
+                      id="wazzup-is-enabled"
+                      checked={isEnabled}
+                      onCheckedChange={(checked) => setIsEnabled(checked === true)}
+                      disabled={pending}
+                    />
+                    <FieldContent>
+                      <FieldLabel htmlFor="wazzup-is-enabled">Интеграция включена</FieldLabel>
+                      <FieldDescription>Если выключить, реальные webhooks будут сохранены как ignored.</FieldDescription>
+                    </FieldContent>
+                  </Field>
+                  <Field orientation="horizontal">
+                    <Checkbox
+                      id="wazzup-webhook-auth-required"
+                      checked={webhookAuthRequired}
+                      onCheckedChange={(checked) => setWebhookAuthRequired(checked === true)}
+                      disabled={pending}
+                    />
+                    <FieldContent>
+                      <FieldLabel htmlFor="wazzup-webhook-auth-required">Требовать CRM key для webhook</FieldLabel>
+                      <FieldDescription>
+                        Если выключено, сообщения без Authorization принимаются и помечаются предупреждением в диагностике.
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+                </FieldGroup>
+                <div className="flex flex-wrap items-center gap-2">
+                  <GatedButton
+                    type="submit"
+                    disabled={pending || !isDirty}
+                    reason={!isDirty ? "Нет несохраненных изменений" : null}
+                  >
+                    Сохранить настройки
+                  </GatedButton>
+                  <GatedButton
+                    variant="outline"
+                    disabled={pending || !status.apiKeyConfigured}
+                    reason={apiKeyReason}
+                    onClick={() => setClearDialogOpen(true)}
+                  >
+                    Очистить API key
+                  </GatedButton>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-2xl border bg-white">
+            <CardHeader>
+              <CardTitle>Подключение webhook</CardTitle>
+              <CardDescription>Что включить в Wazzup</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <WebhookUrlRow label="Public webhook URL" webhookUrl={status.webhookUrl} onCopy={copyWebhookUrl} />
+              <WebhookUrlRow
+                label="Secure webhook URL"
+                webhookUrl={status.secureWebhookUrlMasked}
+                onCopy={copySecureWebhookUrl}
+                copyLabel="Скопировать защищенный URL"
+                disabled={!status.crmKeyConfigured || pending}
+                reason={secureUrlReason}
+              />
+              <ol className="grid gap-2 text-sm text-muted-foreground">
+                <li>1. В Wazzup откройте Интеграция с CRM / API.</li>
+                <li>2. Укажите защищенный Webhook URL или нажмите “Подключить webhook в Wazzup”.</li>
+                <li>3. Включите подписки: messagesAndStatuses и contactsAndDealsCreation.</li>
+                <li>4. При тестовом POST CRM должна вернуть 200 OK.</li>
+              </ol>
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-2xl border bg-white">
+            <CardHeader>
+              <CardTitle>Проверка</CardTitle>
+              <CardDescription>Быстрые проверки без показа ключей</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" disabled={pending} onClick={() => run(testWazzupApiKeyAction)}>
                 Проверить API key
               </Button>
-              <Button
-                type="button"
+              <Button type="button" variant="outline" disabled={pending} onClick={() => run(testLocalWazzupWebhookAction)}>
+                Проверить webhook endpoint
+              </Button>
+              <GatedButton
                 variant="outline"
                 disabled={pending || !status.apiKeyConfigured}
-                onClick={() => setClearDialogOpen(true)}
+                reason={apiKeyReason}
+                onClick={() => runWazzupApi("Проверка подписок", checkWazzupWebhookSubscriptionsAction)}
               >
-                Очистить API key
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+                Проверить подписки
+              </GatedButton>
+              <GatedButton
+                variant="outline"
+                disabled={pending || !status.apiKeyConfigured}
+                reason={apiKeyReason}
+                onClick={() => runWazzupApi("Подключение webhook в Wazzup", connectWazzupWebhookAction)}
+              >
+                Подключить webhook в Wazzup
+              </GatedButton>
+              <GatedButton
+                variant="outline"
+                disabled={pending || !status.apiKeyConfigured}
+                reason={apiKeyReason}
+                onClick={() => runWazzupApi("Проверка каналов", checkWazzupChannelsAction)}
+              >
+                Проверить каналы
+              </GatedButton>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      <Card className="rounded-2xl border bg-white">
-        <CardHeader>
-          <CardTitle>Подключение webhook</CardTitle>
-          <CardDescription>Что включить в Wazzup</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <WebhookUrlRow label="Public webhook URL" webhookUrl={status.webhookUrl} onCopy={copyWebhookUrl} />
-          <WebhookUrlRow
-            label="Secure webhook URL"
-            webhookUrl={status.secureWebhookUrlMasked}
-            onCopy={copySecureWebhookUrl}
-            copyLabel="Скопировать защищенный URL"
-            disabled={!status.crmKeyConfigured || pending}
-          />
-          <ol className="grid gap-2 text-sm text-muted-foreground">
-            <li>1. В Wazzup откройте Интеграция с CRM / API.</li>
-            <li>2. Укажите защищенный Webhook URL или нажмите “Подключить webhook в Wazzup”.</li>
-            <li>3. Включите подписки: messagesAndStatuses и contactsAndDealsCreation.</li>
-            <li>4. При тестовом POST CRM должна вернуть 200 OK.</li>
-          </ol>
-        </CardContent>
-      </Card>
+        <TabsContent value="operations" className="flex flex-col gap-4">
+          <Card className="rounded-2xl border bg-white">
+            <CardHeader>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle>Пользователи Wazzup</CardTitle>
+                  <CardDescription>
+                    Синхронизируйте пользователей CRM в Wazzup. После этого администратор Wazzup сможет назначить им роли и доступ в личном кабинете Wazzup.
+                  </CardDescription>
+                </div>
+                <GatedButton
+                  variant="outline"
+                  disabled={pending || !status.apiKeyConfigured}
+                  reason={apiKeyReason}
+                  onClick={() => runWazzupApi("Синхронизация пользователей", syncWazzupUsersAction)}
+                >
+                  <UserCheckIcon data-icon="inline-start" />
+                  Синхронизировать пользователей
+                </GatedButton>
+              </div>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <Alert>
+                <AlertTriangleIcon />
+                <AlertTitle>Роли назначаются в Wazzup</AlertTitle>
+                <AlertDescription>
+                  Если iframe пишет “Нет доступа к приложению”, пользователь уже может быть отправлен из CRM, но ему нужно назначить роль в личном кабинете Wazzup.
+                </AlertDescription>
+              </Alert>
+              {status.userSync.length ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Пользователь CRM</TableHead>
+                      <TableHead>Роль CRM</TableHead>
+                      <TableHead>Wazzup ID</TableHead>
+                      <TableHead>Статус</TableHead>
+                      <TableHead>Последний sync</TableHead>
+                      <TableHead>Ошибка</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {status.userSync.map((user) => (
+                      <TableRow key={user.userId}>
+                        <TableCell>
+                          <div className="flex flex-col gap-1">
+                            <span className="font-medium">{user.crmName || user.crmLogin || `User ${user.userId}`}</span>
+                            <span className="text-xs text-muted-foreground">{user.crmLogin || "-"}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>{roleLabels[user.crmRole]}</TableCell>
+                        <TableCell>{user.wazzupUserId || String(user.userId)}</TableCell>
+                        <TableCell>
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <Badge variant={wazzupUserSyncBadgeVariant(user.syncStatus)}>
+                                  {wazzupUserSyncLabel(user.syncStatus)}
+                                </Badge>
+                              }
+                            />
+                            <TooltipContent>{user.syncStatus}</TooltipContent>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>{user.lastSyncedAt ? dateTime(user.lastSyncedAt) : "-"}</TableCell>
+                        <TableCell className="max-w-80 truncate">
+                          {user.lastError || (!user.isActive ? "Пользователь отключен в CRM" : "-")}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <Empty className="min-h-36">
+                  <EmptyHeader>
+                    <EmptyTitle>Пользователей CRM нет</EmptyTitle>
+                    <EmptyDescription>Создайте активного пользователя CRM, чтобы отправить его в Wazzup.</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              )}
+            </CardContent>
+          </Card>
 
-      <Card className="rounded-2xl border bg-white">
-        <CardHeader>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <CardTitle>Пользователи Wazzup</CardTitle>
-              <CardDescription>
-                Синхронизируйте пользователей CRM в Wazzup. После этого администратор Wazzup сможет назначить им роли и доступ в личном кабинете Wazzup.
-              </CardDescription>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending || !status.apiKeyConfigured}
-              onClick={() => runWazzupApi(syncWazzupUsersAction)}
-            >
-              <UserCheckIcon data-icon="inline-start" />
-              Синхронизировать пользователей
+          <Card className="rounded-2xl border bg-white">
+            <CardHeader>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle>Синхронизация CRM</CardTitle>
+                  <CardDescription>Воронки, клиенты и сделки для списка “Сделки” внутри Wazzup iframe</CardDescription>
+                </div>
+                <GatedButton
+                  disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
+                  reason={syncReason}
+                  onClick={() => runWazzupApi("Синхронизация всего", syncWazzupAllAction)}
+                >
+                  <UserCheckIcon data-icon="inline-start" />
+                  Синхронизировать всё
+                </GatedButton>
+              </div>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              {!status.isEnabled || !status.apiKeyConfigured ? (
+                <Alert>
+                  <AlertTriangleIcon />
+                  <AlertTitle>Синхронизация недоступна</AlertTitle>
+                  <AlertDescription>Включите интеграцию Wazzup и сохраните API key, чтобы отправлять данные CRM.</AlertDescription>
+                </Alert>
+              ) : null}
+              {!status.appUrlConfigured ? (
+                <Alert>
+                  <AlertTriangleIcon />
+                  <AlertTitle>NEXT_PUBLIC_APP_URL не задан</AlertTitle>
+                  <AlertDescription>Контакты и сделки будут отправлены с относительными ссылками. Для Wazzup лучше задать публичный URL.</AlertDescription>
+                </Alert>
+              ) : null}
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
+                <StatusTile label="Воронки" value={wazzupSyncValue(status.entitySync.pipelines)} tone={syncTone(status.entitySync.pipelines)} />
+                <StatusTile label="Этапы" value={wazzupSyncValue(status.entitySync.stages)} tone={syncTone(status.entitySync.stages)} />
+                <StatusTile label="Клиенты" value={wazzupSyncValue(status.entitySync.contacts)} tone={syncTone(status.entitySync.contacts)} />
+                <StatusTile label="Сделки" value={wazzupSyncValue(status.entitySync.deals)} tone={syncTone(status.entitySync.deals)} />
+                <StatusTile
+                  label="Ошибки клиентов"
+                  value={String(status.entitySync.contacts.failed)}
+                  tone={status.entitySync.contacts.failed ? "negative" : "neutral"}
+                />
+                <StatusTile
+                  label="Ошибки сделок"
+                  value={String(status.entitySync.deals.failed)}
+                  tone={status.entitySync.deals.failed ? "negative" : "neutral"}
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <GatedButton
+                  variant="outline"
+                  disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
+                  reason={syncReason}
+                  onClick={() => runWazzupApi("Синхронизация воронок", syncWazzupPipelinesAction)}
+                >
+                  Синхронизировать воронки
+                </GatedButton>
+                <GatedButton
+                  variant="outline"
+                  disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
+                  reason={syncReason}
+                  onClick={() => runWazzupApi("Синхронизация клиентов", syncWazzupContactsAction)}
+                >
+                  Синхронизировать клиентов
+                </GatedButton>
+                <GatedButton
+                  variant="outline"
+                  disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
+                  reason={syncReason}
+                  onClick={() => runWazzupApi("Синхронизация сделок", syncWazzupDealsAction)}
+                >
+                  Синхронизировать сделки
+                </GatedButton>
+              </div>
+              {status.entitySync.pipelines.lastError ||
+              status.entitySync.contacts.lastError ||
+              status.entitySync.deals.lastError ? (
+                <Alert variant="destructive">
+                  <AlertTitle>Последняя ошибка синхронизации</AlertTitle>
+                  <AlertDescription>
+                    {status.entitySync.deals.lastError ||
+                      status.entitySync.contacts.lastError ||
+                      status.entitySync.pipelines.lastError}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-2xl border bg-white">
+            <CardHeader>
+              <CardTitle>Диагностика</CardTitle>
+              <CardDescription>Последние Wazzup события без raw payload и секретов</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
+                <StatusTile label="Webhook события" value={String(status.diagnostics.webhookEventsCount)} />
+                <StatusTile label="Сообщения Wazzup" value={String(status.diagnostics.wazzupMessagesCount)} />
+                <StatusTile
+                  label="Ошибки авторизации"
+                  value={String(status.diagnostics.failedAuthEventsCount)}
+                  tone={status.diagnostics.failedAuthEventsCount ? "negative" : "neutral"}
+                />
+                <StatusTile label="Последний тип события" value={wazzupEventTypeLabel(status.diagnostics.latestEventType)} />
+                <StatusTile
+                  label="Последнее сообщение"
+                  value={
+                    status.diagnostics.latestMessage
+                      ? `${status.diagnostics.latestMessage.chatType} · ${status.diagnostics.latestMessage.chatId}`
+                      : "Нет сообщений"
+                  }
+                />
+              </div>
+              {status.diagnostics.onlyTestWebhooks ? (
+                <Alert>
+                  <AlertTriangleIcon />
+                  <AlertTitle>Получены только test webhooks</AlertTitle>
+                  <AlertDescription>Реальных сообщений или createDeal еще не было.</AlertDescription>
+                </Alert>
+              ) : null}
+              {status.diagnostics.latestError.includes("unauthorized webhook:") ? (
+                <Alert variant="destructive">
+                  <AlertTriangleIcon />
+                  <AlertTitle>Webhook отклонен по CRM key</AlertTitle>
+                  <AlertDescription>
+                    Wazzup отправил webhook без ожидаемого CRM key. Используйте защищенный webhook URL с key или выключите обязательную проверку.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {status.diagnostics.latestMessage ? (
+                <div className="text-sm text-muted-foreground">
+                  Последнее сообщение Wazzup: {dateTime(status.diagnostics.latestMessage.createdAt)}
+                </div>
+              ) : null}
+              {status.diagnostics.recentWebhookEvents.length ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Тип события</TableHead>
+                      <TableHead>Статус</TableHead>
+                      <TableHead>Создано</TableHead>
+                      <TableHead>Ошибка</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {status.diagnostics.recentWebhookEvents.map((event, index) => (
+                      <TableRow key={`${event.createdAt}-${event.eventType}-${index}`}>
+                        <TableCell>
+                          <Tooltip>
+                            <TooltipTrigger render={<span>{wazzupEventTypeLabel(event.eventType)}</span>} />
+                            <TooltipContent>{event.eventType || "unknown"}</TooltipContent>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <Badge variant={event.status === "failed" ? "destructive" : "secondary"}>
+                                  {wazzupEventStatusLabel(event.status)}
+                                </Badge>
+                              }
+                            />
+                            <TooltipContent>{event.status || "unknown"}</TooltipContent>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>{dateTime(event.createdAt)}</TableCell>
+                        <TableCell className="max-w-80 truncate">{event.error || "-"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <Empty className="min-h-36">
+                  <EmptyHeader>
+                    <EmptyTitle>Webhook events еще нет</EmptyTitle>
+                    <EmptyDescription>После теста или реального события Wazzup они появятся здесь.</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      <Dialog
+        open={Boolean(apiResult)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setApiResult(null)
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{apiResult?.title ?? "Ответ Wazzup API"}</DialogTitle>
+            <DialogDescription>
+              {apiResult ? `${apiResult.ok ? "Успешно" : "Ошибка"} · ${dateTime(apiResult.at)}` : null}
+            </DialogDescription>
+          </DialogHeader>
+          <pre className="max-h-[60vh] overflow-auto rounded-lg border bg-muted/40 p-3 text-xs whitespace-pre-wrap">
+            {apiResult?.lines.join("\n")}
+          </pre>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setApiResult(null)}>
+              Закрыть
             </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <Alert>
-            <AlertTriangleIcon />
-            <AlertTitle>Роли назначаются в Wazzup</AlertTitle>
-            <AlertDescription>
-              Если iframe пишет “Нет доступа к приложению”, пользователь уже может быть отправлен из CRM, но ему нужно назначить роль в личном кабинете Wazzup.
-            </AlertDescription>
-          </Alert>
-          {status.userSync.length ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Пользователь CRM</TableHead>
-                  <TableHead>Роль CRM</TableHead>
-                  <TableHead>Wazzup ID</TableHead>
-                  <TableHead>Статус</TableHead>
-                  <TableHead>Последний sync</TableHead>
-                  <TableHead>Ошибка</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {status.userSync.map((user) => (
-                  <TableRow key={user.userId}>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <span className="font-medium">{user.crmName || user.crmLogin || `User ${user.userId}`}</span>
-                        <span className="text-xs text-muted-foreground">{user.crmLogin || "-"}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>{roleLabels[user.crmRole]}</TableCell>
-                    <TableCell>{user.wazzupUserId || String(user.userId)}</TableCell>
-                    <TableCell>
-                      <Badge variant={wazzupUserSyncBadgeVariant(user.syncStatus)}>
-                        {wazzupUserSyncLabel(user.syncStatus)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{user.lastSyncedAt ? dateTime(user.lastSyncedAt) : "-"}</TableCell>
-                    <TableCell className="max-w-80 truncate">
-                      {user.lastError || (!user.isActive ? "Пользователь отключен в CRM" : "-")}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : (
-            <Empty className="min-h-36">
-              <EmptyHeader>
-                <EmptyTitle>Пользователей CRM нет</EmptyTitle>
-                <EmptyDescription>Создайте активного пользователя CRM, чтобы отправить его в Wazzup.</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-2xl border bg-white">
-        <CardHeader>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <CardTitle>Синхронизация CRM</CardTitle>
-              <CardDescription>Воронки, клиенты и сделки для списка “Сделки” внутри Wazzup iframe</CardDescription>
-            </div>
-            <Button
-              type="button"
-              disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
-              onClick={() => runWazzupApi(syncWazzupAllAction)}
-            >
-              <UserCheckIcon data-icon="inline-start" />
-              Синхронизировать всё
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {!status.isEnabled || !status.apiKeyConfigured ? (
-            <Alert>
-              <AlertTriangleIcon />
-              <AlertTitle>Синхронизация недоступна</AlertTitle>
-              <AlertDescription>Включите интеграцию Wazzup и сохраните API key, чтобы отправлять данные CRM.</AlertDescription>
-            </Alert>
-          ) : null}
-          {!status.appUrlConfigured ? (
-            <Alert>
-              <AlertTriangleIcon />
-              <AlertTitle>NEXT_PUBLIC_APP_URL не задан</AlertTitle>
-              <AlertDescription>Контакты и сделки будут отправлены с относительными ссылками. Для Wazzup лучше задать публичный URL.</AlertDescription>
-            </Alert>
-          ) : null}
-          <div className="grid gap-3 md:grid-cols-3">
-            <StatusTile label="Воронки" value={wazzupSyncValue(status.entitySync.pipelines)} />
-            <StatusTile label="Этапы" value={wazzupSyncValue(status.entitySync.stages)} />
-            <StatusTile label="Клиенты" value={wazzupSyncValue(status.entitySync.contacts)} />
-            <StatusTile label="Сделки" value={wazzupSyncValue(status.entitySync.deals)} />
-            <StatusTile label="Ошибки клиентов" value={String(status.entitySync.contacts.failed)} />
-            <StatusTile label="Ошибки сделок" value={String(status.entitySync.deals.failed)} />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
-              onClick={() => runWazzupApi(syncWazzupPipelinesAction)}
-            >
-              Синхронизировать воронки
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
-              onClick={() => runWazzupApi(syncWazzupContactsAction)}
-            >
-              Синхронизировать клиентов
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending || !status.apiKeyConfigured || !status.isEnabled}
-              onClick={() => runWazzupApi(syncWazzupDealsAction)}
-            >
-              Синхронизировать сделки
-            </Button>
-          </div>
-          {status.entitySync.pipelines.lastError ||
-          status.entitySync.contacts.lastError ||
-          status.entitySync.deals.lastError ? (
-            <Alert variant="destructive">
-              <AlertTitle>Последняя ошибка синхронизации</AlertTitle>
-              <AlertDescription>
-                {status.entitySync.deals.lastError ||
-                  status.entitySync.contacts.lastError ||
-                  status.entitySync.pipelines.lastError}
-              </AlertDescription>
-            </Alert>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-2xl border bg-white">
-        <CardHeader>
-          <CardTitle>Диагностика</CardTitle>
-          <CardDescription>Последние Wazzup события без raw payload и секретов</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="grid gap-3 md:grid-cols-3">
-            <StatusTile label="Webhook события" value={String(status.diagnostics.webhookEventsCount)} />
-            <StatusTile label="Сообщения Wazzup" value={String(status.diagnostics.wazzupMessagesCount)} />
-            <StatusTile label="Ошибки авторизации" value={String(status.diagnostics.failedAuthEventsCount)} />
-            <StatusTile label="Последний тип события" value={status.diagnostics.latestEventType || "-"} />
-            <StatusTile
-              label="Последнее сообщение"
-              value={
-                status.diagnostics.latestMessage
-                  ? `${status.diagnostics.latestMessage.chatType} · ${status.diagnostics.latestMessage.chatId}`
-                  : "Нет сообщений"
-              }
-            />
-          </div>
-          {status.diagnostics.onlyTestWebhooks ? (
-            <Alert>
-              <AlertTriangleIcon />
-              <AlertTitle>Получены только test webhooks</AlertTitle>
-              <AlertDescription>Реальных сообщений или createDeal еще не было.</AlertDescription>
-            </Alert>
-          ) : null}
-          {status.diagnostics.latestError.includes("unauthorized webhook:") ? (
-            <Alert variant="destructive">
-              <AlertTriangleIcon />
-              <AlertTitle>Webhook отклонен по CRM key</AlertTitle>
-              <AlertDescription>
-                Wazzup отправил webhook без ожидаемого CRM key. Используйте защищенный webhook URL с key или выключите обязательную проверку.
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          {status.diagnostics.latestMessage ? (
-            <div className="text-sm text-muted-foreground">
-              Последнее сообщение Wazzup: {dateTime(status.diagnostics.latestMessage.createdAt)}
-            </div>
-          ) : null}
-          {status.diagnostics.recentWebhookEvents.length ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Тип события</TableHead>
-                  <TableHead>Статус</TableHead>
-                  <TableHead>Создано</TableHead>
-                  <TableHead>Ошибка</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {status.diagnostics.recentWebhookEvents.map((event, index) => (
-                  <TableRow key={`${event.createdAt}-${event.eventType}-${index}`}>
-                    <TableCell>{event.eventType || "unknown"}</TableCell>
-                    <TableCell>
-                      <Badge variant={event.status === "failed" ? "destructive" : "secondary"}>
-                        {event.status || "unknown"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{dateTime(event.createdAt)}</TableCell>
-                    <TableCell className="max-w-80 truncate">{event.error || "-"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : (
-            <Empty className="min-h-36">
-              <EmptyHeader>
-                <EmptyTitle>Webhook events еще нет</EmptyTitle>
-                <EmptyDescription>После теста или реального события Wazzup они появятся здесь.</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-2xl border bg-white">
-        <CardHeader>
-          <CardTitle>Проверка</CardTitle>
-          <CardDescription>Быстрые проверки без показа ключей</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" disabled={pending} onClick={() => run(testWazzupApiKeyAction)}>
-            Проверить API key
-          </Button>
-          <Button type="button" variant="outline" disabled={pending} onClick={() => run(testLocalWazzupWebhookAction)}>
-            Проверить webhook endpoint
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={pending || !status.apiKeyConfigured}
-            onClick={() => runWazzupApi(checkWazzupWebhookSubscriptionsAction)}
-          >
-            Проверить подписки
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={pending || !status.apiKeyConfigured}
-            onClick={() => runWazzupApi(connectWazzupWebhookAction)}
-          >
-            Подключить webhook в Wazzup
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={pending || !status.apiKeyConfigured}
-            onClick={() => runWazzupApi(checkWazzupChannelsAction)}
-          >
-            Проверить каналы
-          </Button>
-        </CardContent>
-      </Card>
-
-      {wazzupApiResult.length ? (
-        <Alert>
-          <AlertTitle>Ответ Wazzup API</AlertTitle>
-          <AlertDescription>
-            <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">{wazzupApiResult.join("\n")}</pre>
-          </AlertDescription>
-        </Alert>
-      ) : null}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
         <AlertDialogContent>
@@ -886,12 +1035,51 @@ function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
   )
 }
 
-function StatusTile({ label, value }: { label: string; value: string }) {
+type StatusTone = "positive" | "negative" | "muted" | "neutral"
+
+const statusToneIcon: Record<Exclude<StatusTone, "neutral">, React.ReactNode> = {
+  positive: <CheckCircle2Icon className="size-4 text-emerald-600" />,
+  negative: <XCircleIcon className="size-4 text-destructive" />,
+  muted: <MinusCircleIcon className="size-4 text-muted-foreground" />,
+}
+
+function StatusTile({ label, value, tone = "neutral" }: { label: string; value: string; tone?: StatusTone }) {
   return (
     <div className="rounded-lg border p-3">
       <div className="text-sm text-muted-foreground">{label}</div>
-      <div className="mt-1 font-medium">{value}</div>
+      <div className="mt-1 flex items-center gap-1.5 font-medium">
+        {tone !== "neutral" ? statusToneIcon[tone] : null}
+        <span>{value}</span>
+      </div>
     </div>
+  )
+}
+
+// Кнопка с причиной блокировки: при disabled оборачиваем в span,
+// чтобы Tooltip ловил наведение (disabled-кнопка не получает pointer-событий).
+function GatedButton({
+  reason,
+  disabled,
+  children,
+  ...props
+}: React.ComponentProps<typeof Button> & { reason?: string | null }) {
+  if (disabled && reason) {
+    return (
+      <Tooltip>
+        <TooltipTrigger render={<span className="inline-flex cursor-not-allowed" tabIndex={0} />}>
+          <Button {...props} disabled aria-disabled className="pointer-events-none">
+            {children}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{reason}</TooltipContent>
+      </Tooltip>
+    )
+  }
+
+  return (
+    <Button {...props} disabled={disabled}>
+      {children}
+    </Button>
   )
 }
 
@@ -901,37 +1089,63 @@ function WebhookUrlRow({
   onCopy,
   copyLabel = "Копировать",
   disabled = false,
+  reason = null,
 }: {
   label: string
   webhookUrl: string
   onCopy: () => void
   copyLabel?: string
   disabled?: boolean
+  reason?: string | null
 }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="text-sm text-muted-foreground">{label}</div>
       <div className="flex flex-col gap-2 sm:flex-row">
         <Input readOnly value={webhookUrl} />
-        <Button type="button" variant="outline" onClick={onCopy} disabled={disabled}>
+        <GatedButton variant="outline" onClick={onCopy} disabled={disabled} reason={reason}>
           <CopyIcon data-icon="inline-start" />
           {copyLabel}
-        </Button>
+        </GatedButton>
       </div>
     </div>
   )
 }
 
-function getWazzupConnectionState(status: WazzupSettingsStatus) {
+type ConnectionState = {
+  label: string
+  variant: "secondary" | "destructive" | "outline"
+  tone: StatusTone
+}
+
+function ConnectionBadge({ state }: { state: ConnectionState }) {
+  const icon =
+    state.tone === "positive" ? (
+      <CheckCircle2Icon data-icon="inline-start" />
+    ) : state.tone === "negative" ? (
+      <XCircleIcon data-icon="inline-start" />
+    ) : (
+      <AlertCircleIcon data-icon="inline-start" />
+    )
+
+  return (
+    <Badge variant={state.variant}>
+      {icon}
+      {state.label}
+    </Badge>
+  )
+}
+
+function getWazzupConnectionState(status: WazzupSettingsStatus): ConnectionState {
   if (status.lastCheckStatus === "error") {
-    return { label: "Ошибка", variant: "destructive" as const }
+    return { label: "Ошибка", variant: "destructive", tone: "negative" }
   }
 
   if (status.isEnabled && status.apiKeyConfigured && status.crmKeyConfigured) {
-    return { label: "Подключено", variant: "secondary" as const }
+    return { label: "Подключено", variant: "secondary", tone: "positive" }
   }
 
-  return { label: "Не настроено", variant: "outline" as const }
+  return { label: "Не настроено", variant: "outline", tone: "muted" }
 }
 
 function lastCheckLabel(status: WazzupSettingsStatus) {
@@ -943,21 +1157,28 @@ function lastCheckLabel(status: WazzupSettingsStatus) {
 }
 
 function wazzupSyncValue(summary: WazzupSettingsStatus["entitySync"]["contacts"]) {
-  return `${summary.synced}/${summary.total}${summary.failed ? ` · failed ${summary.failed}` : ""}`
+  return `${summary.synced}/${summary.total}${summary.failed ? ` · ошибок ${summary.failed}` : ""}`
+}
+
+function syncTone(summary: WazzupSettingsStatus["entitySync"]["contacts"]): StatusTone {
+  if (summary.failed) {
+    return "negative"
+  }
+  if (summary.total && summary.synced >= summary.total) {
+    return "positive"
+  }
+  return "neutral"
+}
+
+const wazzupUserSyncLabels: Record<WazzupSettingsStatus["userSync"][number]["syncStatus"], string> = {
+  synced: "Синхронизирован",
+  failed: "Ошибка",
+  skipped: "Пропущен",
+  pending: "Ожидает",
 }
 
 function wazzupUserSyncLabel(status: WazzupSettingsStatus["userSync"][number]["syncStatus"]) {
-  if (status === "synced") {
-    return "synced"
-  }
-  if (status === "failed") {
-    return "failed"
-  }
-  if (status === "skipped") {
-    return "skipped"
-  }
-
-  return "pending"
+  return wazzupUserSyncLabels[status] ?? "Ожидает"
 }
 
 function wazzupUserSyncBadgeVariant(status: WazzupSettingsStatus["userSync"][number]["syncStatus"]) {
@@ -969,6 +1190,37 @@ function wazzupUserSyncBadgeVariant(status: WazzupSettingsStatus["userSync"][num
   }
 
   return "outline" as const
+}
+
+const wazzupEventTypeLabels: Record<string, string> = {
+  messagesAndStatuses: "Сообщения и статусы",
+  contactsAndDealsCreation: "Создание контактов и сделок",
+  createContact: "Создание контакта",
+  createDeal: "Создание сделки",
+  channelsUpdates: "Обновления каналов",
+  templateStatus: "Статус шаблона",
+  test: "Тест",
+}
+
+function wazzupEventTypeLabel(eventType: string) {
+  if (!eventType) {
+    return "-"
+  }
+  return wazzupEventTypeLabels[eventType] ?? eventType
+}
+
+const wazzupEventStatusLabels: Record<string, string> = {
+  processed: "Обработано",
+  failed: "Ошибка",
+  ignored: "Пропущено",
+  pending: "Ожидает",
+}
+
+function wazzupEventStatusLabel(status: string) {
+  if (!status) {
+    return "unknown"
+  }
+  return wazzupEventStatusLabels[status] ?? status
 }
 
 function dateTime(value: string) {

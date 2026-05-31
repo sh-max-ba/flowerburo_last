@@ -1,10 +1,24 @@
 "use client"
 
 import { useEffect } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ArrowLeftIcon, ArrowRightIcon, CalendarDaysIcon, CheckCircle2Icon, ListIcon } from "lucide-react"
+import {
+  AlertTriangleIcon,
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  CalendarDaysIcon,
+  CheckCircle2Icon,
+  ClockIcon,
+  ExternalLinkIcon,
+  HourglassIcon,
+  ListIcon,
+  Loader2Icon,
+  PackageCheckIcon,
+  TruckIcon,
+} from "lucide-react"
 import type { Order, OrderItem, OrderStatus } from "@/lib/db"
-import { deliveryTypeLabel } from "@/lib/labels"
+import { deliveryTypeLabel, sourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -337,12 +351,24 @@ export function OrderCalendarView({
           <Button type="button" size="sm" variant="outline" onClick={onToday}>
             Сегодня
           </Button>
-          <Button type="button" size="sm" variant="outline" onClick={onPreviousWeek}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onPreviousWeek}
+            aria-label="Предыдущая неделя"
+          >
             <ArrowLeftIcon data-icon="inline-start" />
-            Неделя
+            Пред. неделя
           </Button>
-          <Button type="button" size="sm" variant="outline" onClick={onNextWeek}>
-            Неделя
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onNextWeek}
+            aria-label="Следующая неделя"
+          >
+            След. неделя
             <ArrowRightIcon data-icon="inline-end" />
           </Button>
         </div>
@@ -448,26 +474,78 @@ function OrderCalendarCard({
   )
 }
 
-function orderUrgencyClass(order: Order) {
+export type OrderUrgencyLevel = "overdue" | "today" | "soon" | "future" | "none"
+
+export type OrderUrgency = {
+  level: OrderUrgencyLevel
+  /** Russian label, e.g. «Просрочено», «Сегодня», «Через 3 ч». Empty for no-date. */
+  label: string
+  /** Card border/background classes that make overdue visually dominate the gray theme. */
+  cardClass: string
+}
+
+// P0: единый источник срочности по сроку заказа. Используется и в списочном виде
+// (карточки стола заказов), и в календаре. Просрочка визуально доминирует.
+export function orderUrgency(order: Order, now: Date = new Date()): OrderUrgency {
   if (!order.dueAt) {
-    return ""
+    return { level: "none", label: "", cardClass: "" }
   }
 
   const dueAt = new Date(order.dueAt)
   if (Number.isNaN(dueAt.getTime())) {
-    return ""
+    return { level: "none", label: "", cardClass: "" }
   }
 
-  const now = new Date()
-  if (dueAt.getTime() < now.getTime()) {
-    return "border-destructive bg-destructive/5"
+  const diffMs = dueAt.getTime() - now.getTime()
+
+  if (diffMs < 0) {
+    return {
+      level: "overdue",
+      label: "Просрочено",
+      cardClass: "border-destructive bg-destructive/5 ring-1 ring-destructive/40",
+    }
   }
 
   if (dateKey(dueAt) === dateKey(now)) {
-    return "border-amber-300 bg-amber-50"
+    const hoursLeft = Math.max(1, Math.round(diffMs / (60 * 60 * 1000)))
+    return {
+      level: "today",
+      label: hoursLeft <= 6 ? `Через ${hoursLeft} ч` : "Сегодня",
+      cardClass: "border-amber-300 bg-amber-50",
+    }
   }
 
-  return ""
+  return { level: "future", label: "", cardClass: "" }
+}
+
+function orderUrgencyClass(order: Order) {
+  return orderUrgency(order).cardClass
+}
+
+// P0: текстовая+иконочная метка срочности. Цвет в монохроме читается плохо,
+// поэтому каждый уровень несёт иконку и русскую подпись.
+export function OrderUrgencyBadge({ order, className }: { order: Order; className?: string }) {
+  const urgency = orderUrgency(order)
+
+  if (urgency.level === "overdue") {
+    return (
+      <Badge variant="destructive" className={cn("gap-1", className)}>
+        <AlertTriangleIcon data-icon="inline-start" />
+        {urgency.label}
+      </Badge>
+    )
+  }
+
+  if (urgency.level === "today") {
+    return (
+      <Badge className={cn("gap-1 bg-amber-100 text-amber-900 hover:bg-amber-100", className)}>
+        <ClockIcon data-icon="inline-start" />
+        {urgency.label}
+      </Badge>
+    )
+  }
+
+  return null
 }
 
 export function OrderComposition({ items, compact = false }: { items: OrderItem[]; compact?: boolean }) {
@@ -555,33 +633,107 @@ function groupOrderItems(items: OrderItem[]) {
   return groups
 }
 
+// P1: единый бейдж статуса заказа для /orders и /ready-orders. Каждый статус
+// несёт иконку, поэтому читается и без опоры на цвет (тема в основном монохромна).
+export function OrderStatusBadge({ status, className }: { status: OrderStatus; className?: string }) {
+  switch (status) {
+    case "Новый":
+      return (
+        <Badge variant="outline" className={cn("gap-1", className)}>
+          <HourglassIcon data-icon="inline-start" />
+          Новый
+        </Badge>
+      )
+    case "В работе":
+      return (
+        <Badge variant="secondary" className={cn("gap-1", className)}>
+          <ClockIcon data-icon="inline-start" />
+          В работе
+        </Badge>
+      )
+    case "Готов":
+      return (
+        <Badge className={cn("gap-1 bg-emerald-100 text-emerald-900 hover:bg-emerald-100", className)}>
+          <PackageCheckIcon data-icon="inline-start" />
+          Готов
+        </Badge>
+      )
+    case "Передан курьеру":
+      return (
+        <Badge className={cn("gap-1 bg-amber-100 text-amber-900 hover:bg-amber-100", className)}>
+          <TruckIcon data-icon="inline-start" />
+          Передан курьеру
+        </Badge>
+      )
+    case "Выдан":
+      return (
+        <Badge variant="secondary" className={cn("gap-1", className)}>
+          <CheckCircle2Icon data-icon="inline-start" />
+          Выдан
+        </Badge>
+      )
+    case "Отменен":
+      return (
+        <Badge variant="destructive" className={cn("gap-1", className)}>
+          <AlertTriangleIcon data-icon="inline-start" />
+          Отменен
+        </Badge>
+      )
+    default:
+      return (
+        <Badge variant="outline" className={className}>
+          {status}
+        </Badge>
+      )
+  }
+}
+
+// Сохраняем имена-обёртки для обратной совместимости — оба теперь дают
+// идентичный вид для одинакового статуса на обоих экранах.
 export function OrderBadge({ status }: { status: OrderStatus }) {
-  if (status === "Выдан") {
-    return (
-      <Badge variant="secondary">
-        <CheckCircle2Icon data-icon="inline-start" />
-        {status}
-      </Badge>
-    )
-  }
-
-  if (status === "Отменен") {
-    return <Badge variant="destructive">{status}</Badge>
-  }
-
-  return <Badge variant="outline">{status}</Badge>
+  return <OrderStatusBadge status={status} />
 }
 
 export function ReadyStatusBadge({ status }: { status: OrderStatus }) {
-  if (status === "Готов") {
-    return <Badge className="bg-emerald-100 text-emerald-900 hover:bg-emerald-100">Готов</Badge>
+  return <OrderStatusBadge status={status} />
+}
+
+// P1: бейдж источника заказа (WhatsApp/Сайт/Телефон…) — помогает понять контекст.
+export function OrderSourceBadge({ source, className }: { source: string; className?: string }) {
+  if (!source) {
+    return null
   }
 
-  if (status === "Передан курьеру") {
-    return <Badge className="bg-amber-100 text-amber-900 hover:bg-amber-100">Передан курьеру</Badge>
+  return (
+    <Badge variant="outline" className={className}>
+      {sourceLabel(source)}
+    </Badge>
+  )
+}
+
+// P1: ненавязчивая ссылка на сделку-источник, чтобы быстро уточнить детали.
+export function OrderDealLink({ dealId, className }: { dealId: number | null; className?: string }) {
+  if (!dealId) {
+    return null
   }
 
-  return <OrderBadge status={status} />
+  return (
+    <Link
+      href={`/deals/${dealId}`}
+      className={cn(
+        "inline-flex items-center gap-1 text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline",
+        className
+      )}
+    >
+      <ExternalLinkIcon className="size-3.5" />
+      Открыть сделку
+    </Link>
+  )
+}
+
+// P2: маленький спиннер для точечной обратной связи на конкретной нажатой кнопке.
+export function Spinner({ className }: { className?: string }) {
+  return <Loader2Icon className={cn("animate-spin", className)} aria-hidden />
 }
 
 export function Info({ label, value }: { label: string; value: string }) {

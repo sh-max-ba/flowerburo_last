@@ -41,7 +41,7 @@ export function AppTopbar({
           <MenuIcon />
         </SidebarTrigger>
         <div className="min-w-0">
-          <div className="truncate text-base font-semibold">{title}</div>
+          <div className="truncate font-heading text-base font-semibold tracking-tight">{title}</div>
           {context ? (
             <div className="hidden truncate text-xs text-muted-foreground sm:block">{context}</div>
           ) : null}

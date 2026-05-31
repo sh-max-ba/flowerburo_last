@@ -1,9 +1,10 @@
 "use client"
 
-import { useMemo, useState, useTransition } from "react"
+import { useMemo, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import {
   AlertTriangleIcon,
+  Loader2Icon,
   MinusCircleIcon,
   PlusCircleIcon,
   ReceiptTextIcon,
@@ -64,8 +65,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { ProductCombobox } from "@/components/products/product-combobox"
 import { CustomerCombobox } from "@/components/customers/customer-combobox"
 import {
@@ -339,6 +356,7 @@ function QuickSaleForm({
   const [saleDiscountType, setSaleDiscountType] = useState<DiscountType>("none")
   const [saleDiscountValue, setSaleDiscountValue] = useState(0)
   const [saleDiscountTouched, setSaleDiscountTouched] = useState(false)
+  const [receivedInput, setReceivedInput] = useState("")
   const availableCustomers = useMemo(
     () => createdCustomers.reduce((current, customer) => upsertCustomerOption(current, customer), customers),
     [createdCustomers, customers]
@@ -348,6 +366,41 @@ function QuickSaleForm({
     : availableCustomers.find((customer) => customer.id === selectedCustomerId) ?? null
   const saleTotals = calculateCommercialTotals(getProductLineItemsForTotals(items), saleDiscountType, saleDiscountValue)
   const saleTotal = saleTotals.total
+  const productByCode = useMemo(() => new Map(products.map((product) => [product.code, product])), [products])
+  // Сводная нехватка по корзине: сравниваем суммарную потребность по каждому коду с остатком.
+  const cartShortageCount = useMemo(() => {
+    const requiredByCode = new Map<string, number>()
+    for (const item of items) {
+      const qty = Number.isFinite(item.qty) ? item.qty : 0
+      requiredByCode.set(item.productCode, (requiredByCode.get(item.productCode) ?? 0) + qty)
+    }
+    let count = 0
+    for (const [code, requiredQty] of requiredByCode) {
+      const product = productByCode.get(code)
+      if (product && requiredQty > product.stock) {
+        count += 1
+      }
+    }
+    return count
+  }, [items, productByCode])
+  // «Получено / Сдача» — клиентский расчёт сдачи для наличных, ничего не сохраняем.
+  const isCash = paymentMethod === "cash"
+  const received = Number(receivedInput.replace(",", "."))
+  const hasReceived = receivedInput.trim() !== "" && Number.isFinite(received)
+  const changeDue = hasReceived ? Math.max(0, Math.round((received - saleTotal) * 100) / 100) : 0
+  const shortfall = hasReceived ? Math.round((saleTotal - received) * 100) / 100 : 0
+  const cashShort = isCash && hasReceived && shortfall > 0
+  const cartEmpty = items.length === 0
+  const completeDisabledReason = disabled
+    ? "Смена закрыта"
+    : cartEmpty
+      ? "Добавьте позиции"
+      : !paymentMethod
+        ? "Выберите способ оплаты"
+        : cashShort
+          ? `Не хватает ${formatMoney(shortfall)}`
+          : null
+  const completeDisabled = pending || Boolean(completeDisabledReason)
 
   function addProduct(product: Product) {
     setItems((current) => addProductToLineItems(current, product))
@@ -363,6 +416,7 @@ function QuickSaleForm({
     setSaleDiscountType("none")
     setSaleDiscountValue(0)
     setSaleDiscountTouched(false)
+    setReceivedInput("")
   }
 
   function applySaleCustomer(customer: CustomerOption | null) {
@@ -397,6 +451,12 @@ function QuickSaleForm({
     if (validationError) {
       event.preventDefault()
       toast.error(validationError)
+      return
+    }
+
+    if (cashShort) {
+      event.preventDefault()
+      toast.error(`Полученная сумма меньше итога. Не хватает ${formatMoney(shortfall)}.`)
       return
     }
 
@@ -496,20 +556,21 @@ function QuickSaleForm({
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="salePaymentMethod">Оплата</FieldLabel>
-                    <select
-                      id="salePaymentMethod"
-                      name="paymentMethod"
-                      className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
-                      value={paymentMethod}
-                      disabled={disabled || pending}
-                      onChange={(event) => setPaymentMethod(event.target.value)}
-                    >
-                      {paymentMethodOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                    <input type="hidden" name="paymentMethod" value={paymentMethod} />
+                    <Select value={paymentMethod} onValueChange={(value) => setPaymentMethod(value ?? "cash")}>
+                      <SelectTrigger id="salePaymentMethod" className="w-full" disabled={disabled || pending}>
+                        <SelectValue placeholder="Способ оплаты" />
+                      </SelectTrigger>
+                      <SelectContent align="start">
+                        <SelectGroup>
+                          {paymentMethodOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="sale-note">Комментарий</FieldLabel>
@@ -521,17 +582,16 @@ function QuickSaleForm({
                   <div className="flex items-end gap-2">
                     <Field>
                       <FieldLabel htmlFor="saleDiscountType">Тип</FieldLabel>
-                      <select
-                        id="saleDiscountType"
-                        className="h-8 w-28 rounded-lg border border-input bg-background px-2 text-sm"
-                        value={saleDiscountType}
-                        disabled={disabled || pending}
-                        onChange={(event) => handleSaleDiscountTypeChange(event.target.value)}
-                      >
-                        <option value="none">Без скидки</option>
-                        <option value="percent">%</option>
-                        <option value="amount">Сумма</option>
-                      </select>
+                      <Select value={saleDiscountType} onValueChange={(value) => handleSaleDiscountTypeChange(value ?? "none")}>
+                        <SelectTrigger id="saleDiscountType" className="w-32" disabled={disabled || pending}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent align="start">
+                          <SelectItem value="none">Без скидки</SelectItem>
+                          <SelectItem value="percent">%</SelectItem>
+                          <SelectItem value="amount">Сумма</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </Field>
                     <Field>
                       <FieldLabel htmlFor="saleDiscountValue">Значение</FieldLabel>
@@ -552,6 +612,17 @@ function QuickSaleForm({
                     </Field>
                   </div>
                 </FieldSet>
+                {cartShortageCount > 0 && (
+                  <Alert variant="destructive">
+                    <AlertTriangleIcon />
+                    <AlertTitle>Не хватает остатков</AlertTitle>
+                    <AlertDescription>
+                      {cartShortageCount === 1
+                        ? "По одной позиции склад уйдёт в минус. Проверьте корзину."
+                        : `По ${cartShortageCount} позициям склад уйдёт в минус. Проверьте корзину.`}
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
                   <Info label="Товары до скидки" value={formatMoney(saleTotals.itemsTotalBeforeDiscount)} />
                   <Info label="Скидка по позициям" value={formatMoney(saleTotals.itemsDiscountTotal)} />
@@ -561,10 +632,80 @@ function QuickSaleForm({
                     <div className="text-3xl font-semibold text-zinc-950">{formatMoney(saleTotal)}</div>
                   </div>
                 </div>
-                <Button className="h-10 w-full bg-zinc-950 text-white hover:bg-zinc-800" type="submit" disabled={pending || disabled || items.length === 0}>
-                  <ReceiptTextIcon data-icon="inline-start" />
-                  Провести продажу
-                </Button>
+                {isCash && (
+                  <div className="grid gap-3 rounded-xl border border-zinc-200 bg-white p-4">
+                    <Field>
+                      <FieldLabel htmlFor="sale-received">Получено от клиента</FieldLabel>
+                      <Input
+                        id="sale-received"
+                        inputMode="decimal"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="0"
+                        value={receivedInput}
+                        disabled={disabled || pending}
+                        className="text-right text-lg"
+                        onChange={(event) => setReceivedInput(event.target.value)}
+                        onFocus={(event) => event.currentTarget.select()}
+                      />
+                    </Field>
+                    {hasReceived ? (
+                      cashShort ? (
+                        <div className="rounded-lg bg-destructive/10 px-3 py-2">
+                          <div className="flex items-center gap-1.5 text-xs font-medium text-destructive">
+                            <AlertTriangleIcon className="size-3.5" />
+                            Не хватает
+                          </div>
+                          <div className="text-3xl font-semibold text-destructive">{formatMoney(shortfall)}</div>
+                          <div className="mt-0.5 text-xs text-destructive/80">
+                            Полученной суммы недостаточно — продажу нельзя провести.
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="text-xs text-zinc-500">Сдача</div>
+                          <div className="text-4xl font-bold text-zinc-950">{formatMoney(changeDue)}</div>
+                        </div>
+                      )
+                    ) : (
+                      <FieldDescription>Введите полученную сумму, чтобы рассчитать сдачу.</FieldDescription>
+                    )}
+                  </div>
+                )}
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span tabIndex={completeDisabled ? 0 : -1} className="block w-full" />
+                      }
+                    >
+                      <Button
+                        className="h-10 w-full bg-zinc-950 text-white hover:bg-zinc-800"
+                        type="submit"
+                        disabled={completeDisabled}
+                      >
+                        {pending ? (
+                          <>
+                            <Loader2Icon data-icon="inline-start" className="animate-spin" />
+                            Проведение…
+                          </>
+                        ) : (
+                          <>
+                            <ReceiptTextIcon data-icon="inline-start" />
+                            Провести продажу
+                          </>
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    {completeDisabledReason && !pending && (
+                      <TooltipContent>{completeDisabledReason}</TooltipContent>
+                    )}
+                  </Tooltip>
+                </TooltipProvider>
+                {completeDisabledReason && !pending && (
+                  <FieldDescription className="text-center">{completeDisabledReason}</FieldDescription>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -729,6 +870,14 @@ function NewOrderForm({
   const needsShift = prepaid > 0 && !shiftOpen
   const prepaidTooHigh = prepaid > total
   const dueAt = dueDate && dueTime ? `${dueDate}T${dueTime}` : ""
+  const orderDisabledReason = items.length === 0
+    ? "Добавьте позиции"
+    : needsShift
+      ? "Откройте смену для предоплаты"
+      : prepaidTooHigh
+        ? "Предоплата выше итога"
+        : null
+  const orderDisabled = pending || Boolean(orderDisabledReason)
 
   function addProduct(product: Product) {
     setItems((current) => addProductToLineItems(current, product))
@@ -955,16 +1104,16 @@ function NewOrderForm({
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="deliveryType">Получение</FieldLabel>
-                    <select
-                      id="deliveryType"
-                      name="deliveryType"
-                      className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
-                      value={deliveryType}
-                      onChange={(event) => setDeliveryType(event.target.value)}
-                    >
-                      <option value="pickup">Самовывоз</option>
-                      <option value="delivery">Доставка</option>
-                    </select>
+                    <input type="hidden" name="deliveryType" value={deliveryType} />
+                    <Select value={deliveryType} onValueChange={(value) => setDeliveryType(value ?? "pickup")}>
+                      <SelectTrigger id="deliveryType" className="w-full" disabled={pending}>
+                        <SelectValue placeholder="Получение" />
+                      </SelectTrigger>
+                      <SelectContent align="start">
+                        <SelectItem value="pickup">Самовывоз</SelectItem>
+                        <SelectItem value="delivery">Доставка</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </Field>
                 </div>
                 {deliveryType === "delivery" && (
@@ -1068,19 +1217,21 @@ function NewOrderForm({
                 </Field>
                 <Field>
                   <FieldLabel htmlFor="orderPaymentMethod">Способ оплаты</FieldLabel>
-                  <select
-                    id="orderPaymentMethod"
-                    name="paymentMethod"
-                    className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
-                    value={paymentMethod}
-                    onChange={(event) => setPaymentMethod(event.target.value)}
-                  >
-                    {paymentMethodOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                  <input type="hidden" name="paymentMethod" value={paymentMethod} />
+                  <Select value={paymentMethod} onValueChange={(value) => setPaymentMethod(value ?? "cash")}>
+                    <SelectTrigger id="orderPaymentMethod" className="w-full" disabled={pending}>
+                      <SelectValue placeholder="Способ оплаты" />
+                    </SelectTrigger>
+                    <SelectContent align="start">
+                      <SelectGroup>
+                        {paymentMethodOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
                 </Field>
               </div>
               <div className="grid gap-3 rounded-lg border bg-background p-3">
@@ -1088,17 +1239,16 @@ function NewOrderForm({
                 <div className="flex items-end gap-2">
                   <Field>
                     <FieldLabel htmlFor="orderDiscountType">Тип</FieldLabel>
-                    <select
-                      id="orderDiscountType"
-                      className="h-8 w-28 rounded-lg border border-input bg-background px-2 text-sm"
-                      value={orderDiscountType}
-                      disabled={pending}
-                      onChange={(event) => handleOrderDiscountTypeChange(event.target.value)}
-                    >
-                      <option value="none">Без скидки</option>
-                      <option value="percent">%</option>
-                      <option value="amount">Сумма</option>
-                    </select>
+                    <Select value={orderDiscountType} onValueChange={(value) => handleOrderDiscountTypeChange(value ?? "none")}>
+                      <SelectTrigger id="orderDiscountType" className="w-32" disabled={pending}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent align="start">
+                        <SelectItem value="none">Без скидки</SelectItem>
+                        <SelectItem value="percent">%</SelectItem>
+                        <SelectItem value="amount">Сумма</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="orderDiscountValue">Значение</FieldLabel>
@@ -1149,13 +1299,34 @@ function NewOrderForm({
             </FieldSet>
 
             <div className="mt-auto border-t pt-3">
-              <Button
-                className="h-10 w-full bg-zinc-950 text-white hover:bg-zinc-800"
-                type="submit"
-                disabled={pending || needsShift || prepaidTooHigh || items.length === 0}
-              >
-                Провести заказ
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={<span tabIndex={orderDisabled ? 0 : -1} className="block w-full" />}
+                  >
+                    <Button
+                      className="h-10 w-full bg-zinc-950 text-white hover:bg-zinc-800"
+                      type="submit"
+                      disabled={orderDisabled}
+                    >
+                      {pending ? (
+                        <>
+                          <Loader2Icon data-icon="inline-start" className="animate-spin" />
+                          Проведение…
+                        </>
+                      ) : (
+                        "Провести заказ"
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  {orderDisabledReason && !pending && (
+                    <TooltipContent>{orderDisabledReason}</TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
+              {orderDisabledReason && !pending && (
+                <FieldDescription className="mt-2 text-center">{orderDisabledReason}</FieldDescription>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -1178,6 +1349,11 @@ function CashOperationDialog({
 }) {
   const isCashOut = operation === "cashOut"
   const title = isCashOut ? "Изъятие наличных" : "Внесение наличных"
+  const formRef = useRef<HTMLFormElement>(null)
+  const [amountInput, setAmountInput] = useState("")
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const parsedAmount = Number(amountInput.replace(",", "."))
+  const amountValid = Number.isFinite(parsedAmount) && parsedAmount > 0
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     if (!operation) {
@@ -1195,18 +1371,54 @@ function CashOperationDialog({
     onSubmit(event, operation)
   }
 
+  // Изъятие — необратимая денежная операция: перед посылкой money-out
+  // показываем AlertDialog с форматированной суммой. Внесение проводится сразу.
+  function handlePrimaryClick(event: React.MouseEvent<HTMLButtonElement>) {
+    if (!isCashOut) {
+      return
+    }
+    event.preventDefault()
+    if (!amountValid) {
+      toast.error("Сумма должна быть больше нуля.")
+      return
+    }
+    setConfirmOpen(true)
+  }
+
+  function confirmCashOut() {
+    setConfirmOpen(false)
+    formRef.current?.requestSubmit()
+  }
+
+  function handleOpenChange(open: boolean) {
+    if (!open) {
+      setConfirmOpen(false)
+      setAmountInput("")
+    }
+    onOpenChange(open)
+  }
+
   return (
-    <Dialog open={Boolean(operation)} onOpenChange={onOpenChange}>
+    <Dialog open={Boolean(operation)} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>Операция пройдет по текущей открытой смене.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <form ref={formRef} onSubmit={handleSubmit} className="flex flex-col gap-4">
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="cash-operation-amount">Сумма</FieldLabel>
-              <Input id="cash-operation-amount" name="amount" type="number" min="0.01" step="0.01" required />
+              <Input
+                id="cash-operation-amount"
+                name="amount"
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={amountInput}
+                onChange={(event) => setAmountInput(event.target.value)}
+                required
+              />
             </Field>
             <Field>
               <FieldLabel htmlFor="cash-operation-comment">Комментарий</FieldLabel>
@@ -1214,12 +1426,45 @@ function CashOperationDialog({
             </Field>
           </FieldGroup>
           <DialogFooter>
-            <Button type="submit" variant={isCashOut ? "destructive" : "default"} disabled={pending}>
-              {isCashOut ? "Изъять" : "Внести"}
+            <Button
+              type="submit"
+              variant={isCashOut ? "destructive" : "default"}
+              disabled={pending}
+              onClick={handlePrimaryClick}
+            >
+              {isCashOut ? (
+                <>
+                  <MinusCircleIcon data-icon="inline-start" />
+                  Изъять
+                </>
+              ) : (
+                <>
+                  <PlusCircleIcon data-icon="inline-start" />
+                  Внести
+                </>
+              )}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Изъять наличные из кассы?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Из кассы будет изъято{" "}
+              <span className="font-semibold text-foreground">{formatMoney(amountValid ? parsedAmount : 0)}</span>.
+              Операция необратима и сразу уменьшит остаток текущей смены.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={pending}>Отмена</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" disabled={pending} onClick={confirmCashOut}>
+              Изъять {formatMoney(amountValid ? parsedAmount : 0)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   )
 }

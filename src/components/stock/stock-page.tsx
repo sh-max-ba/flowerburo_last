@@ -1,14 +1,16 @@
 "use client"
 
 import type React from "react"
-import { useMemo, useState, useTransition } from "react"
+import { useEffect, useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
+  AlertOctagonIcon,
   AlertTriangleIcon,
   ChevronsUpDownIcon,
   ClipboardListIcon,
   DownloadIcon,
+  FilterIcon,
   FileSpreadsheetIcon,
   HistoryIcon,
   MinusCircleIcon,
@@ -106,7 +108,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
 import { StockActProductPicker } from "@/components/stock/stock-act-product-picker"
@@ -118,6 +120,41 @@ type CategorySummary = { path: string; label: string; count: number }
 const allCategoriesValue = "__all__"
 const uncategorizedValue = "__uncategorized__"
 const uncategorizedLabel = "Без категории"
+
+const lowStockThreshold = 3
+
+type StockLevel = "negative" | "zero" | "low" | "normal"
+type StockLevelFilter = "all" | "low" | "zero" | "negative"
+
+function stockLevel(product: Product): StockLevel {
+  if (product.available < 0) {
+    return "negative"
+  }
+  if (product.available === 0) {
+    return "zero"
+  }
+  if (product.available <= lowStockThreshold) {
+    return "low"
+  }
+
+  return "normal"
+}
+
+function matchesStockLevelFilter(product: Product, filter: StockLevelFilter) {
+  if (filter === "all") {
+    return true
+  }
+
+  const level = stockLevel(product)
+  if (filter === "low") {
+    return level === "low"
+  }
+  if (filter === "zero") {
+    return level === "zero"
+  }
+
+  return level === "negative"
+}
 
 function normalizeCategoryPath(value: string | null | undefined) {
   return String(value ?? "").trim()
@@ -169,6 +206,7 @@ export function StockPage({
   const router = useRouter()
   const [query, setQuery] = useState("")
   const [categoryFilter, setCategoryFilter] = useState(allCategoriesValue)
+  const [levelFilter, setLevelFilter] = useState<StockLevelFilter>("all")
   const [productSheet, setProductSheet] = useState(false)
   const [categoriesOpen, setCategoriesOpen] = useState(false)
   const [clearingCategory, setClearingCategory] = useState<CategorySummary | null>(null)
@@ -185,6 +223,22 @@ export function StockPage({
       ? categoryFilter
       : allCategoriesValue
 
+  const levelCounts = useMemo(() => {
+    const counts = { all: products.length, low: 0, zero: 0, negative: 0 }
+    for (const product of products) {
+      const level = stockLevel(product)
+      if (level === "low") {
+        counts.low += 1
+      } else if (level === "zero") {
+        counts.zero += 1
+      } else if (level === "negative") {
+        counts.negative += 1
+      }
+    }
+
+    return counts
+  }, [products])
+
   const filteredProducts = useMemo(() => {
     const normalized = query.trim().toLowerCase()
 
@@ -194,10 +248,14 @@ export function StockPage({
         `${product.code} ${product.article} ${product.name}`.toLowerCase().includes(normalized)
       const matchesCategory =
         activeCategoryFilter === allCategoriesValue || getCategoryValue(product.categoryPath) === activeCategoryFilter
+      const matchesLevel = matchesStockLevelFilter(product, levelFilter)
 
-      return matchesQuery && matchesCategory
+      return matchesQuery && matchesCategory && matchesLevel
     })
-  }, [activeCategoryFilter, products, query])
+  }, [activeCategoryFilter, levelFilter, products, query])
+
+  const hasActiveFilters =
+    query.trim().length > 0 || activeCategoryFilter !== allCategoriesValue || levelFilter !== "all"
 
   function run(action: () => Promise<Result>, after?: () => void) {
     startTransition(async () => {
@@ -230,6 +288,15 @@ export function StockPage({
         products={filteredProducts}
         categories={categories}
         negativeStockCount={negativeStockCount}
+        levelFilter={levelFilter}
+        setLevelFilter={setLevelFilter}
+        levelCounts={levelCounts}
+        hasActiveFilters={hasActiveFilters}
+        onResetFilters={() => {
+          setQuery("")
+          setCategoryFilter(allCategoriesValue)
+          setLevelFilter("all")
+        }}
         query={query}
         setQuery={setQuery}
         categoryFilter={activeCategoryFilter}
@@ -380,6 +447,11 @@ function StockSection({
   products,
   categories,
   negativeStockCount,
+  levelFilter,
+  setLevelFilter,
+  levelCounts,
+  hasActiveFilters,
+  onResetFilters,
   query,
   setQuery,
   categoryFilter,
@@ -395,6 +467,11 @@ function StockSection({
   products: Product[]
   categories: CategorySummary[]
   negativeStockCount: number
+  levelFilter: StockLevelFilter
+  setLevelFilter: (value: StockLevelFilter) => void
+  levelCounts: { all: number; low: number; zero: number; negative: number }
+  hasActiveFilters: boolean
+  onResetFilters: () => void
   query: string
   setQuery: (value: string) => void
   categoryFilter: string
@@ -408,6 +485,27 @@ function StockSection({
   pending: boolean
 }) {
   const selectedCategory = categories.find((category) => category.path === categoryFilter)
+  const levelChips: { value: StockLevelFilter; label: string; count: number; icon?: React.ReactNode }[] = [
+    { value: "all", label: "Все", count: levelCounts.all },
+    {
+      value: "low",
+      label: "Мало ≤3",
+      count: levelCounts.low,
+      icon: <AlertTriangleIcon data-icon="inline-start" />,
+    },
+    {
+      value: "zero",
+      label: "Нет в наличии",
+      count: levelCounts.zero,
+      icon: <AlertOctagonIcon data-icon="inline-start" />,
+    },
+    {
+      value: "negative",
+      label: "В минусе",
+      count: levelCounts.negative,
+      icon: <AlertOctagonIcon data-icon="inline-start" />,
+    },
+  ]
 
   return (
     <Card className="min-w-0 rounded-2xl border bg-white">
@@ -463,24 +561,24 @@ function StockSection({
               <MinusCircleIcon data-icon="inline-start" />
               Списать
             </Button>
-            <Button className="h-10" variant="outline" render={<Link href="/stock/acts" />}>
-              <ClipboardListIcon data-icon="inline-start" />
-              Акты склада
-            </Button>
-            <Button className="h-10" onClick={onCreate}>
-              <PlusIcon data-icon="inline-start" />
-              Новый товар
-            </Button>
-            <Button className="h-10" variant="outline" onClick={onOpenCategories} disabled={pending}>
-              <TagsIcon data-icon="inline-start" />
-              Категории
-            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger render={<Button className="h-10" variant="outline" disabled={pending} />}>
                 <MoreHorizontalIcon data-icon="inline-start" />
-                Действия
+                Ещё
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem onClick={onCreate}>
+                  <PlusIcon />
+                  Новый товар
+                </DropdownMenuItem>
+                <DropdownMenuItem render={<Link href="/stock/acts" />}>
+                  <ClipboardListIcon />
+                  Акты склада
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onOpenCategories}>
+                  <TagsIcon />
+                  Категории
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={onImport}>
                   <UploadIcon />
                   Импорт XLSX
@@ -503,8 +601,30 @@ function StockSection({
         </div>
       </CardHeader>
       <CardContent className="flex min-w-0 flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {levelChips.map((chip) => {
+            const isActive = levelFilter === chip.value
+            const isDisabled = chip.value !== "all" && chip.count === 0
+            return (
+              <Button
+                key={chip.value}
+                type="button"
+                size="sm"
+                variant={isActive ? "default" : "outline"}
+                disabled={isDisabled}
+                onClick={() => setLevelFilter(chip.value)}
+              >
+                {chip.icon}
+                {chip.label}
+                <span className={isActive ? "opacity-80" : "text-muted-foreground"}>({chip.count})</span>
+              </Button>
+            )
+          })}
+        </div>
         <ResponsiveTable
           emptyTitle="Склад пуст"
+          filtered={hasActiveFilters}
+          onResetFilters={onResetFilters}
           headers={["Код", "Товар", "Категория", "Остаток", "Цена", ""]}
           rows={products.map((product) => [
             product.code,
@@ -531,9 +651,16 @@ function StockSection({
         />
         {negativeStockCount > 0 && (
           <div className="flex justify-end">
-            <Badge variant="outline" className="text-muted-foreground">
-              Есть позиции с отрицательным остатком
-            </Badge>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="border-red-300 text-destructive hover:bg-destructive/10"
+              onClick={() => setLevelFilter("negative")}
+            >
+              <AlertOctagonIcon data-icon="inline-start" />
+              В минусе: {negativeStockCount}
+            </Button>
           </div>
         )}
       </CardContent>
@@ -938,6 +1065,20 @@ function WarehouseImportDialog({
   onApply: (importId: number) => void
 }) {
   const hasErrors = Boolean(preview && preview.errorCount > 0)
+  const [showOnlyErrors, setShowOnlyErrors] = useState(false)
+  const previewId = preview?.id ?? null
+
+  // При появлении нового предпросмотра с ошибками сразу показываем только ошибки.
+  useEffect(() => {
+    setShowOnlyErrors(hasErrors)
+  }, [previewId, hasErrors])
+
+  const visibleItems = useMemo(() => {
+    if (!preview) {
+      return []
+    }
+    return showOnlyErrors ? preview.items.filter((item) => item.action === "error") : preview.items
+  }, [preview, showOnlyErrors])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -974,8 +1115,8 @@ function WarehouseImportDialog({
           {hasErrors && (
             <Alert variant="destructive">
               <AlertTriangleIcon />
-              <AlertTitle>В файле есть ошибки</AlertTitle>
-              <AlertDescription>Импорт нельзя применить. Исправьте XLSX и загрузите его снова.</AlertDescription>
+              <AlertTitle>В файле {preview?.errorCount} строк с ошибками</AlertTitle>
+              <AlertDescription>Импорт нельзя применить. Исправьте отмеченные строки в XLSX и загрузите его снова.</AlertDescription>
             </Alert>
           )}
 
@@ -986,8 +1127,36 @@ function WarehouseImportDialog({
                 <ImportStat label="Новых" value={preview.createdCount} />
                 <ImportStat label="Обновлений" value={preview.updatedCount} />
                 <ImportStat label="Без изменений" value={preview.unchangedCount} />
-                <ImportStat label="Ошибок" value={preview.errorCount} />
+                <ImportStat
+                  label="Ошибок"
+                  value={preview.errorCount}
+                  highlight={preview.errorCount > 0}
+                  active={showOnlyErrors}
+                  onClick={preview.errorCount > 0 ? () => setShowOnlyErrors((value) => !value) : undefined}
+                />
               </div>
+
+              {preview.errorCount > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={showOnlyErrors ? "default" : "outline"}
+                    onClick={() => setShowOnlyErrors(true)}
+                  >
+                    <AlertTriangleIcon data-icon="inline-start" />
+                    Только ошибки ({preview.errorCount})
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={showOnlyErrors ? "outline" : "default"}
+                    onClick={() => setShowOnlyErrors(false)}
+                  >
+                    Все строки ({preview.items.length})
+                  </Button>
+                </div>
+              )}
 
               <div className="max-w-full overflow-x-auto rounded-lg border">
                 <Table className="min-w-[1120px] text-sm">
@@ -1001,33 +1170,37 @@ function WarehouseImportDialog({
                       <TableHead className="w-24">Было</TableHead>
                       <TableHead className="w-24">Будет</TableHead>
                       <TableHead className="w-28">Изменение</TableHead>
-                      <TableHead className="min-w-52">Ошибка</TableHead>
+                      <TableHead className="min-w-72">Ошибка</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {preview.items.map((item) => (
-                      <TableRow key={item.id}>
-                        <TableCell>{item.rowNumber ?? "-"}</TableCell>
-                        <TableCell className="font-medium">{item.code || "-"}</TableCell>
-                        <TableCell className="max-w-64 truncate" title={item.name || "-"}>
-                          {item.name || "-"}
-                        </TableCell>
-                        <TableCell>
-                          <CategoryCell categoryPath={item.categoryPath} />
-                        </TableCell>
-                        <TableCell>
-                          <WarehouseImportActionBadge action={item.action} />
-                        </TableCell>
-                        <TableCell>{nullableNumber(item.oldStock)}</TableCell>
-                        <TableCell>{nullableNumber(item.newStock)}</TableCell>
-                        <TableCell>
-                          <WarehouseImportDelta value={item.stockDelta} />
-                        </TableCell>
-                        <TableCell className="max-w-72 truncate text-destructive" title={item.error}>
-                          {item.error}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {visibleItems.map((item) => {
+                      const isError = item.action === "error"
+                      return (
+                        <TableRow
+                          key={item.id}
+                          className={isError ? "border-l-2 border-l-destructive bg-destructive/5" : undefined}
+                        >
+                          <TableCell>{item.rowNumber ?? "-"}</TableCell>
+                          <TableCell className="font-medium">{item.code || "-"}</TableCell>
+                          <TableCell className="max-w-64 truncate" title={item.name || "-"}>
+                            {item.name || "-"}
+                          </TableCell>
+                          <TableCell>
+                            <CategoryCell categoryPath={item.categoryPath} />
+                          </TableCell>
+                          <TableCell>
+                            <WarehouseImportActionBadge action={item.action} />
+                          </TableCell>
+                          <TableCell>{nullableNumber(item.oldStock)}</TableCell>
+                          <TableCell>{nullableNumber(item.newStock)}</TableCell>
+                          <TableCell>
+                            <WarehouseImportDelta value={item.stockDelta} />
+                          </TableCell>
+                          <TableCell className="min-w-72 break-words font-medium text-destructive">{item.error}</TableCell>
+                        </TableRow>
+                      )
+                    })}
                   </TableBody>
                 </Table>
               </div>
@@ -1050,13 +1223,43 @@ function WarehouseImportDialog({
   )
 }
 
-function ImportStat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-lg border bg-background p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="text-xl font-semibold">{value}</div>
-    </div>
+function ImportStat({
+  label,
+  value,
+  highlight = false,
+  active = false,
+  onClick,
+}: {
+  label: string
+  value: number
+  highlight?: boolean
+  active?: boolean
+  onClick?: () => void
+}) {
+  const baseClass = "rounded-lg border p-3 text-left transition-colors"
+  const toneClass = highlight ? "border-red-300 bg-destructive/5" : "border bg-background"
+  const activeClass = active ? "ring-2 ring-destructive/40" : ""
+  const interactiveClass = onClick ? "cursor-pointer hover:bg-destructive/10" : ""
+
+  const content = (
+    <>
+      <div className="flex items-center gap-1 text-xs text-muted-foreground">
+        {label}
+        {onClick && <FilterIcon className="size-3" />}
+      </div>
+      <div className={highlight ? "text-xl font-semibold text-destructive" : "text-xl font-semibold"}>{value}</div>
+    </>
   )
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={`${baseClass} ${toneClass} ${activeClass} ${interactiveClass}`}>
+        {content}
+      </button>
+    )
+  }
+
+  return <div className={`${baseClass} ${toneClass}`}>{content}</div>
 }
 
 function WarehouseImportActionBadge({ action }: { action: WarehouseImportAction }) {
@@ -1096,6 +1299,23 @@ type StockDocumentLine = {
   qty: string
 }
 
+function computeStockDocumentTotals(items: StockDocumentLine[], products: Product[]) {
+  let totalQty = 0
+  let totalValue = 0
+
+  for (const item of items) {
+    const qty = Number(item.qty || 0)
+    if (!Number.isFinite(qty) || qty <= 0) {
+      continue
+    }
+    const product = products.find((candidate) => candidate.code === item.product.code) ?? item.product
+    totalQty += qty
+    totalValue += qty * (product.costPrice || 0)
+  }
+
+  return { positions: items.length, totalQty, totalValue }
+}
+
 function StockDocumentDialog({
   type,
   products,
@@ -1120,6 +1340,7 @@ function StockDocumentDialog({
   const title = isWriteOff ? "Акт списания" : "Акт пополнения"
   const description = "Добавьте товары, проверьте количество и сохраните или проведите акт"
   const operationAtLabel = isWriteOff ? "Дата и время списания" : "Дата и время приемки"
+  const totals = computeStockDocumentTotals(items, products)
 
   function addProduct(product: Product) {
     const freshProduct = products.find((item) => item.code === product.code) ?? product
@@ -1350,6 +1571,20 @@ function StockDocumentDialog({
                               )
                             })}
                           </TableBody>
+                          <TableFooter>
+                            <TableRow>
+                              <TableCell className="font-medium">Позиций: {totals.positions}</TableCell>
+                              <TableCell />
+                              <TableCell className="font-semibold">{number(totals.totalQty)}</TableCell>
+                              <TableCell
+                                colSpan={3}
+                                className="text-right font-semibold"
+                                title="Оценочная стоимость по закупочной цене"
+                              >
+                                {isWriteOff ? "Стоимость списания" : "Стоимость прихода"}: {formatMoney(totals.totalValue)}
+                              </TableCell>
+                            </TableRow>
+                          </TableFooter>
                         </Table>
                       </ScrollArea>
                     </div>
@@ -1386,12 +1621,35 @@ function ResponsiveTable({
   headers,
   rows,
   emptyTitle,
+  filtered = false,
+  onResetFilters,
 }: {
   headers: string[]
   rows: React.ReactNode[][]
   emptyTitle: string
+  filtered?: boolean
+  onResetFilters?: () => void
 }) {
   if (!rows.length) {
+    if (filtered) {
+      return (
+        <Empty className="min-h-56">
+          <EmptyHeader>
+            <EmptyTitle>Ничего не найдено</EmptyTitle>
+            <EmptyDescription>По выбранным фильтрам нет товаров. Сбросьте фильтры, чтобы увидеть весь список.</EmptyDescription>
+          </EmptyHeader>
+          {onResetFilters && (
+            <EmptyContent>
+              <Button type="button" variant="outline" size="sm" onClick={onResetFilters}>
+                <FilterIcon data-icon="inline-start" />
+                Сбросить фильтры
+              </Button>
+            </EmptyContent>
+          )}
+        </Empty>
+      )
+    }
+
     return (
       <Empty>
         <EmptyHeader>
@@ -1434,15 +1692,43 @@ function ResponsiveTable({
 }
 
 function StockBadge({ product }: { product: Product }) {
-  if (product.stock < 0) {
-    return <Badge variant="destructive">{number(product.stock)}</Badge>
+  const level = stockLevel(product)
+
+  if (level === "negative") {
+    return (
+      <Badge variant="destructive" className="font-semibold">
+        <AlertOctagonIcon data-icon="inline-start" />
+        {number(product.available)}
+      </Badge>
+    )
   }
 
-  if (product.stock <= 3) {
-    return <Badge variant="outline">{number(product.stock)}</Badge>
+  if (level === "zero") {
+    return (
+      <Badge variant="destructive" className="font-semibold">
+        <AlertOctagonIcon data-icon="inline-start" />
+        Нет в наличии
+      </Badge>
+    )
   }
 
-  return <Badge variant="secondary">{number(product.stock)}</Badge>
+  if (level === "low") {
+    return (
+      <Badge
+        variant="outline"
+        className="border-amber-300 bg-amber-50 font-semibold text-amber-900 hover:bg-amber-50"
+      >
+        <AlertTriangleIcon data-icon="inline-start" />
+        {number(product.available)} · Мало
+      </Badge>
+    )
+  }
+
+  return (
+    <Badge variant="secondary" className="text-muted-foreground">
+      {number(product.available)}
+    </Badge>
+  )
 }
 
 function Info({ label, value }: { label: string; value: string }) {
