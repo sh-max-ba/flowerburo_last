@@ -10,7 +10,7 @@ import {
   handOrderToCourierAction,
 } from "@/app/actions"
 import type { DashboardData, Order } from "@/lib/db"
-import { deliveryTypeLabel, paymentMethodOptions } from "@/lib/labels"
+import { deliveryTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import { formatMoney } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -345,7 +345,7 @@ function ReadyOrderCard({
                     <FieldLabel htmlFor={`pickupMethod-${order.id}`}>Оплата</FieldLabel>
                     <Select name="paymentMethod" defaultValue="cash" disabled={!shiftOpen}>
                       <SelectTrigger id={`pickupMethod-${order.id}`} className="w-full" disabled={!shiftOpen}>
-                        <SelectValue placeholder="Способ оплаты" />
+                        <SelectValue placeholder="Способ оплаты">{(value) => getPaymentMethodLabel(String(value ?? "cash"))}</SelectValue>
                       </SelectTrigger>
                       <SelectContent align="start">
                         <SelectGroup>
@@ -451,7 +451,7 @@ function CourierSheet({
                         <FieldLabel htmlFor="courierPaymentMethod">Способ оплаты</FieldLabel>
                         <Select name="paymentMethod" defaultValue="cash">
                           <SelectTrigger id="courierPaymentMethod" className="w-full">
-                            <SelectValue placeholder="Способ оплаты" />
+                            <SelectValue placeholder="Способ оплаты">{(value) => getPaymentMethodLabel(String(value ?? "cash"))}</SelectValue>
                           </SelectTrigger>
                           <SelectContent align="start">
                             <SelectGroup>

@@ -189,7 +189,7 @@ export function CustomersPage({
           <div className="flex items-center gap-2">
             <Select value={sourceFilter} onValueChange={(value) => setSourceFilter(value ?? NO_SOURCE)}>
               <SelectTrigger className="h-10 w-[150px]" aria-label="Фильтр по источнику">
-                <SelectValue placeholder="Источник" />
+                <SelectValue placeholder="Источник">{(value) => (value === NO_SOURCE ? "Все источники" : sourceLabel(String(value ?? "")))}</SelectValue>
               </SelectTrigger>
               <SelectContent align="start">
                 <SelectGroup>
@@ -204,7 +204,7 @@ export function CustomersPage({
             </Select>
             <Select value={sortKey} onValueChange={(value) => setSortKey((value ?? "recent") as SortKey)}>
               <SelectTrigger className="h-10 w-[160px]" aria-label="Сортировка">
-                <SelectValue placeholder="Сортировка" />
+                <SelectValue placeholder="Сортировка">{(value) => sortOptions.find((o) => o.value === value)?.label ?? "Сортировка"}</SelectValue>
               </SelectTrigger>
               <SelectContent align="start">
                 <SelectGroup>
@@ -551,7 +551,7 @@ export function CustomerFields({ customer }: { customer?: Customer }) {
           <FieldContent>
             <Select name="source" defaultValue={sourceValue}>
               <SelectTrigger id="source" className="w-full">
-                <SelectValue placeholder="Источник" />
+                <SelectValue placeholder="Источник">{(value) => (value ? sourceLabel(String(value)) : "Не указан")}</SelectValue>
               </SelectTrigger>
               <SelectContent align="start">
                 <SelectGroup>

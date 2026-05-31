@@ -84,7 +84,7 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
               <Input name="query" defaultValue={query} placeholder="Номер или комментарий" />
               <Select name="type" defaultValue={type}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Тип" />
+                  <SelectValue placeholder="Тип">{(value) => (value === "all" ? "Все типы" : stockDocumentTypeLabel(String(value)))}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
@@ -96,7 +96,7 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
               </Select>
               <Select name="status" defaultValue={status}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Статус" />
+                  <SelectValue placeholder="Статус">{(value) => (value === "all" ? "Все статусы" : stockDocumentStatusLabel(String(value)))}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>

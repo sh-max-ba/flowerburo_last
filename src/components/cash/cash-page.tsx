@@ -24,7 +24,7 @@ import type {
   Product,
   BouquetTemplate,
 } from "@/lib/db"
-import { getPaymentMethodLabel, paymentMethodOptions, sourceOptions } from "@/lib/labels"
+import { deliveryTypeLabel, discountTypeLabel, getPaymentMethodLabel, paymentMethodOptions, sourceLabel, sourceOptions } from "@/lib/labels"
 import { calculateCommercialTotals, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
 import { cn, formatMoney } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -287,7 +287,7 @@ function CustomerCreateDialog({
                 <FieldLabel htmlFor="cash-customer-source">Источник</FieldLabel>
                 <Select name="source" defaultValue="manual">
                   <SelectTrigger id="cash-customer-source" className="w-full" disabled={disabled}>
-                    <SelectValue placeholder="Источник" />
+                    <SelectValue placeholder="Источник">{(value) => sourceLabel(String(value ?? "manual"))}</SelectValue>
                   </SelectTrigger>
                   <SelectContent align="start">
                     <SelectGroup>
@@ -559,7 +559,7 @@ function QuickSaleForm({
                     <input type="hidden" name="paymentMethod" value={paymentMethod} />
                     <Select value={paymentMethod} onValueChange={(value) => setPaymentMethod(value ?? "cash")}>
                       <SelectTrigger id="salePaymentMethod" className="w-full" disabled={disabled || pending}>
-                        <SelectValue placeholder="Способ оплаты" />
+                        <SelectValue placeholder="Способ оплаты">{(value) => getPaymentMethodLabel(String(value ?? "cash"))}</SelectValue>
                       </SelectTrigger>
                       <SelectContent align="start">
                         <SelectGroup>
@@ -584,7 +584,7 @@ function QuickSaleForm({
                       <FieldLabel htmlFor="saleDiscountType">Тип</FieldLabel>
                       <Select value={saleDiscountType} onValueChange={(value) => handleSaleDiscountTypeChange(value ?? "none")}>
                         <SelectTrigger id="saleDiscountType" className="w-32" disabled={disabled || pending}>
-                          <SelectValue />
+                          <SelectValue>{(value) => discountTypeLabel(String(value ?? "none"))}</SelectValue>
                         </SelectTrigger>
                         <SelectContent align="start">
                           <SelectItem value="none">Без скидки</SelectItem>
@@ -1107,7 +1107,7 @@ function NewOrderForm({
                     <input type="hidden" name="deliveryType" value={deliveryType} />
                     <Select value={deliveryType} onValueChange={(value) => setDeliveryType(value ?? "pickup")}>
                       <SelectTrigger id="deliveryType" className="w-full" disabled={pending}>
-                        <SelectValue placeholder="Получение" />
+                        <SelectValue placeholder="Получение">{(value) => deliveryTypeLabel(String(value ?? "pickup"))}</SelectValue>
                       </SelectTrigger>
                       <SelectContent align="start">
                         <SelectItem value="pickup">Самовывоз</SelectItem>
@@ -1220,7 +1220,7 @@ function NewOrderForm({
                   <input type="hidden" name="paymentMethod" value={paymentMethod} />
                   <Select value={paymentMethod} onValueChange={(value) => setPaymentMethod(value ?? "cash")}>
                     <SelectTrigger id="orderPaymentMethod" className="w-full" disabled={pending}>
-                      <SelectValue placeholder="Способ оплаты" />
+                      <SelectValue placeholder="Способ оплаты">{(value) => getPaymentMethodLabel(String(value ?? "cash"))}</SelectValue>
                     </SelectTrigger>
                     <SelectContent align="start">
                       <SelectGroup>
@@ -1241,7 +1241,7 @@ function NewOrderForm({
                     <FieldLabel htmlFor="orderDiscountType">Тип</FieldLabel>
                     <Select value={orderDiscountType} onValueChange={(value) => handleOrderDiscountTypeChange(value ?? "none")}>
                       <SelectTrigger id="orderDiscountType" className="w-32" disabled={pending}>
-                        <SelectValue />
+                        <SelectValue>{(value) => discountTypeLabel(String(value ?? "none"))}</SelectValue>
                       </SelectTrigger>
                       <SelectContent align="start">
                         <SelectItem value="none">Без скидки</SelectItem>
