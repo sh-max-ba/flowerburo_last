@@ -82,9 +82,17 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
           <CardContent className="flex flex-col gap-4">
             <form className="grid gap-2 md:grid-cols-[1fr_220px_220px_auto]">
               <Input name="query" defaultValue={query} placeholder="Номер или комментарий" />
-              <Select name="type" defaultValue={type}>
+              <Select
+                name="type"
+                defaultValue={type}
+                items={[
+                  { label: "Все типы", value: "all" },
+                  { label: "Пополнение", value: "stock_in" },
+                  { label: "Списание", value: "stock_out" },
+                ]}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Тип">{(value) => (value === "all" ? "Все типы" : stockDocumentTypeLabel(String(value)))}</SelectValue>
+                  <SelectValue placeholder="Тип" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
@@ -94,9 +102,18 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              <Select name="status" defaultValue={status}>
+              <Select
+                name="status"
+                defaultValue={status}
+                items={[
+                  { label: "Все статусы", value: "all" },
+                  { label: "Черновик", value: "draft" },
+                  { label: "Проведен", value: "posted" },
+                  { label: "Отменен", value: "cancelled" },
+                ]}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Статус">{(value) => (value === "all" ? "Все статусы" : stockDocumentStatusLabel(String(value)))}</SelectValue>
+                  <SelectValue placeholder="Статус" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>

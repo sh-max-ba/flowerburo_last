@@ -9,7 +9,6 @@ import {
   ArrowRightIcon,
   CheckCircle2Icon,
   CheckIcon,
-  ChevronDownIcon,
   ExternalLinkIcon,
   PlusIcon,
   ReceiptTextIcon,
@@ -61,14 +60,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
@@ -2059,31 +2050,7 @@ function StageStepper({
             В этап «{nextStage.name}»
           </Button>
         ) : null}
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={<Button type="button" size="sm" variant="outline" disabled={disabled} />}
-          >
-            Сменить этап
-            <ChevronDownIcon data-icon="inline-end" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuLabel>Перевести сделку в…</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {stages.map((stage) => {
-              const isCurrent = String(stage.id) === currentStageId
-              return (
-                <DropdownMenuItem
-                  key={stage.id}
-                  disabled={isCurrent}
-                  onClick={() => onSelectStage(stage.id)}
-                >
-                  {isCurrent ? <CheckIcon /> : <span className="size-4" />}
-                  {stage.name}
-                </DropdownMenuItem>
-              )
-            })}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <span className="text-xs text-zinc-500">Кликните по этапу выше, чтобы перевести сделку</span>
       </div>
     </div>
   )

@@ -477,6 +477,15 @@ export type OwnerDashboardDebtor = {
   ordersCount: number
 }
 
+export type OwnerDashboardManager = {
+  id: number
+  name: string
+  role: string
+  openDeals: number
+  salesCount: number
+  salesTotal: number
+}
+
 // Лёгкий обзор для дашборда управляющего (/dashboard). Только агрегаты,
 // без тяжёлых списков из DashboardData.
 export type OwnerDashboardData = {
@@ -506,6 +515,7 @@ export type OwnerDashboardData = {
     debtorOrdersCount: number
     topDebtors: OwnerDashboardDebtor[]
   }
+  managers: OwnerDashboardManager[]
 }
 
 export type HistoryReportData = {

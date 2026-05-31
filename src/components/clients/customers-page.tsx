@@ -236,7 +236,7 @@ export function CustomersPage({
       ) : null}
 
       <Card className="rounded-2xl border-zinc-200 bg-white">
-        <CardContent className="p-0">
+        <CardContent className="px-2 py-1 sm:px-4 sm:py-2">
           {visibleCustomers.length ? (
             <>
               {/* Desktop / tablet wide: table */}

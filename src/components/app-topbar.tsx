@@ -16,8 +16,6 @@ type OpenShift = {
 type AppTopbarProps = {
   title: string
   context?: string
-  userName: string
-  roleLabel: string
   openShift?: OpenShift | null
   canManageShift?: boolean
   canViewShiftDetails?: boolean
@@ -27,8 +25,6 @@ type AppTopbarProps = {
 export function AppTopbar({
   title,
   context,
-  userName,
-  roleLabel,
   openShift,
   canManageShift = false,
   canViewShiftDetails = false,
@@ -55,7 +51,8 @@ export function AppTopbar({
             <span className="hidden sm:inline">{openShift ? "Смена открыта" : "Смена закрыта"}</span>
           </Badge>
           {openShift ? (
-            <div className="hidden max-w-72 truncate text-xs text-muted-foreground 2xl:block">
+            <div className="hidden max-w-80 truncate text-xs text-muted-foreground lg:block">
+              <span className="text-muted-foreground/70">Касса: </span>
               {openShift.cashierName || "Ответственный не указан"}
               {typeof openShift.expectedCash === "number"
                 ? ` · Ожидается: ${formatMoney(openShift.expectedCash)}`
@@ -88,11 +85,6 @@ export function AppTopbar({
             <span className="hidden lg:inline">{openShift ? "Закрыть смену" : "Открыть смену"}</span>
           </Button>
         ) : null}
-
-        <div className="hidden min-w-0 text-right lg:block">
-          <div className="max-w-36 truncate text-sm font-medium">{userName}</div>
-          <div className="text-xs text-muted-foreground">{roleLabel}</div>
-        </div>
       </div>
     </header>
   )

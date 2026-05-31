@@ -22,6 +22,7 @@ export default async function DealsPage() {
       title="Сделки"
       shiftContext={getShiftShellContext(user)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      fullBleed
     >
       <DealsAutoRefresh />
       <DealsKanban

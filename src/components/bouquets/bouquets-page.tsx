@@ -235,18 +235,18 @@ export function BouquetsPage({
         </CardHeader>
         <CardContent className="pt-0">
           <Tabs defaultValue="active" className="gap-3">
-            <TabsList className="h-10 w-full justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit">
+            <TabsList className="h-10 w-full justify-start rounded-xl bg-muted p-1 sm:w-fit">
               <TabsTrigger value="active">
                 Активные
-                <Badge variant="secondary" className="h-5 px-1.5 text-xs">
+                <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-200/80 px-1 text-[11px] font-medium tabular-nums text-zinc-700">
                   {activeBouquets.length}
-                </Badge>
+                </span>
               </TabsTrigger>
               <TabsTrigger value="inactive">
                 Неактивные
-                <Badge variant="secondary" className="h-5 px-1.5 text-xs">
+                <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-200/80 px-1 text-[11px] font-medium tabular-nums text-zinc-700">
                   {inactiveBouquets.length}
-                </Badge>
+                </span>
               </TabsTrigger>
             </TabsList>
             <TabsContent value="active">

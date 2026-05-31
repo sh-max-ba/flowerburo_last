@@ -12,6 +12,7 @@ import {
   PackageCheckIcon,
   ReceiptTextIcon,
   TriangleAlertIcon,
+  UsersIcon,
   WalletIcon,
 } from "lucide-react"
 import type { OwnerDashboardData } from "@/lib/db"
@@ -23,6 +24,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
 type DashboardPageProps = {
   data: OwnerDashboardData
@@ -47,7 +49,7 @@ function formatOpenedAt(value: string | null) {
 }
 
 export function DashboardPage({ data }: DashboardPageProps) {
-  const { shift, today, stock, work, debts } = data
+  const { shift, today, stock, work, debts, managers } = data
 
   return (
     <div className="flex flex-col gap-5">
@@ -61,6 +63,8 @@ export function DashboardPage({ data }: DashboardPageProps) {
         <WorkCard work={work} />
         <DebtsCard debts={debts} />
       </div>
+
+      {managers.length > 0 ? <ManagersCard managers={managers} /> : null}
     </div>
   )
 }
@@ -302,6 +306,50 @@ function DebtsCard({ debts }: { debts: OwnerDashboardData["debts"] }) {
           </>
         )}
         <CardLink href="/clients" label="Все клиенты" />
+      </CardContent>
+    </Card>
+  )
+}
+
+// (e) ПОКАЗАТЕЛИ МЕНЕДЖЕРОВ ---------------------------------------------------
+function ManagersCard({ managers }: { managers: OwnerDashboardData["managers"] }) {
+  return (
+    <Card className="gap-3">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm font-semibold tracking-wide text-zinc-500 uppercase">
+          <UsersIcon className="size-4" />
+          Показатели менеджеров
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="px-2 py-0 sm:px-4">
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Менеджер</TableHead>
+                <TableHead>Роль</TableHead>
+                <TableHead className="text-right">Активные сделки</TableHead>
+                <TableHead className="text-right">Продаж сегодня</TableHead>
+                <TableHead className="text-right">Сумма за сегодня</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {managers.map((manager) => (
+                <TableRow key={manager.id}>
+                  <TableCell className="font-medium text-zinc-950">{manager.name}</TableCell>
+                  <TableCell className="text-zinc-600">
+                    {manager.role === "owner" ? "Управляющий" : "Менеджер"}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{manager.openDeals}</TableCell>
+                  <TableCell className="text-right tabular-nums">{manager.salesCount}</TableCell>
+                  <TableCell className="text-right font-medium tabular-nums text-zinc-950">
+                    {formatMoney(manager.salesTotal)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       </CardContent>
     </Card>
   )

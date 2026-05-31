@@ -625,9 +625,8 @@ function StockSection({
           emptyTitle="Склад пуст"
           filtered={hasActiveFilters}
           onResetFilters={onResetFilters}
-          headers={["Код", "Товар", "Категория", "Остаток", "Цена", ""]}
+          headers={["Товар", "Категория", "Остаток", "Цена", ""]}
           rows={products.map((product) => [
-            product.code,
             <div key="name" className="flex min-w-56 items-center gap-2">
               <ProductThumbnail name={product.name} imagePath={product.imagePath} size="md" />
               <div className="min-w-0">

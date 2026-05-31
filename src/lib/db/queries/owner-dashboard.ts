@@ -132,6 +132,40 @@ export function getOwnerDashboardData(): OwnerDashboardData {
     ordersCount: number
   }>
 
+  // (e) Показатели менеджеров ------------------------------------------------
+  // По каждому активному owner/manager: активные сделки (ответственный) и
+  // продажи за сегодня (кол-во + сумма). Лёгкие сгруппированные подзапросы.
+  const managerRows = client
+    .prepare(
+      `SELECT u.id as id, u.name as name, u.role as role,
+        COALESCE(d.openDeals, 0) as openDeals,
+        COALESCE(s.salesCount, 0) as salesCount,
+        COALESCE(s.salesTotal, 0) as salesTotal
+       FROM users u
+       LEFT JOIN (
+         SELECT responsible_user_id as uid, COUNT(*) as openDeals
+         FROM deals
+         WHERE status = 'open' AND responsible_user_id IS NOT NULL
+         GROUP BY responsible_user_id
+       ) d ON d.uid = u.id
+       LEFT JOIN (
+         SELECT user_id as uid, COUNT(*) as salesCount, COALESCE(SUM(total), 0) as salesTotal
+         FROM sales
+         WHERE DATE(created_at) = DATE('now', 'localtime') AND user_id IS NOT NULL
+         GROUP BY user_id
+       ) s ON s.uid = u.id
+       WHERE COALESCE(u.is_active, 1) = 1 AND u.role IN ('owner', 'manager')
+       ORDER BY salesTotal DESC, openDeals DESC, u.name COLLATE NOCASE`
+    )
+    .all() as Array<{
+    id: number
+    name: string
+    role: string
+    openDeals: number
+    salesCount: number
+    salesTotal: number
+  }>
+
   return {
     shift: {
       isOpen: Boolean(openShiftRow),
@@ -164,5 +198,13 @@ export function getOwnerDashboardData(): OwnerDashboardData {
         ordersCount: numberFromRow(row.ordersCount),
       })),
     },
+    managers: managerRows.map((row) => ({
+      id: numberFromRow(row.id),
+      name: String(row.name ?? ""),
+      role: String(row.role ?? ""),
+      openDeals: numberFromRow(row.openDeals),
+      salesCount: numberFromRow(row.salesCount),
+      salesTotal: numberFromRow(row.salesTotal),
+    })),
   }
 }

@@ -4,7 +4,7 @@ import { useEffect, useState, useTransition } from "react"
 import type React from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { LogOutIcon } from "lucide-react"
+import { Flower2Icon, LogOutIcon } from "lucide-react"
 import { toast } from "sonner"
 import { closeShiftAction, openShiftAction } from "@/app/actions"
 import { logoutAction } from "@/app/auth-actions"
@@ -42,6 +42,8 @@ type CrmShellProps = {
   // Florist с открытой ночной сменой видит «Касса» в сайдбаре. Owner/manager-страницы
   // оставляют значение по умолчанию (false) — для них роль покрывает доступ к sales.
   canAccessCash?: boolean
+  // Растягивает контент на всю ширину без max-w/центрирования (для канбана сделок).
+  fullBleed?: boolean
   children: React.ReactNode
 }
 
@@ -59,6 +61,7 @@ export function CrmShell({
   shiftContext,
   defaultSidebarOpen = true,
   canAccessCash = false,
+  fullBleed = false,
   children,
 }: CrmShellProps) {
   const router = useRouter()
@@ -92,12 +95,13 @@ export function CrmShell({
     <SidebarProvider defaultOpen={defaultSidebarOpen}>
       <Sidebar collapsible="icon">
         <SidebarHeader>
-          <div className="flex h-10 items-center px-2">
-            <div className="min-w-0 group-data-[collapsible=icon]:hidden">
-              <div className="truncate text-sm font-semibold">Flower Buro</div>
+          <div className="flex h-12 items-center gap-2 px-1.5">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-white">
+              <Flower2Icon className="size-5" />
             </div>
-            <div className="hidden size-8 items-center justify-center text-sm font-semibold group-data-[collapsible=icon]:flex">
-              FB
+            <div className="min-w-0 leading-tight group-data-[collapsible=icon]:hidden">
+              <div className="truncate font-heading text-lg font-semibold">FlowerBuro</div>
+              <div className="truncate text-[11px] text-muted-foreground">sellz</div>
             </div>
           </div>
         </SidebarHeader>
@@ -163,15 +167,13 @@ export function CrmShell({
         <AppTopbar
           title={topbarTitle}
           context={topbarContext}
-          userName={user.name}
-          roleLabel={roleLabels[user.role]}
           openShift={shiftContext?.openShift}
           canManageShift={shiftContext?.canManageShift}
           canViewShiftDetails={user.role === "owner"}
           onShiftAction={shiftContext ? () => setShiftSheet(true) : undefined}
         />
         <div className="flex flex-1 flex-col p-4 md:p-5">
-          <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
+          <div className={`flex w-full flex-col gap-5 ${fullBleed ? "" : "mx-auto max-w-[1600px]"}`}>
             {actions ? <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div> : null}
             {children}
           </div>
