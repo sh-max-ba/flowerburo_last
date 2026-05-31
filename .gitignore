@@ -12,6 +12,10 @@
 
 # testing
 /coverage
+/test-results
+/playwright-report
+/blob-report
+/playwright/.cache
 
 # next.js
 /.next/
@@ -19,12 +23,16 @@
 
 # production
 /build
+public/uploads/products/*
+!public/uploads/products/.gitkeep
+public/uploads/bouquets/*
+!public/uploads/bouquets/.gitkeep
 
 # misc
 .DS_Store
 *.pem
 app.db
-app.db.backup
+app.db.backup*
 app.db-shm
 app.db-wal
 
@@ -36,6 +44,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel

@@ -1,9 +1,44 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { canCloseShift, canUseCash, requireRole, requireUser } from "@/lib/auth"
+import { canCloseShift, canUseCash, getCurrentUser } from "@/lib/auth"
+import {
+  addDealItem,
+  addDealBouquet,
+  createCustomer,
+  createDeal,
+  getCustomer,
+  removeDealItem,
+  removeDealItemGroup,
+  updateCustomer,
+  updateDealFields,
+  updateDealItem,
+  updateDealStage,
+} from "@/lib/crm"
+import {
+  connectWazzupWebhookSubscriptions,
+  clearWazzupApiKey,
+  generateAndSaveWazzupCrmKey,
+  getWazzupWebhookSubscriptions,
+  getSecureWazzupWebhookUrlForOwner,
+  linkDealToWazzupByCustomer,
+  listWazzupChannels,
+  maskWazzupWebhookUrl,
+  saveWazzupSettings,
+  sendBouquetToDealChat,
+  syncWazzupAll,
+  syncWazzupContacts,
+  syncWazzupDeals,
+  syncWazzupPipelines,
+  syncWazzupUsers,
+  testLocalWazzupWebhook,
+  testWazzupApiKey,
+  type WazzupWebhookConfig,
+} from "@/lib/wazzup"
 import {
   cancelOrder,
+  cancelStockDocument,
+  acceptDealPayment,
   cashIn,
   cashOut,
   changeUserPassword,
@@ -11,18 +46,35 @@ import {
   closeDeliveredOrder,
   completePickupOrder,
   createOrder,
+  createOrderFromDeal,
   createSale,
+  createBouquetTemplate,
+  createAndPostStockDocument,
   createUser,
+  deleteBouquetTemplate,
   deleteProduct,
   handOrderToCourier,
   markOrderReady,
   openShift,
-  replenishProductStock,
+  applyWarehouseImport,
+  previewWarehouseImport,
+  postStockDocument,
+  saveStockDocumentDraft,
+  clearProductCategory,
+  renameProductCategory,
+  setSupplierActive,
   setUserActive,
   startOrderWork,
+  toggleBouquetTemplateActive,
   updateUser,
+  updateBouquetTemplate,
+  upsertSupplier,
   upsertProduct,
-  writeOffProductStock,
+  type StockDocumentType,
+  type UserRole,
+  type CurrentUser,
+  type CustomerOption,
+  type BouquetTemplateInput,
 } from "@/lib/db"
 
 type ActionResult = {
@@ -31,12 +83,42 @@ type ActionResult = {
   messages?: string[]
 }
 
+type DataActionResult<T> =
+  | {
+      ok: true
+      message: string
+      data: T
+    }
+  | {
+      ok: false
+      message: string
+    }
+
+type ActionPayload = void | string[] | boolean | { acceptedPayment: boolean; paidCourier: boolean }
+type UserAction = (user: CurrentUser) => ActionPayload | Promise<ActionPayload>
+
 function getShiftId(formData: FormData) {
   return Number(String(formData.get("shiftId") ?? "").trim())
 }
 
+function parseBouquetTemplateFormData(formData: FormData): BouquetTemplateInput {
+  const productCodes = formData.getAll("itemProductCode").map((value) => String(value ?? "").trim())
+  const qtyValues = formData.getAll("itemQty")
+
+  return {
+    name: String(formData.get("name") ?? "").trim(),
+    description: String(formData.get("description") ?? "").trim(),
+    price: Number(String(formData.get("price") ?? "0").replace(",", ".")),
+    isActive: formData.get("isActive") === "on" || formData.get("isActive") === "1",
+    items: productCodes.map((productCode, index) => ({
+      productCode,
+      qty: Number(String(qtyValues[index] ?? "0").replace(",", ".")),
+    })),
+  }
+}
+
 async function requireCashAccess() {
-  const user = await requireUser()
+  const user = await requireActionUser()
   if (!(await canUseCash(user))) {
     throw new Error("Недостаточно прав для кассы.")
   }
@@ -44,17 +126,39 @@ async function requireCashAccess() {
   return user
 }
 
+async function requireActionUser() {
+  const user = await getCurrentUser()
+  if (!user) {
+    throw new Error("Сессия истекла. Войдите снова.")
+  }
+
+  return user
+}
+
+async function requireActionRole(roles: UserRole[]) {
+  const user = await requireActionUser()
+  if (!roles.includes(user.role)) {
+    throw new Error("Недостаточно прав.")
+  }
+
+  return user
+}
+
 async function runAction(
-  action: () => void | string[] | boolean | { acceptedPayment: boolean; paidCourier: boolean },
+  action: () => ActionPayload | Promise<ActionPayload>,
   message: string
 ): Promise<ActionResult> {
   try {
-    const result = action()
+    const result = await action()
     revalidatePath("/")
+    revalidatePath("/stock")
     revalidatePath("/cash")
+    revalidatePath("/ready-orders")
     revalidatePath("/orders")
+    revalidatePath("/bouquets")
     revalidatePath("/shifts")
     revalidatePath("/users")
+    revalidatePath("/settings")
     if (Array.isArray(result)) {
       return { ok: true, message: result[0] ?? message, messages: result }
     }
@@ -82,112 +186,640 @@ async function runAction(
   }
 }
 
+async function runRoleAction(
+  roles: UserRole[],
+  action: UserAction,
+  message: string
+) {
+  return runAction(async () => {
+    const user = await requireActionRole(roles)
+    return action(user)
+  }, message)
+}
+
+async function runCashAction(
+  action: UserAction,
+  message: string
+) {
+  return runAction(async () => {
+    const user = await requireCashAccess()
+    return action(user)
+  }, message)
+}
+
+async function runDataAction<T>(
+  roles: UserRole[],
+  fn: (user: CurrentUser) => T | Promise<T>,
+  message: string,
+  errorMessage?: string
+): Promise<DataActionResult<T>> {
+  try {
+    const user = await requireActionRole(roles)
+    const data = await fn(user)
+    return { ok: true, message, data }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : errorMessage ?? "Операция не выполнена.",
+    }
+  }
+}
+
+async function runMessageAction(
+  roles: UserRole[],
+  fn: () => ActionResult | Promise<ActionResult>,
+  errorMessage: string,
+  { revalidate = true }: { revalidate?: boolean } = {}
+): Promise<ActionResult> {
+  try {
+    await requireActionRole(roles)
+    const result = await fn()
+    if (revalidate) {
+      revalidatePath("/settings")
+    }
+    return result
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : errorMessage,
+    }
+  }
+}
+
 export async function saveProductAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => upsertProduct(formData), "Товар сохранен.")
+  return runRoleAction(["owner"], (user) => upsertProduct(formData, user), "Товар сохранен.")
+}
+
+export async function createBouquetTemplateAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], (user) => {
+    createBouquetTemplate(parseBouquetTemplateFormData(formData), user)
+    revalidatePath("/bouquets")
+  }, "Букет сохранен.")
+}
+
+export async function updateBouquetTemplateAction(id: number, formData: FormData) {
+  return runRoleAction(["owner", "manager"], () => {
+    updateBouquetTemplate(id, parseBouquetTemplateFormData(formData))
+    revalidatePath("/bouquets")
+  }, "Букет сохранен.")
+}
+
+export async function toggleBouquetTemplateActiveAction(id: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    const isActive = toggleBouquetTemplateActive(id)
+    revalidatePath("/bouquets")
+    return [isActive ? "Букет включен" : "Букет выключен"]
+  }, "Статус букета изменен.")
+}
+
+export async function deleteBouquetTemplateAction(id: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    deleteBouquetTemplate(id)
+    revalidatePath("/bouquets")
+  }, "Букет выключен.")
+}
+
+export async function saveWazzupSettingsAction(formData: FormData) {
+  return runRoleAction(["owner"], () => {
+    saveWazzupSettings({
+      apiKey: String(formData.get("apiKey") ?? ""),
+      crmKey: String(formData.get("crmKey") ?? ""),
+      isEnabled: formData.get("isEnabled") === "on",
+      webhookAuthRequired: formData.get("webhookAuthRequired") === "on",
+    })
+  }, "Настройки Wazzup сохранены.")
+}
+
+export async function getSecureWazzupWebhookUrlAction(): Promise<DataActionResult<{ url: string }>> {
+  return runDataAction(
+    ["owner"],
+    () => {
+      const url = getSecureWazzupWebhookUrlForOwner()
+      if (!url.includes("?key=")) {
+        throw new Error("CRM key не настроен.")
+      }
+
+      return { url }
+    },
+    "Защищенный webhook URL скопирован.",
+    "Защищенный webhook URL не получен."
+  )
+}
+
+export async function generateWazzupCrmKeyAction() {
+  return runRoleAction(["owner"], () => {
+    generateAndSaveWazzupCrmKey()
+  }, "CRM key обновлен.")
+}
+
+export async function clearWazzupApiKeyAction() {
+  return runRoleAction(["owner"], () => {
+    clearWazzupApiKey()
+  }, "API key очищен.")
+}
+
+export async function testWazzupApiKeyAction(): Promise<ActionResult> {
+  return runMessageAction(["owner"], () => testWazzupApiKey(), "API key не проверен.")
+}
+
+export async function testLocalWazzupWebhookAction(): Promise<ActionResult> {
+  return runMessageAction(["owner"], () => testLocalWazzupWebhook(), "Webhook endpoint не проверен.")
+}
+
+export async function checkWazzupWebhookSubscriptionsAction(): Promise<ActionResult> {
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const config = await getWazzupWebhookSubscriptions()
+      const messages = webhookConfigMessages("Текущие подписки Wazzup", config)
+      return { ok: true, message: messages.join("\n"), messages }
+    },
+    "Подписки Wazzup не проверены."
+  )
+}
+
+export async function connectWazzupWebhookAction(): Promise<ActionResult> {
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await connectWazzupWebhookSubscriptions()
+      const messages = [
+        "Webhook subscriptions обновлены в Wazzup.",
+        ...webhookConfigMessages("До PATCH", result.before),
+        `PATCH: HTTP ${result.patch.status}, body: ${result.patch.body}`,
+        ...webhookConfigMessages("После PATCH", result.after),
+      ]
+      return { ok: true, message: messages.join("\n"), messages }
+    },
+    "Webhook subscriptions не подключены."
+  )
+}
+
+export async function checkWazzupChannelsAction(): Promise<ActionResult> {
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const channels = await listWazzupChannels()
+      const activeWhatsappChannels = channels.filter((channel) => channel.transport === "whatsapp" && channel.state === "active")
+      const messages = channels.length
+        ? channels.map(
+            (channel) =>
+              `${channel.channelId || "-"} · ${channel.transport || "-"} · ${channel.plainId || "-"} · ${
+                channel.state || "-"
+              }${channel.state && channel.state !== "active" ? " · warning: channel is not active" : ""}`
+          )
+        : ["Каналы Wazzup не найдены."]
+      if (activeWhatsappChannels.length > 1) {
+        messages.push("warning: для iframe будет использован первый active whatsapp channel")
+      }
+      return { ok: true, message: messages.join("\n"), messages }
+    },
+    "Каналы Wazzup не проверены.",
+    { revalidate: false }
+  )
+}
+
+export async function syncWazzupUsersAction(): Promise<ActionResult> {
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await syncWazzupUsers()
+      return { ok: result.ok, message: result.message, messages: result.messages }
+    },
+    "Пользователи Wazzup не синхронизированы."
+  )
+}
+
+export async function syncWazzupPipelinesAction(): Promise<ActionResult> {
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await syncWazzupPipelines()
+      return { ok: result.ok, message: result.message, messages: result.messages }
+    },
+    "Воронки Wazzup не синхронизированы."
+  )
+}
+
+export async function syncWazzupContactsAction(): Promise<ActionResult> {
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await syncWazzupContacts()
+      return { ok: result.ok, message: result.message, messages: result.messages }
+    },
+    "Клиенты Wazzup не синхронизированы."
+  )
+}
+
+export async function syncWazzupDealsAction(): Promise<ActionResult> {
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await syncWazzupDeals()
+      return { ok: result.ok, message: result.message, messages: result.messages }
+    },
+    "Сделки Wazzup не синхронизированы."
+  )
+}
+
+export async function syncWazzupAllAction(): Promise<ActionResult> {
+  return runMessageAction(
+    ["owner"],
+    async () => {
+      const result = await syncWazzupAll()
+      return { ok: result.ok, message: result.message, messages: result.messages }
+    },
+    "Полная синхронизация Wazzup не выполнена."
+  )
+}
+
+function webhookConfigMessages(title: string, config: WazzupWebhookConfig) {
+  return [
+    title,
+    `webhooksUri: ${config.webhooksUri ? maskWazzupWebhookUrl(config.webhooksUri) : "-"}`,
+    `targetUri: ${maskWazzupWebhookUrl(getSecureWazzupWebhookUrlForOwner())}`,
+    `messagesAndStatuses: ${String(config.subscriptions.messagesAndStatuses)}`,
+    `contactsAndDealsCreation: ${String(config.subscriptions.contactsAndDealsCreation)}`,
+    `channelsUpdates: ${String(config.subscriptions.channelsUpdates)}`,
+    `templateStatus: ${String(config.subscriptions.templateStatus)}`,
+  ]
+}
+
+function revalidateCrm(customerId?: number | null, dealId?: number | null) {
+  revalidatePath("/clients")
+  revalidatePath("/deals")
+  if (customerId) {
+    revalidatePath(`/clients/${customerId}`)
+  }
+  if (dealId) {
+    revalidatePath(`/deals/${dealId}`)
+  }
+}
+
+export async function linkDealToWazzupByCustomerAction(dealId: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    linkDealToWazzupByCustomer(dealId)
+    revalidateCrm(null, dealId)
+  }, "Wazzup чат привязан к сделке.")
+}
+
+export async function createCustomerAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], () => {
+    const customerId = createCustomer(formData)
+    revalidateCrm(customerId, null)
+  }, "Клиент создан.")
+}
+
+export async function createCashCustomerAction(formData: FormData): Promise<DataActionResult<CustomerOption>> {
+  return runDataAction<CustomerOption>(
+    ["owner", "manager"],
+    () => {
+      const customerId = createCustomer(formData)
+      const customer = getCustomer(customerId)
+      if (!customer) {
+        throw new Error("Клиент создан, но не найден.")
+      }
+
+      revalidateCrm(customerId, null)
+      revalidatePath("/cash")
+      revalidatePath("/orders")
+
+      return {
+        id: customer.id,
+        name: customer.name,
+        phone: customer.phone,
+        defaultDiscountPercent: customer.defaultDiscountPercent,
+      }
+    },
+    "Клиент создан",
+    "Клиент не создан."
+  )
+}
+
+export async function updateCustomerAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], () => {
+    const customerId = Number(String(formData.get("customerId") ?? ""))
+    updateCustomer(formData)
+    revalidateCrm(customerId, null)
+  }, "Клиент сохранен.")
+}
+
+export async function createDealAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], (user) => {
+    const dealId = createDeal(formData, user)
+    revalidateCrm(null, dealId)
+  }, "Сделка создана.")
+}
+
+export async function updateDealFieldsAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], (user) => {
+    const dealId = Number(String(formData.get("dealId") ?? ""))
+    updateDealFields(formData, user)
+    revalidateCrm(Number(String(formData.get("customerId") ?? "")) || null, dealId)
+  }, "Сделка сохранена.")
+}
+
+export async function updateDealStageAction(dealId: number, stageId: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    updateDealStage(dealId, stageId)
+    revalidateCrm(null, dealId)
+  }, "Этап сделки обновлен.")
+}
+
+export async function addDealItemAction(dealId: number, productCode: string) {
+  return runRoleAction(["owner", "manager"], () => {
+    addDealItem(dealId, productCode)
+    revalidateCrm(null, dealId)
+  }, "Позиция добавлена.")
+}
+
+export async function addDealBouquetAction(dealId: number, bouquetId: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    addDealBouquet(dealId, bouquetId)
+    revalidateCrm(null, dealId)
+  }, "Букет добавлен.")
+}
+
+export async function sendBouquetToDealChatAction(dealId: number, bouquetId: number): Promise<ActionResult> {
+  try {
+    const user = await requireActionRole(["owner", "manager"])
+    await sendBouquetToDealChat(dealId, bouquetId, user)
+    revalidateCrm(null, dealId)
+    return { ok: true, message: "Букет отправлен в чат", messages: ["Букет отправлен в чат"] }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Букет не отправлен в чат.",
+    }
+  }
+}
+
+export async function updateDealItemAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], () => {
+    const dealId = Number(String(formData.get("dealId") ?? ""))
+    updateDealItem(formData)
+    revalidateCrm(null, dealId)
+  }, "Позиция сохранена.")
+}
+
+export async function removeDealItemAction(dealId: number, itemId: number) {
+  return runRoleAction(["owner", "manager"], () => {
+    removeDealItem(dealId, itemId)
+    revalidateCrm(null, dealId)
+  }, "Позиция удалена.")
+}
+
+export async function removeDealItemGroupAction(dealId: number, bouquetGroupId: string) {
+  return runRoleAction(["owner", "manager"], () => {
+    removeDealItemGroup(dealId, bouquetGroupId)
+    revalidateCrm(null, dealId)
+  }, "Букет удален.")
+}
+
+export async function createOrderFromDealAction(formData: FormData) {
+  return runRoleAction(["owner", "manager"], (user) => {
+    const dealId = Number(String(formData.get("dealId") ?? ""))
+    const orderId = createOrderFromDeal(formData, user)
+    revalidateCrm(null, dealId)
+    revalidatePath("/orders")
+    revalidatePath(`/orders?orderId=${orderId}`)
+  }, "Заказ создан и отправлен флористам")
+}
+
+export async function acceptDealPaymentAction(formData: FormData) {
+  return runCashAction((user) => {
+    const dealId = Number(String(formData.get("dealId") ?? ""))
+    acceptDealPayment(formData, user)
+    revalidateCrm(null, dealId)
+    revalidatePath("/cash")
+    revalidatePath("/shifts")
+    revalidatePath("/orders")
+  }, "Оплата по сделке принята")
 }
 
 export async function deleteProductAction(code: string) {
-  await requireRole(["owner"])
-  return runAction(() => deleteProduct(code), "Товар удален.")
+  return runRoleAction(["owner"], (user) => deleteProduct(code, user), "Товар удален.")
 }
 
-export async function replenishProductStockAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => replenishProductStock(formData), "Товар пополнен")
+export async function createStockDocumentAction(type: StockDocumentType, formData: FormData) {
+  const message = type === "stock_in" ? "Акт пополнения проведен" : "Акт списания проведен"
+
+  return runRoleAction(
+    ["owner"],
+    (user) => {
+      const documentId = createAndPostStockDocument(formData, type, user)
+      revalidatePath("/stock/acts")
+      revalidatePath(`/stock/acts/${documentId}`)
+      revalidatePath("/history/stock")
+    },
+    message
+  )
 }
 
-export async function writeOffProductStockAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => writeOffProductStock(formData), "Товар списан")
+export async function saveStockDocumentDraftAction(type: StockDocumentType, formData: FormData) {
+  return runRoleAction(
+    ["owner"],
+    (user) => {
+      const documentId = saveStockDocumentDraft(formData, type, user)
+      revalidatePath("/stock/acts")
+      revalidatePath(`/stock/acts/${documentId}`)
+    },
+    "Черновик акта сохранен"
+  )
+}
+
+export async function postStockDocumentAction(documentId: number) {
+  return runRoleAction(
+    ["owner"],
+    (user) => {
+      postStockDocument(documentId, user)
+      revalidatePath("/stock/acts")
+      revalidatePath(`/stock/acts/${documentId}`)
+      revalidatePath("/history/stock")
+    },
+    "Акт склада проведен"
+  )
+}
+
+export async function cancelStockDocumentAction(documentId: number) {
+  return runRoleAction(
+    ["owner"],
+    () => {
+      cancelStockDocument(documentId)
+      revalidatePath("/stock/acts")
+      revalidatePath(`/stock/acts/${documentId}`)
+      revalidatePath("/history/stock")
+    },
+    "Акт склада отменен"
+  )
+}
+
+export async function renameProductCategoryAction(formData: FormData) {
+  return runRoleAction(["owner"], () => {
+    const count = renameProductCategory(formData)
+    return [`Категория переименована. Обновлено товаров: ${count}`]
+  }, "Категория переименована")
+}
+
+export async function clearProductCategoryAction(categoryPath: string) {
+  return runRoleAction(["owner"], () => {
+    const count = clearProductCategory(categoryPath)
+    return [`Категория очищена. Обновлено товаров: ${count}`]
+  }, "Категория очищена")
+}
+
+export async function saveSupplierAction(formData: FormData) {
+  return runRoleAction(["owner"], () => {
+    upsertSupplier(formData)
+    revalidatePath("/settings")
+  }, "Поставщик сохранен")
+}
+
+export async function setSupplierActiveAction(supplierId: number, isActive: boolean) {
+  return runRoleAction(["owner"], () => {
+    setSupplierActive(supplierId, isActive)
+    revalidatePath("/settings")
+  }, isActive ? "Поставщик включен" : "Поставщик отключен")
+}
+
+export async function previewWarehouseImportAction(formData: FormData) {
+  return runDataAction(
+    ["owner"],
+    async (user) => {
+      const file = formData.get("file")
+      if (!(file instanceof File) || file.size === 0) {
+        throw new Error("Выберите XLSX файл.")
+      }
+      if (!file.name.toLowerCase().endsWith(".xlsx")) {
+        throw new Error("Загрузите файл в формате .xlsx.")
+      }
+
+      const preview = previewWarehouseImport({
+        filename: file.name,
+        buffer: await file.arrayBuffer(),
+        currentUser: user,
+      })
+
+      revalidatePath("/stock")
+      revalidatePath("/warehouse/imports")
+
+      return preview
+    },
+    "Предпросмотр импорта сформирован.",
+    "Не удалось прочитать XLSX."
+  )
+}
+
+export async function applyWarehouseImportAction(importId: number) {
+  return runDataAction(
+    ["owner"],
+    (user) => {
+      const preview = applyWarehouseImport(importId, user)
+
+      revalidatePath("/stock")
+      revalidatePath("/warehouse/imports")
+      revalidatePath(`/warehouse/imports/${importId}`)
+
+      return preview
+    },
+    "Импорт применен.",
+    "Импорт не применен."
+  )
 }
 
 export async function createSaleAction(formData: FormData) {
-  await requireCashAccess()
-  return runAction(() => createSale(formData), "Продажа проведена.")
+  return runCashAction((user) => createSale(formData, user), "Продажа проведена.")
 }
 
 export async function openShiftAction(formData: FormData) {
-  const user = await requireRole(["owner", "manager"])
-  return runAction(() => openShift(formData, user), "Смена открыта.")
+  return runAction(async () => {
+    const user = await requireActionRole(["owner", "manager"])
+    openShift(formData, user)
+  }, "Смена открыта.")
 }
 
 export async function closeShiftAction(formData: FormData) {
-  const user = await requireUser()
-  if (!canCloseShift(user, getShiftId(formData))) {
-    return { ok: false, message: "Недостаточно прав для закрытия этой смены." }
-  }
+  return runAction(async () => {
+    const user = await requireActionUser()
+    if (!canCloseShift(user, getShiftId(formData))) {
+      throw new Error("Недостаточно прав для закрытия этой смены.")
+    }
 
-  return runAction(() => closeShift(formData, user), "Смена закрыта.")
+    closeShift(formData, user)
+  }, "Смена закрыта.")
 }
 
 export async function cashInAction(formData: FormData) {
-  await requireCashAccess()
-  return runAction(() => cashIn(formData), "Наличные внесены")
+  return runCashAction((user) => cashIn(formData, user), "Наличные внесены")
 }
 
 export async function cashOutAction(formData: FormData) {
-  await requireCashAccess()
-  return runAction(() => cashOut(formData), "Наличные изъяты")
+  return runCashAction((user) => cashOut(formData, user), "Наличные изъяты")
 }
 
 export async function createOrderAction(formData: FormData) {
-  await requireRole(["owner", "manager"])
-  return runAction(() => createOrder(formData), "Заказ создан и отправлен флористам")
+  return runRoleAction(["owner", "manager"], (user) => createOrder(formData, user), "Заказ создан и отправлен флористам")
 }
 
 export async function startOrderWorkAction(orderId: number) {
-  await requireRole(["owner", "manager", "florist"])
-  return runAction(() => startOrderWork(orderId), "Заказ взят в работу")
+  return runRoleAction(["owner", "manager", "florist"], (user) => startOrderWork(orderId, user), "Заказ взят в работу")
 }
 
 export async function markOrderReadyAction(orderId: number) {
-  await requireRole(["owner", "manager", "florist"])
-  return runAction(() => markOrderReady(orderId), "Букет готов, склад списан")
+  return runRoleAction(["owner", "manager", "florist"], (user) => markOrderReady(orderId, user), "Букет готов, склад списан")
 }
 
 export async function completePickupOrderAction(orderId: number, formData: FormData) {
-  await requireCashAccess()
-  return runAction(() => completePickupOrder(orderId, formData), "Заказ закрыт")
+  return runCashAction((user) => completePickupOrder(orderId, formData, user), "Заказ закрыт")
 }
 
 export async function handOrderToCourierAction(orderId: number, formData: FormData) {
-  await requireCashAccess()
-  return runAction(() => handOrderToCourier(orderId, formData), "Заказ передан курьеру")
+  return runCashAction((user) => handOrderToCourier(orderId, formData, user), "Заказ передан курьеру")
 }
 
 export async function closeDeliveredOrderAction(orderId: number) {
-  await requireCashAccess()
-  return runAction(() => closeDeliveredOrder(orderId), "Заказ закрыт")
+  return runCashAction((user) => closeDeliveredOrder(orderId, user), "Заказ закрыт")
 }
 
 export async function cancelOrderAction(orderId: number) {
-  await requireRole(["owner", "manager", "florist"])
-  return runAction(
-    () =>
-      cancelOrder(orderId)
-        ? ["Букет уже собран, склад автоматически не восстанавливается", "Заказ отменен"]
-        : ["Заказ отменен"],
+  return runRoleAction(
+    ["owner", "manager", "florist"],
+    (user) => {
+      const result = cancelOrder(orderId, user)
+      if (result.dealId) {
+        revalidateCrm(null, result.dealId)
+      }
+      const messages: string[] = []
+      if (result.alreadyBuilt) {
+        messages.push("Букет уже собран, склад автоматически не восстанавливается")
+      }
+      if (result.refunded > 0) {
+        messages.push(`Возврат ${new Intl.NumberFormat("ru-RU").format(result.refunded)} сом проведён`)
+      }
+      messages.push("Заказ отменен")
+      return messages
+    },
     "Заказ отменен"
   )
 }
 
 export async function createUserAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => createUser(formData), "Пользователь создан.")
+  return runRoleAction(["owner"], () => createUser(formData), "Пользователь создан.")
 }
 
 export async function updateUserAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => updateUser(formData), "Пользователь сохранен.")
+  return runRoleAction(["owner"], () => updateUser(formData), "Пользователь сохранен.")
 }
 
 export async function changeUserPasswordAction(formData: FormData) {
-  await requireRole(["owner"])
-  return runAction(() => changeUserPassword(formData), "Пароль изменен.")
+  return runRoleAction(["owner"], () => changeUserPassword(formData), "Пароль изменен.")
 }
 
 export async function setUserActiveAction(userId: number, isActive: boolean) {
-  await requireRole(["owner"])
-  return runAction(() => setUserActive(userId, isActive), isActive ? "Пользователь включен." : "Пользователь отключен.")
+  return runRoleAction(
+    ["owner"],
+    () => setUserActive(userId, isActive),
+    isActive ? "Пользователь включен." : "Пользователь отключен."
+  )
 }

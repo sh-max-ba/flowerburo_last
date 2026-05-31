@@ -1,7 +1,8 @@
 "use client"
 
 import { MinusIcon, PlusIcon, Trash2Icon } from "lucide-react"
-import type { Product } from "@/lib/db"
+import type { BouquetTemplate, Product } from "@/lib/db"
+import { calculateLineTotal, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
 import { cn, formatMoney } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -9,15 +10,23 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { ProductThumbnail } from "@/components/products/product-thumbnail"
 
 export type ProductLineItem = {
+  lineId?: string
   productCode: string
   name: string
   code: string
   article?: string
   categoryPath?: string
+  imagePath?: string
   qty: number
   price: number
+  bouquetId?: number | null
+  bouquetName?: string
+  bouquetGroupId?: string
+  discountType?: DiscountType
+  discountValue?: number
 }
 
 type ProductLineItemsProps = {
@@ -25,19 +34,23 @@ type ProductLineItemsProps = {
   products?: Product[]
   disabled?: boolean
   emptyTitle?: string
-  maxHeightClassName?: string
+  maxHeightPx?: number
   onItemsChange: (items: ProductLineItem[]) => void
 }
 
 export function lineFromProduct(product: Product): ProductLineItem {
   return {
+    lineId: product.code,
     productCode: product.code,
     code: product.code,
     name: product.name,
     article: product.article,
     categoryPath: product.categoryPath,
+    imagePath: product.imagePath,
     qty: 1,
     price: product.salePrice,
+    discountType: "none",
+    discountValue: 0,
   }
 }
 
@@ -46,23 +59,25 @@ export function ProductLineItems({
   products,
   disabled,
   emptyTitle = "Позиции не выбраны",
-  maxHeightClassName = "max-h-[320px]",
+  maxHeightPx = 520,
   onItemsChange,
 }: ProductLineItemsProps) {
   const productByCode = new Map(products?.map((product) => [product.code, product]) ?? [])
+  const scrollHeight = Math.min(items.length * 116 + 48, maxHeightPx)
+  const groupedItems = groupProductLineItems(items)
 
-  function updateItem(productCode: string, patch: Partial<ProductLineItem>) {
+  function updateItem(lineKey: string, patch: Partial<ProductLineItem>) {
     onItemsChange(
-      items.map((item) => (item.productCode === productCode ? { ...item, ...patch } : item))
+      items.map((item) => (getLineKey(item) === lineKey ? { ...item, ...patch } : item))
     )
   }
 
-  function adjustQty(productCode: string, delta: number) {
-    const item = items.find((current) => current.productCode === productCode)
+  function adjustQty(lineKey: string, delta: number) {
+    const item = items.find((current) => getLineKey(current) === lineKey)
     if (!item) {
       return
     }
-    updateItem(productCode, { qty: clampQty(item.qty + delta) })
+    updateItem(lineKey, { qty: clampQty(item.qty + delta) })
   }
 
   if (!items.length) {
@@ -78,38 +93,125 @@ export function ProductLineItems({
 
   return (
     <div className="min-w-0">
-      <ScrollArea className={cn("min-w-0 rounded-lg border bg-background", maxHeightClassName)}>
+      <ScrollArea className="min-w-0 rounded-lg border bg-background" style={{ height: scrollHeight }}>
         <div className="min-w-0 overflow-x-auto">
-          <Table className="min-w-[560px]">
+          <Table className="min-w-[900px]">
           <TableHeader>
             <TableRow>
               <TableHead>Товар</TableHead>
-              <TableHead className="w-32">Qty</TableHead>
+              <TableHead className="w-32">Кол-во</TableHead>
               <TableHead className="w-32">Цена</TableHead>
-              <TableHead className="w-28 text-right">Total</TableHead>
+              <TableHead className="w-56">Скидка</TableHead>
+              <TableHead className="w-32 text-right">До скидки</TableHead>
+              <TableHead className="w-28 text-right">Скидка</TableHead>
+              <TableHead className="w-28 text-right">Итого</TableHead>
               <TableHead className="w-12" />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((item) => {
+            {groupedItems.map((group) => {
+              if (group.type === "bouquet") {
+                const bouquetTotal = group.items.reduce((sum, item) => sum + calculateProductLineTotal(item).total, 0)
+                const bouquetPrice = group.items.reduce((sum, item) => sum + item.price, 0)
+
+                return (
+                  <TableRow key={group.key}>
+                    <TableCell colSpan={7} className="min-w-0">
+                      {group.items.map((item) => (
+                        <LineItemHiddenInputs key={getLineKey(item)} item={item} />
+                      ))}
+                      <div className="flex min-w-0 flex-col gap-2">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                              <Badge variant="secondary">Букет</Badge>
+                              <div className="truncate font-medium">
+                                {group.bouquetName || "Букет"}
+                              </div>
+                            </div>
+                            <div className="mt-1 text-sm text-muted-foreground">
+                              Цена букета {formatMoney(bouquetPrice)}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-xs text-muted-foreground">Итого</div>
+                            <div className="font-semibold">{formatMoney(bouquetTotal)}</div>
+                          </div>
+                        </div>
+                        <div className="grid gap-1 rounded-lg bg-muted/50 p-2 text-sm">
+                          {group.items.map((item) => {
+                            const product = productByCode.get(item.productCode)
+                            return (
+                              <div key={getLineKey(item)} className="flex items-center justify-between gap-3">
+                                <span className="flex min-w-0 items-center gap-2">
+                                  <ProductThumbnail
+                                    name={item.name}
+                                    imagePath={product?.imagePath ?? item.imagePath}
+                                    size="xs"
+                                  />
+                                  <span className="min-w-0 truncate">{item.name}</span>
+                                </span>
+                                <span className="shrink-0 text-muted-foreground">
+                                  {formatNumber(item.qty)} шт
+                                  {product ? ` · остаток ${formatNumber(product.stock)}` : ""}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right align-top">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        disabled={disabled}
+                        onClick={() =>
+                          onItemsChange(items.filter((current) => current.bouquetGroupId !== group.key))
+                        }
+                      >
+                        <Trash2Icon />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                )
+              }
+
+              const item = group.item
               const product = productByCode.get(item.productCode)
               const qtyInvalid = item.qty < 1 || !Number.isInteger(item.qty)
               const priceInvalid = item.price < 0
+              const discountType = normalizeDiscountType(item.discountType)
+              const discountValue = Number.isFinite(item.discountValue) ? Number(item.discountValue) : 0
+              const discountInvalid = discountValue < 0
+              const totals = calculateProductLineTotal({ ...item, discountType, discountValue })
+              const lineKey = getLineKey(item)
               return (
-                <TableRow key={item.productCode}>
+                <TableRow key={lineKey}>
                   <TableCell className="min-w-0">
                     <input type="hidden" name="itemProductCode" value={item.productCode} />
-                    <div className="max-w-64 min-w-0">
-                      <div className="line-clamp-2 font-medium leading-snug">{item.name}</div>
-                      <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
-                        <span>{item.code}</span>
-                        {item.article && <span className="truncate">арт. {item.article}</span>}
-                      </div>
-                      {product && (
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          Доступно {formatNumber(product.available)}
+                    <input type="hidden" name="itemBouquetId" value="" />
+                    <input type="hidden" name="itemBouquetName" value="" />
+                    <input type="hidden" name="itemBouquetGroupId" value="" />
+                    <div className="flex max-w-72 min-w-0 items-start gap-2">
+                      <ProductThumbnail
+                        name={item.name}
+                        imagePath={product?.imagePath ?? item.imagePath}
+                        size="sm"
+                      />
+                      <div className="min-w-0">
+                        <div className="line-clamp-2 font-medium leading-snug">{item.name}</div>
+                        <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                          <span>{item.code}</span>
+                          {item.article && <span className="truncate">арт. {item.article}</span>}
                         </div>
-                      )}
+                        {product && (
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Остаток {formatNumber(product.stock)}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -119,7 +221,7 @@ export function ProductLineItems({
                         variant="outline"
                         size="icon-sm"
                         disabled={disabled}
-                        onClick={() => adjustQty(item.productCode, -1)}
+                        onClick={() => adjustQty(lineKey, -1)}
                       >
                         <MinusIcon />
                       </Button>
@@ -133,7 +235,7 @@ export function ProductLineItems({
                         aria-invalid={qtyInvalid}
                         className={cn("w-20 text-right", qtyInvalid && "border-destructive")}
                         onChange={(event) =>
-                          updateItem(item.productCode, { qty: Number(event.target.value) })
+                          updateItem(lineKey, { qty: Number(event.target.value) })
                         }
                         required
                       />
@@ -142,12 +244,12 @@ export function ProductLineItems({
                         variant="outline"
                         size="icon-sm"
                         disabled={disabled}
-                        onClick={() => adjustQty(item.productCode, 1)}
+                        onClick={() => adjustQty(lineKey, 1)}
                       >
                         <PlusIcon />
                       </Button>
                     </div>
-                    {qtyInvalid && <div className="mt-1 text-xs text-destructive">Qty от 1</div>}
+                    {qtyInvalid && <div className="mt-1 text-xs text-destructive">Кол-во от 1</div>}
                   </TableCell>
                   <TableCell>
                     <Input
@@ -160,7 +262,7 @@ export function ProductLineItems({
                       aria-invalid={priceInvalid}
                       className={cn("w-24 text-right", priceInvalid && "border-destructive")}
                       onChange={(event) =>
-                        updateItem(item.productCode, { price: Number(event.target.value) })
+                        updateItem(lineKey, { price: Number(event.target.value) })
                       }
                       required
                     />
@@ -169,8 +271,49 @@ export function ProductLineItems({
                     )}
                     {priceInvalid && <div className="mt-1 text-xs text-destructive">Цена не ниже 0</div>}
                   </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <select
+                        name="itemDiscountType"
+                        className="h-8 w-28 rounded-lg border border-input bg-background px-2 text-sm"
+                        value={discountType}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          updateItem(lineKey, {
+                            discountType: normalizeDiscountType(event.target.value),
+                            discountValue: event.target.value === "none" ? 0 : discountValue,
+                          })
+                        }
+                      >
+                        <option value="none">Без скидки</option>
+                        <option value="percent">%</option>
+                        <option value="amount">Сумма</option>
+                      </select>
+                      <Input
+                        name="itemDiscountValue"
+                        type="number"
+                        step="1"
+                        min="0"
+                        value={Number.isFinite(discountValue) ? discountValue : ""}
+                        disabled={disabled}
+                        readOnly={discountType === "none"}
+                        aria-invalid={discountInvalid}
+                        className={cn("w-24 text-right", discountInvalid && "border-destructive")}
+                        onChange={(event) =>
+                          updateItem(lineKey, { discountValue: Number(event.target.value) || 0 })
+                        }
+                      />
+                    </div>
+                    {discountInvalid && <div className="mt-1 text-xs text-destructive">Скидка не ниже 0</div>}
+                  </TableCell>
                   <TableCell className="text-right font-medium">
-                    {formatMoney(item.qty * item.price)}
+                    {formatMoney(totals.totalBeforeDiscount)}
+                  </TableCell>
+                  <TableCell className="text-right text-muted-foreground">
+                    {formatMoney(totals.discountAmount)}
+                  </TableCell>
+                  <TableCell className="text-right font-medium">
+                    {formatMoney(totals.total)}
                   </TableCell>
                   <TableCell className="text-right">
                     <Button
@@ -179,7 +322,7 @@ export function ProductLineItems({
                       size="icon-sm"
                       disabled={disabled}
                       onClick={() =>
-                        onItemsChange(items.filter((current) => current.productCode !== item.productCode))
+                        onItemsChange(items.filter((current) => getLineKey(current) !== lineKey))
                       }
                     >
                       <Trash2Icon />
@@ -197,18 +340,49 @@ export function ProductLineItems({
 }
 
 export function addProductToLineItems(items: ProductLineItem[], product: Product, qty = 1) {
-  const existing = items.find((item) => item.productCode === product.code)
+  const existing = items.find((item) => item.productCode === product.code && !item.bouquetGroupId)
   if (existing) {
-    return items.map((item) =>
-      item.productCode === product.code ? { ...item, qty: clampQty(item.qty + qty) } : item
-    )
+    const updated = { ...existing, qty: clampQty(existing.qty + qty) }
+    return [
+      updated,
+      ...items.filter((item) => getLineKey(item) !== getLineKey(existing)),
+    ]
   }
 
-  return [...items, lineFromProduct(product)]
+  return [{ ...lineFromProduct(product), qty: clampQty(qty) }, ...items]
+}
+
+export function addBouquetToLineItems(items: ProductLineItem[], bouquet: BouquetTemplate) {
+  const bouquetGroupId = createBouquetGroupId(bouquet.id)
+  const bouquetItems = bouquet.items.map((item, index) => ({
+    lineId: `${bouquetGroupId}:${item.productCode}`,
+    productCode: item.productCode,
+    code: item.productCode,
+    name: item.productName,
+    imagePath: item.imagePath,
+    qty: clampQty(item.qty),
+    price: index === 0 ? bouquet.price : 0,
+    bouquetId: bouquet.id,
+    bouquetName: bouquet.name,
+    bouquetGroupId,
+    discountType: "none" as DiscountType,
+    discountValue: 0,
+  }))
+
+  return [...bouquetItems, ...items]
 }
 
 export function getLineItemsTotal(items: ProductLineItem[]) {
-  return items.reduce((sum, item) => sum + item.qty * item.price, 0)
+  return items.reduce((sum, item) => sum + calculateProductLineTotal(item).total, 0)
+}
+
+export function getProductLineItemsForTotals(items: ProductLineItem[]) {
+  return items.map((item) => ({
+    qty: getPricingQty(item),
+    price: item.price,
+    discountType: item.discountType,
+    discountValue: item.discountValue,
+  }))
 }
 
 export function validateProductLineItems(items: ProductLineItem[]) {
@@ -228,6 +402,10 @@ export function validateProductLineItems(items: ProductLineItem[]) {
     return "Цена не может быть отрицательной."
   }
 
+  if (items.some((item) => Number(item.discountValue ?? 0) < 0)) {
+    return "Скидка не может быть отрицательной."
+  }
+
   return null
 }
 
@@ -237,6 +415,83 @@ function clampQty(value: number) {
   }
 
   return Math.max(1, Math.round(value))
+}
+
+function LineItemHiddenInputs({
+  item,
+  includeEditableFields = true,
+}: {
+  item: ProductLineItem
+  includeEditableFields?: boolean
+}) {
+  return (
+    <>
+      <input type="hidden" name="itemProductCode" value={item.productCode} />
+      {includeEditableFields && (
+        <>
+          <input type="hidden" name="itemQty" value={item.qty} />
+          <input type="hidden" name="itemPrice" value={item.price} />
+          <input type="hidden" name="itemDiscountType" value={item.discountType ?? "none"} />
+          <input type="hidden" name="itemDiscountValue" value={item.discountValue ?? 0} />
+        </>
+      )}
+      <input type="hidden" name="itemBouquetId" value={item.bouquetId ?? ""} />
+      <input type="hidden" name="itemBouquetName" value={item.bouquetName ?? ""} />
+      <input type="hidden" name="itemBouquetGroupId" value={item.bouquetGroupId ?? ""} />
+    </>
+  )
+}
+
+function groupProductLineItems(items: ProductLineItem[]) {
+  const groups: Array<
+    | { type: "single"; key: string; item: ProductLineItem }
+    | { type: "bouquet"; key: string; bouquetName: string; items: ProductLineItem[] }
+  > = []
+  const bouquetGroups = new Map<string, Extract<(typeof groups)[number], { type: "bouquet" }>>()
+
+  for (const item of items) {
+    const bouquetGroupId = item.bouquetGroupId
+    if (!bouquetGroupId) {
+      groups.push({ type: "single", key: getLineKey(item), item })
+      continue
+    }
+
+    let group = bouquetGroups.get(bouquetGroupId)
+    if (!group) {
+      group = {
+        type: "bouquet",
+        key: bouquetGroupId,
+        bouquetName: item.bouquetName ?? "",
+        items: [],
+      }
+      bouquetGroups.set(bouquetGroupId, group)
+      groups.push(group)
+    }
+    group.items.push(item)
+  }
+
+  return groups
+}
+
+function getLineKey(item: ProductLineItem) {
+  return item.lineId || (item.bouquetGroupId ? `${item.bouquetGroupId}:${item.productCode}` : item.productCode)
+}
+
+function calculateProductLineTotal(item: ProductLineItem) {
+  return calculateLineTotal({
+    qty: getPricingQty(item),
+    price: item.price,
+    discountType: item.discountType,
+    discountValue: item.discountValue,
+  })
+}
+
+function getPricingQty(item: ProductLineItem) {
+  return item.bouquetGroupId && item.price > 0 ? 1 : item.qty
+}
+
+function createBouquetGroupId(bouquetId: number) {
+  return `bouquet-${bouquetId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 function formatNumber(value: number) {
