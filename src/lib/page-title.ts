@@ -3,6 +3,7 @@
 // но иной заголовок) и "/cash" (куда normalizePath сводит "/"). Осиротевший
 // "/history" удалён вместе с маршрутом (канон — "/history/stock").
 const routeTitles: Record<string, string> = {
+  "/dashboard": "Дашборд",
   "/cash": "Касса",
   "/orders": "Стол заказов",
   "/ready-orders": "Готовые заказы",
@@ -18,6 +19,7 @@ const routeTitles: Record<string, string> = {
 }
 
 const routeContexts: Record<string, string> = {
+  "/dashboard": "Сводка по магазину",
   "/cash": "Продажи и заказы смены",
   "/orders": "Заказы в работе",
   "/ready-orders": "Выдача и доставка",
@@ -51,7 +53,7 @@ export function getPageTitle(pathname: string) {
     return "Акт склада"
   }
 
-  return routeTitles[path] ?? "Flower Buro"
+  return routeTitles[path] ?? "FlowerBuro | sellz"
 }
 
 export function getPageContext(pathname: string) {

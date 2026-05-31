@@ -221,11 +221,7 @@ export function BouquetsPage({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-zinc-950">Букеты</h1>
-          <p className="text-sm text-muted-foreground">Шаблоны сборки из товаров склада</p>
-        </div>
+      <div className="flex justify-end">
         <Button type="button" onClick={openCreate}>
           <PlusIcon data-icon="inline-start" />
           Новый букет

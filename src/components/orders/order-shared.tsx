@@ -272,7 +272,9 @@ export function OrderToolbar({
           onValueChange={(value) => onSortModeChange((value ?? "default") as OrderSortMode)}
         >
           <SelectTrigger size="sm" className="min-w-44">
-            <SelectValue placeholder="Сортировка" />
+            <SelectValue placeholder="Сортировка">
+              {(value) => orderSortOptions.find((option) => option.value === value)?.label ?? "По умолчанию"}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectGroup>

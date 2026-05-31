@@ -1,6 +1,7 @@
 import type { UserRole } from "@/lib/db"
 
 export type NavSectionId =
+  | "dashboard"
   | "deals"
   | "clients"
   | "bouquets"
@@ -12,8 +13,9 @@ export type NavSectionId =
   | "shifts"
   | "history"
   | "settings"
+  | "users"
 
-export type NavGroupId = "crm" | "work" | "stock" | "admin"
+export type NavGroupId = "overview" | "crm" | "work" | "stock" | "admin"
 
 export type NavItem = {
   id: NavSectionId
@@ -35,6 +37,7 @@ export type NavGroup = {
 // florist получает только "orders"; доступ к "sales" (Касса) — особый случай,
 // разрешён лишь при открытой ночной смене (canAccessCash) — см. getNavForRole.
 export const NAV: NavItem[] = [
+  { id: "dashboard", label: "Дашборд", href: "/dashboard", iconKey: "dashboard", roles: ["owner"] },
   { id: "deals", label: "Сделки", href: "/deals", iconKey: "deals", roles: ["owner", "manager"] },
   { id: "clients", label: "Клиенты", href: "/clients", iconKey: "clients", roles: ["owner", "manager"] },
   { id: "bouquets", label: "Букеты", href: "/bouquets", iconKey: "bouquets", roles: ["owner", "manager"] },
@@ -46,13 +49,15 @@ export const NAV: NavItem[] = [
   { id: "history", label: "История", href: "/history/stock", iconKey: "history", roles: ["owner"] },
   { id: "shifts", label: "Смены", href: "/shifts", iconKey: "shifts", roles: ["owner"] },
   { id: "settings", label: "Настройки", href: "/settings", iconKey: "settings", roles: ["owner"] },
+  { id: "users", label: "Пользователи", href: "/users", iconKey: "users", roles: ["owner"] },
 ]
 
 export const NAV_GROUPS: NavGroup[] = [
+  { id: "overview", label: "Обзор", ids: ["dashboard"] },
   { id: "crm", label: "CRM", ids: ["deals", "clients", "bouquets"] },
   { id: "work", label: "Работа", ids: ["sales", "orders", "ready-orders"] },
   { id: "stock", label: "Склад", ids: ["stock", "stock-acts", "history"] },
-  { id: "admin", label: "Администрирование", ids: ["shifts", "settings"] },
+  { id: "admin", label: "Администрирование", ids: ["shifts", "settings", "users"] },
 ]
 
 export const NAV_BY_ID: Record<NavSectionId, NavItem> = NAV.reduce(

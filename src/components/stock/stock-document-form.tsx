@@ -224,7 +224,7 @@ export function StockDocumentForm({
                 <input type="hidden" name="supplierId" value={supplierId === "none" ? "" : supplierId} />
                 <Select value={supplierId} onValueChange={(value) => setSupplierId(value ?? "none")}>
                   <SelectTrigger id="edit-stock-document-supplier" className="w-full" disabled={pending}>
-                    <SelectValue placeholder="Без поставщика" />
+                    <SelectValue placeholder="Без поставщика">{(value) => (!value || value === "none" ? "Без поставщика" : suppliers.find((s) => String(s.id) === String(value))?.name ?? "Без поставщика")}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>

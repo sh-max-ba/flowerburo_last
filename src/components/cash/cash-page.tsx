@@ -6,8 +6,10 @@ import {
   AlertTriangleIcon,
   Loader2Icon,
   MinusCircleIcon,
+  PercentIcon,
   PlusCircleIcon,
   ReceiptTextIcon,
+  XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import {
@@ -356,7 +358,11 @@ function QuickSaleForm({
   const [saleDiscountType, setSaleDiscountType] = useState<DiscountType>("none")
   const [saleDiscountValue, setSaleDiscountValue] = useState(0)
   const [saleDiscountTouched, setSaleDiscountTouched] = useState(false)
+  const [saleDiscountOpen, setSaleDiscountOpen] = useState(false)
   const [receivedInput, setReceivedInput] = useState("")
+  // Скидка на чек редка — показываем секцию свёрнутой, но раскрываем, если скидка уже задана.
+  const saleDiscountActive = saleDiscountType !== "none"
+  const showSaleDiscount = saleDiscountOpen || saleDiscountActive
   const availableCustomers = useMemo(
     () => createdCustomers.reduce((current, customer) => upsertCustomerOption(current, customer), customers),
     [createdCustomers, customers]
@@ -416,7 +422,15 @@ function QuickSaleForm({
     setSaleDiscountType("none")
     setSaleDiscountValue(0)
     setSaleDiscountTouched(false)
+    setSaleDiscountOpen(false)
     setReceivedInput("")
+  }
+
+  function clearSaleDiscount() {
+    setSaleDiscountTouched(true)
+    setSaleDiscountType("none")
+    setSaleDiscountValue(0)
+    setSaleDiscountOpen(false)
   }
 
   function applySaleCustomer(customer: CustomerOption | null) {
@@ -507,133 +521,161 @@ function QuickSaleForm({
                 <CardTitle className="font-semibold text-zinc-950">Оплата</CardTitle>
                 <CardDescription className="text-zinc-500">Клиент, скидка и итог к чеку</CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-col gap-4">
-                <FieldGroup>
+              <CardContent className="flex flex-col gap-0 p-0">
+                {/* Прокручиваемое тело панели: клиент → способ оплаты → итог → получено. */}
+                <div className="flex flex-col gap-4 px-5 pt-0 pb-4">
                   <input type="hidden" name="customerId" value={selectedCustomer?.id ?? ""} />
                   <input type="hidden" name="saleDiscountType" value={saleDiscountType} />
                   <input type="hidden" name="saleDiscountValue" value={saleDiscountValue} />
-                  <Field>
-                    <FieldLabel>Клиент</FieldLabel>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <CustomerCombobox
-                        customers={availableCustomers}
-                        value={selectedCustomerId}
-                        disabled={disabled || pending}
-                        onChange={applySaleCustomer}
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        disabled={disabled || pending}
-                        onClick={() => setCustomerDialogOpen(true)}
-                      >
-                        Новый клиент
-                      </Button>
-                    </div>
-                    {selectedCustomer?.defaultDiscountPercent ? (
-                      <Badge className="w-fit bg-emerald-100 text-emerald-900">
-                        Скидка клиента {selectedCustomer.defaultDiscountPercent}%
-                      </Badge>
-                    ) : selectedCustomer ? (
-                      <Badge variant="outline" className="w-fit">Без персональной скидки</Badge>
-                    ) : (
-                      <FieldDescription>Продажу можно провести без привязки к клиенту.</FieldDescription>
-                    )}
-                    {selectedCustomer && (
-                      <div className="flex items-center justify-between gap-2 text-xs text-zinc-500">
-                        <span className="min-w-0 truncate">{selectedCustomer.phone || "Телефон не указан"}</span>
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel>Клиент</FieldLabel>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <CustomerCombobox
+                          customers={availableCustomers}
+                          value={selectedCustomerId}
+                          disabled={disabled || pending}
+                          onChange={applySaleCustomer}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={disabled || pending}
+                          onClick={() => setCustomerDialogOpen(true)}
+                        >
+                          Новый клиент
+                        </Button>
+                      </div>
+                      {selectedCustomer?.defaultDiscountPercent ? (
+                        <Badge className="w-fit bg-emerald-100 text-emerald-900">
+                          Скидка клиента {selectedCustomer.defaultDiscountPercent}%
+                        </Badge>
+                      ) : selectedCustomer ? (
+                        <Badge variant="outline" className="w-fit">Без персональной скидки</Badge>
+                      ) : (
+                        <FieldDescription>Продажу можно провести без привязки к клиенту.</FieldDescription>
+                      )}
+                      {selectedCustomer && (
+                        <div className="flex items-center justify-between gap-2 text-xs text-zinc-500">
+                          <span className="min-w-0 truncate">{selectedCustomer.phone || "Телефон не указан"}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={disabled || pending}
+                            onClick={() => applySaleCustomer(null)}
+                          >
+                            Очистить
+                          </Button>
+                        </div>
+                      )}
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="salePaymentMethod">Способ оплаты</FieldLabel>
+                      <input type="hidden" name="paymentMethod" value={paymentMethod} />
+                      <Select value={paymentMethod} onValueChange={(value) => setPaymentMethod(value ?? "cash")}>
+                        <SelectTrigger id="salePaymentMethod" className="w-full" disabled={disabled || pending}>
+                          <SelectValue placeholder="Способ оплаты">{(value) => getPaymentMethodLabel(String(value ?? "cash"))}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent align="start">
+                          <SelectGroup>
+                            {paymentMethodOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </FieldGroup>
+
+                  {/* Скидка на чек: свёрнута по умолчанию, раскрывается кнопкой или когда скидка уже задана. */}
+                  {showSaleDiscount ? (
+                    <FieldSet className="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <FieldLegend className="m-0">Скидка на чек</FieldLegend>
                         <Button
                           type="button"
                           variant="ghost"
                           size="sm"
+                          className="h-7 px-2 text-xs text-zinc-500"
                           disabled={disabled || pending}
-                          onClick={() => applySaleCustomer(null)}
+                          onClick={clearSaleDiscount}
                         >
-                          Очистить
+                          <XIcon data-icon="inline-start" />
+                          Убрать
                         </Button>
                       </div>
-                    )}
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="salePaymentMethod">Оплата</FieldLabel>
-                    <input type="hidden" name="paymentMethod" value={paymentMethod} />
-                    <Select value={paymentMethod} onValueChange={(value) => setPaymentMethod(value ?? "cash")}>
-                      <SelectTrigger id="salePaymentMethod" className="w-full" disabled={disabled || pending}>
-                        <SelectValue placeholder="Способ оплаты">{(value) => getPaymentMethodLabel(String(value ?? "cash"))}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent align="start">
-                        <SelectGroup>
-                          {paymentMethodOptions.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="sale-note">Комментарий</FieldLabel>
-                    <Textarea id="sale-note" name="note" disabled={disabled || pending} />
-                  </Field>
-                </FieldGroup>
-                <FieldSet>
-                  <FieldLegend>Скидка на чек</FieldLegend>
-                  <div className="flex items-end gap-2">
-                    <Field>
-                      <FieldLabel htmlFor="saleDiscountType">Тип</FieldLabel>
-                      <Select value={saleDiscountType} onValueChange={(value) => handleSaleDiscountTypeChange(value ?? "none")}>
-                        <SelectTrigger id="saleDiscountType" className="w-32" disabled={disabled || pending}>
-                          <SelectValue>{(value) => discountTypeLabel(String(value ?? "none"))}</SelectValue>
-                        </SelectTrigger>
-                        <SelectContent align="start">
-                          <SelectItem value="none">Без скидки</SelectItem>
-                          <SelectItem value="percent">%</SelectItem>
-                          <SelectItem value="amount">Сумма</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor="saleDiscountValue">Значение</FieldLabel>
-                      <Input
-                        id="saleDiscountValue"
-                        type="number"
-                        step="1"
-                        min="0"
-                        value={saleDiscountValue}
-                        disabled={disabled || pending}
-                        readOnly={saleDiscountType === "none"}
-                        className="w-24 text-right"
-                        onChange={(event) => {
-                          setSaleDiscountTouched(true)
-                          setSaleDiscountValue(Number(event.target.value) || 0)
-                        }}
-                      />
-                    </Field>
+                      <div className="flex items-end gap-2">
+                        <Field>
+                          <FieldLabel htmlFor="saleDiscountType">Тип</FieldLabel>
+                          <Select value={saleDiscountType} onValueChange={(value) => handleSaleDiscountTypeChange(value ?? "none")}>
+                            <SelectTrigger id="saleDiscountType" className="w-32" disabled={disabled || pending}>
+                              <SelectValue>{(value) => discountTypeLabel(String(value ?? "none"))}</SelectValue>
+                            </SelectTrigger>
+                            <SelectContent align="start">
+                              <SelectItem value="none">Без скидки</SelectItem>
+                              <SelectItem value="percent">%</SelectItem>
+                              <SelectItem value="amount">Сумма</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="saleDiscountValue">Значение</FieldLabel>
+                          <Input
+                            id="saleDiscountValue"
+                            type="number"
+                            step="1"
+                            min="0"
+                            value={saleDiscountValue}
+                            disabled={disabled || pending}
+                            readOnly={saleDiscountType === "none"}
+                            className="w-24 text-right"
+                            onChange={(event) => {
+                              setSaleDiscountTouched(true)
+                              setSaleDiscountValue(Number(event.target.value) || 0)
+                            }}
+                          />
+                        </Field>
+                      </div>
+                    </FieldSet>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-fit text-zinc-600"
+                      disabled={disabled || pending}
+                      onClick={() => {
+                        setSaleDiscountOpen(true)
+                        if (saleDiscountType === "none") {
+                          handleSaleDiscountTypeChange("percent")
+                        }
+                      }}
+                    >
+                      <PercentIcon data-icon="inline-start" />
+                      Скидка на чек
+                    </Button>
+                  )}
+
+                  {cartShortageCount > 0 && (
+                    <Alert variant="destructive">
+                      <AlertTriangleIcon />
+                      <AlertTitle>Не хватает остатков</AlertTitle>
+                      <AlertDescription>
+                        {cartShortageCount === 1
+                          ? "По одной позиции склад уйдёт в минус. Проверьте корзину."
+                          : `По ${cartShortageCount} позициям склад уйдёт в минус. Проверьте корзину.`}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                  <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+                    <Info label="Товары до скидки" value={formatMoney(saleTotals.itemsTotalBeforeDiscount)} />
+                    <Info label="Скидка по позициям" value={formatMoney(saleTotals.itemsDiscountTotal)} />
+                    <Info label="Скидка на чек" value={formatMoney(saleTotals.dealDiscountAmount)} />
                   </div>
-                </FieldSet>
-                {cartShortageCount > 0 && (
-                  <Alert variant="destructive">
-                    <AlertTriangleIcon />
-                    <AlertTitle>Не хватает остатков</AlertTitle>
-                    <AlertDescription>
-                      {cartShortageCount === 1
-                        ? "По одной позиции склад уйдёт в минус. Проверьте корзину."
-                        : `По ${cartShortageCount} позициям склад уйдёт в минус. Проверьте корзину.`}
-                    </AlertDescription>
-                  </Alert>
-                )}
-                <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-                  <Info label="Товары до скидки" value={formatMoney(saleTotals.itemsTotalBeforeDiscount)} />
-                  <Info label="Скидка по позициям" value={formatMoney(saleTotals.itemsDiscountTotal)} />
-                  <Info label="Скидка на чек" value={formatMoney(saleTotals.dealDiscountAmount)} />
-                  <div>
-                    <div className="text-xs text-zinc-500">Итого после скидок</div>
-                    <div className="text-3xl font-semibold text-zinc-950">{formatMoney(saleTotal)}</div>
-                  </div>
-                </div>
-                {isCash && (
-                  <div className="grid gap-3 rounded-xl border border-zinc-200 bg-white p-4">
+                  {isCash && (
                     <Field>
                       <FieldLabel htmlFor="sale-received">Получено от клиента</FieldLabel>
                       <Input
@@ -649,63 +691,84 @@ function QuickSaleForm({
                         onChange={(event) => setReceivedInput(event.target.value)}
                         onFocus={(event) => event.currentTarget.select()}
                       />
+                      {!hasReceived && (
+                        <FieldDescription>Введите полученную сумму, чтобы рассчитать сдачу.</FieldDescription>
+                      )}
                     </Field>
-                    {hasReceived ? (
+                  )}
+
+                  {/* Комментарий — необязательное поле, де-акцентировано и убрано вниз. */}
+                  <Field>
+                    <FieldLabel htmlFor="sale-note" className="text-xs font-normal text-zinc-500">
+                      Комментарий (необязательно)
+                    </FieldLabel>
+                    <Textarea id="sale-note" name="note" rows={2} className="text-sm" disabled={disabled || pending} />
+                  </Field>
+                </div>
+
+                {/* Закреплённый итог + действие: всегда на виду, пока остальная панель прокручивается. */}
+                <div className="sticky bottom-0 z-10 -mb-4 flex flex-col gap-3 rounded-b-2xl border-t border-zinc-200 bg-white/95 px-5 pt-4 pb-4 backdrop-blur supports-[backdrop-filter]:bg-white/80">
+                  <div className="flex items-end justify-between gap-3">
+                    <div>
+                      <div className="text-xs text-zinc-500">Итого к оплате</div>
+                      <div className="text-2xl font-semibold leading-tight text-zinc-950">{formatMoney(saleTotal)}</div>
+                    </div>
+                    {isCash && hasReceived && (
                       cashShort ? (
-                        <div className="rounded-lg bg-destructive/10 px-3 py-2">
-                          <div className="flex items-center gap-1.5 text-xs font-medium text-destructive">
+                        <div className="text-right">
+                          <div className="flex items-center justify-end gap-1 text-xs font-medium text-destructive">
                             <AlertTriangleIcon className="size-3.5" />
                             Не хватает
                           </div>
-                          <div className="text-3xl font-semibold text-destructive">{formatMoney(shortfall)}</div>
-                          <div className="mt-0.5 text-xs text-destructive/80">
-                            Полученной суммы недостаточно — продажу нельзя провести.
-                          </div>
+                          <div className="text-2xl font-semibold leading-tight text-destructive">{formatMoney(shortfall)}</div>
                         </div>
                       ) : (
-                        <div>
+                        <div className="text-right">
                           <div className="text-xs text-zinc-500">Сдача</div>
-                          <div className="text-4xl font-bold text-zinc-950">{formatMoney(changeDue)}</div>
+                          <div className="text-2xl font-bold leading-tight text-zinc-950">{formatMoney(changeDue)}</div>
                         </div>
                       )
-                    ) : (
-                      <FieldDescription>Введите полученную сумму, чтобы рассчитать сдачу.</FieldDescription>
                     )}
                   </div>
-                )}
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <span tabIndex={completeDisabled ? 0 : -1} className="block w-full" />
-                      }
-                    >
-                      <Button
-                        className="h-10 w-full bg-zinc-950 text-white hover:bg-zinc-800"
-                        type="submit"
-                        disabled={completeDisabled}
+                  {isCash && hasReceived && cashShort && (
+                    <div className="text-xs text-destructive/80">
+                      Полученной суммы недостаточно — продажу нельзя провести.
+                    </div>
+                  )}
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span tabIndex={completeDisabled ? 0 : -1} className="block w-full" />
+                        }
                       >
-                        {pending ? (
-                          <>
-                            <Loader2Icon data-icon="inline-start" className="animate-spin" />
-                            Проведение…
-                          </>
-                        ) : (
-                          <>
-                            <ReceiptTextIcon data-icon="inline-start" />
-                            Провести продажу
-                          </>
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    {completeDisabledReason && !pending && (
-                      <TooltipContent>{completeDisabledReason}</TooltipContent>
-                    )}
-                  </Tooltip>
-                </TooltipProvider>
-                {completeDisabledReason && !pending && (
-                  <FieldDescription className="text-center">{completeDisabledReason}</FieldDescription>
-                )}
+                        <Button
+                          className="h-11 w-full bg-zinc-950 text-white hover:bg-zinc-800"
+                          type="submit"
+                          disabled={completeDisabled}
+                        >
+                          {pending ? (
+                            <>
+                              <Loader2Icon data-icon="inline-start" className="animate-spin" />
+                              Проведение…
+                            </>
+                          ) : (
+                            <>
+                              <ReceiptTextIcon data-icon="inline-start" />
+                              Провести продажу
+                            </>
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      {completeDisabledReason && !pending && (
+                        <TooltipContent>{completeDisabledReason}</TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
+                  {completeDisabledReason && !pending && (
+                    <FieldDescription className="text-center">{completeDisabledReason}</FieldDescription>
+                  )}
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -850,6 +913,7 @@ function NewOrderForm({
   const [orderDiscountType, setOrderDiscountType] = useState<DiscountType>("none")
   const [orderDiscountValue, setOrderDiscountValue] = useState(0)
   const [orderDiscountTouched, setOrderDiscountTouched] = useState(false)
+  const [orderDiscountOpen, setOrderDiscountOpen] = useState(false)
   const [dueDate, setDueDate] = useState("")
   const [dueTime, setDueTime] = useState("")
   const [address, setAddress] = useState("")
@@ -878,6 +942,9 @@ function NewOrderForm({
         ? "Предоплата выше итога"
         : null
   const orderDisabled = pending || Boolean(orderDisabledReason)
+  // Скидка на чек редка — секция свёрнута по умолчанию, раскрывается при наличии скидки.
+  const orderDiscountActive = orderDiscountType !== "none"
+  const showOrderDiscount = orderDiscountOpen || orderDiscountActive
 
   function addProduct(product: Product) {
     setItems((current) => addProductToLineItems(current, product))
@@ -896,6 +963,7 @@ function NewOrderForm({
     setOrderDiscountType("none")
     setOrderDiscountValue(0)
     setOrderDiscountTouched(false)
+    setOrderDiscountOpen(false)
     setDueDate("")
     setDueTime("")
     setDeliveryType("pickup")
@@ -934,6 +1002,13 @@ function NewOrderForm({
     if (nextType === "none") {
       setOrderDiscountValue(0)
     }
+  }
+
+  function clearOrderDiscount() {
+    setOrderDiscountTouched(true)
+    setOrderDiscountType("none")
+    setOrderDiscountValue(0)
+    setOrderDiscountOpen(false)
   }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -1166,146 +1241,189 @@ function NewOrderForm({
             <CardTitle className="font-semibold text-zinc-950">Заказ</CardTitle>
             <CardDescription className="text-zinc-500">Доставка, оплата и итог</CardDescription>
           </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col gap-5">
-            <FieldSet>
-              <FieldLegend>Доставка</FieldLegend>
-              <div className="text-xs text-zinc-500">
-                Доставка прибавляется к итогу заказа. Выплата курьеру не входит в total и проводится отдельной кассовой операцией.
-              </div>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
-                <Field>
-                  <FieldLabel htmlFor="deliveryPrice">Платит клиент за доставку</FieldLabel>
-                  <Input
-                    id="deliveryPrice"
-                    name="deliveryPrice"
-                    type="number"
-                    step="1"
-                    min="0"
-                    value={deliveryPrice}
-                    onChange={(event) => setDeliveryPrice(Number(event.target.value) || 0)}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="courierPayout">Выдать курьеру из кассы</FieldLabel>
-                  <Input
-                    id="courierPayout"
-                    name="courierPayout"
-                    type="number"
-                    step="1"
-                    min="0"
-                    value={courierPayout}
-                    onChange={(event) => setCourierPayout(Number(event.target.value) || 0)}
-                  />
-                </Field>
-              </div>
-            </FieldSet>
-
-            <FieldSet>
-              <FieldLegend>Оплата</FieldLegend>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
-                <Field>
-                  <FieldLabel htmlFor="prepaid">Предоплата</FieldLabel>
-                  <Input
-                    id="prepaid"
-                    name="prepaid"
-                    type="number"
-                    step="1"
-                    min="0"
-                    value={prepaid}
-                    onChange={(event) => setPrepaid(Number(event.target.value) || 0)}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="orderPaymentMethod">Способ оплаты</FieldLabel>
-                  <input type="hidden" name="paymentMethod" value={paymentMethod} />
-                  <Select value={paymentMethod} onValueChange={(value) => setPaymentMethod(value ?? "cash")}>
-                    <SelectTrigger id="orderPaymentMethod" className="w-full" disabled={pending}>
-                      <SelectValue placeholder="Способ оплаты">{(value) => getPaymentMethodLabel(String(value ?? "cash"))}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent align="start">
-                      <SelectGroup>
-                        {paymentMethodOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-              </div>
-              <div className="grid gap-3 rounded-lg border bg-background p-3">
-                <div className="text-sm font-medium">Скидка на чек</div>
-                <div className="flex items-end gap-2">
+          <CardContent className="flex flex-col gap-0 p-0">
+            {/* Прокручиваемое тело: доставка → оплата → скидка → разбивка итога. */}
+            <div className="flex flex-col gap-5 px-5 pt-0 pb-4">
+              <FieldSet>
+                <FieldLegend>Доставка</FieldLegend>
+                <div className="text-xs text-zinc-500">
+                  Доставка прибавляется к итогу заказа. Выплата курьеру не входит в total и проводится отдельной кассовой операцией.
+                </div>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
                   <Field>
-                    <FieldLabel htmlFor="orderDiscountType">Тип</FieldLabel>
-                    <Select value={orderDiscountType} onValueChange={(value) => handleOrderDiscountTypeChange(value ?? "none")}>
-                      <SelectTrigger id="orderDiscountType" className="w-32" disabled={pending}>
-                        <SelectValue>{(value) => discountTypeLabel(String(value ?? "none"))}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent align="start">
-                        <SelectItem value="none">Без скидки</SelectItem>
-                        <SelectItem value="percent">%</SelectItem>
-                        <SelectItem value="amount">Сумма</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="orderDiscountValue">Значение</FieldLabel>
+                    <FieldLabel htmlFor="deliveryPrice">Платит клиент за доставку</FieldLabel>
                     <Input
-                      id="orderDiscountValue"
+                      id="deliveryPrice"
+                      name="deliveryPrice"
                       type="number"
                       step="1"
                       min="0"
-                      value={orderDiscountValue}
-                      disabled={pending}
-                      readOnly={orderDiscountType === "none"}
-                      className="w-24 text-right"
-                      onChange={(event) => {
-                        setOrderDiscountTouched(true)
-                        setOrderDiscountValue(Number(event.target.value) || 0)
-                      }}
+                      value={deliveryPrice}
+                      onChange={(event) => setDeliveryPrice(Number(event.target.value) || 0)}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="courierPayout">Выдать курьеру из кассы</FieldLabel>
+                    <Input
+                      id="courierPayout"
+                      name="courierPayout"
+                      type="number"
+                      step="1"
+                      min="0"
+                      value={courierPayout}
+                      onChange={(event) => setCourierPayout(Number(event.target.value) || 0)}
                     />
                   </Field>
                 </div>
-              </div>
-              {needsShift && (
-                <Alert>
-                  <AlertTriangleIcon />
-                  <AlertTitle>Откройте смену для кассовых операций</AlertTitle>
-                  <AlertDescription>Предоплату можно принять только при открытой смене.</AlertDescription>
-                </Alert>
-              )}
-              {prepaidTooHigh && (
-                <Alert className="border-amber-200 bg-amber-50 text-amber-950">
-                  <AlertTriangleIcon />
-                  <AlertTitle>Предоплата выше итога</AlertTitle>
-                  <AlertDescription>Уменьшите предоплату до суммы заказа после скидок.</AlertDescription>
-                </Alert>
-              )}
-              <div className="grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
-                <Info label="До скидки" value={formatMoney(orderTotals.itemsTotalBeforeDiscount)} />
-                <Info label="Скидка по позициям" value={formatMoney(orderTotals.itemsDiscountTotal)} />
-                <Info label="Скидка на чек" value={formatMoney(orderTotals.dealDiscountAmount)} />
-                <Info label="Доставка" value={formatMoney(deliveryPrice)} />
-                <Info label="Итого после скидок" value={formatMoney(total)} />
+              </FieldSet>
+
+              <FieldSet>
+                <FieldLegend>Оплата</FieldLegend>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+                  <Field>
+                    <FieldLabel htmlFor="prepaid">Предоплата</FieldLabel>
+                    <Input
+                      id="prepaid"
+                      name="prepaid"
+                      type="number"
+                      step="1"
+                      min="0"
+                      value={prepaid}
+                      onChange={(event) => setPrepaid(Number(event.target.value) || 0)}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="orderPaymentMethod">Способ оплаты</FieldLabel>
+                    <input type="hidden" name="paymentMethod" value={paymentMethod} />
+                    <Select value={paymentMethod} onValueChange={(value) => setPaymentMethod(value ?? "cash")}>
+                      <SelectTrigger id="orderPaymentMethod" className="w-full" disabled={pending}>
+                        <SelectValue placeholder="Способ оплаты">{(value) => getPaymentMethodLabel(String(value ?? "cash"))}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent align="start">
+                        <SelectGroup>
+                          {paymentMethodOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
+                {/* Скидка на чек: свёрнута по умолчанию, раскрывается кнопкой или при наличии скидки. */}
+                {showOrderDiscount ? (
+                  <div className="grid gap-3 rounded-lg border bg-background p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-medium">Скидка на чек</div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs text-zinc-500"
+                        disabled={pending}
+                        onClick={clearOrderDiscount}
+                      >
+                        <XIcon data-icon="inline-start" />
+                        Убрать
+                      </Button>
+                    </div>
+                    <div className="flex items-end gap-2">
+                      <Field>
+                        <FieldLabel htmlFor="orderDiscountType">Тип</FieldLabel>
+                        <Select value={orderDiscountType} onValueChange={(value) => handleOrderDiscountTypeChange(value ?? "none")}>
+                          <SelectTrigger id="orderDiscountType" className="w-32" disabled={pending}>
+                            <SelectValue>{(value) => discountTypeLabel(String(value ?? "none"))}</SelectValue>
+                          </SelectTrigger>
+                          <SelectContent align="start">
+                            <SelectItem value="none">Без скидки</SelectItem>
+                            <SelectItem value="percent">%</SelectItem>
+                            <SelectItem value="amount">Сумма</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="orderDiscountValue">Значение</FieldLabel>
+                        <Input
+                          id="orderDiscountValue"
+                          type="number"
+                          step="1"
+                          min="0"
+                          value={orderDiscountValue}
+                          disabled={pending}
+                          readOnly={orderDiscountType === "none"}
+                          className="w-24 text-right"
+                          onChange={(event) => {
+                            setOrderDiscountTouched(true)
+                            setOrderDiscountValue(Number(event.target.value) || 0)
+                          }}
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-fit text-zinc-600"
+                    disabled={pending}
+                    onClick={() => {
+                      setOrderDiscountOpen(true)
+                      if (orderDiscountType === "none") {
+                        handleOrderDiscountTypeChange("percent")
+                      }
+                    }}
+                  >
+                    <PercentIcon data-icon="inline-start" />
+                    Скидка на чек
+                  </Button>
+                )}
+                {needsShift && (
+                  <Alert>
+                    <AlertTriangleIcon />
+                    <AlertTitle>Откройте смену для кассовых операций</AlertTitle>
+                    <AlertDescription>Предоплату можно принять только при открытой смене.</AlertDescription>
+                  </Alert>
+                )}
+                {prepaidTooHigh && (
+                  <Alert className="border-amber-200 bg-amber-50 text-amber-950">
+                    <AlertTriangleIcon />
+                    <AlertTitle>Предоплата выше итога</AlertTitle>
+                    <AlertDescription>Уменьшите предоплату до суммы заказа после скидок.</AlertDescription>
+                  </Alert>
+                )}
+                <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+                  <Info label="До скидки" value={formatMoney(orderTotals.itemsTotalBeforeDiscount)} />
+                  <Info label="Скидка по позициям" value={formatMoney(orderTotals.itemsDiscountTotal)} />
+                  <Info label="Скидка на чек" value={formatMoney(orderTotals.dealDiscountAmount)} />
+                  <Info label="Доставка" value={formatMoney(deliveryPrice)} />
+                  <Info label="Предоплата" value={formatMoney(prepaid)} />
+                </div>
+              </FieldSet>
+            </div>
+
+            {/* Закреплённый итог + остаток + действие: всегда на виду при прокрутке панели. */}
+            <div className="sticky bottom-0 z-10 -mb-4 flex flex-col gap-3 rounded-b-2xl border-t border-zinc-200 bg-white/95 px-5 pt-4 pb-4 backdrop-blur supports-[backdrop-filter]:bg-white/80">
+              <div className="flex items-end justify-between gap-3">
                 <div>
+                  <div className="text-xs text-zinc-500">Итого после скидок</div>
+                  <div className="text-2xl font-semibold leading-tight text-zinc-950">{formatMoney(total)}</div>
+                </div>
+                <div className="text-right">
                   <div className="text-xs text-zinc-500">Остаток</div>
-                  <div className={cn("text-3xl font-semibold", balance > 0 ? "text-amber-800" : "text-emerald-800")}>
+                  <div className={cn("text-2xl font-semibold leading-tight", balance > 0 ? "text-amber-800" : "text-emerald-800")}>
                     {formatMoney(balance)}
                   </div>
                 </div>
               </div>
-            </FieldSet>
-
-            <div className="mt-auto border-t pt-3">
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger
                     render={<span tabIndex={orderDisabled ? 0 : -1} className="block w-full" />}
                   >
                     <Button
-                      className="h-10 w-full bg-zinc-950 text-white hover:bg-zinc-800"
+                      className="h-11 w-full bg-zinc-950 text-white hover:bg-zinc-800"
                       type="submit"
                       disabled={orderDisabled}
                     >
@@ -1325,7 +1443,7 @@ function NewOrderForm({
                 </Tooltip>
               </TooltipProvider>
               {orderDisabledReason && !pending && (
-                <FieldDescription className="mt-2 text-center">{orderDisabledReason}</FieldDescription>
+                <FieldDescription className="text-center">{orderDisabledReason}</FieldDescription>
               )}
             </div>
           </CardContent>

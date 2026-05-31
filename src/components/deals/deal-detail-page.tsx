@@ -77,6 +77,16 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 type SaveStatus = "saved" | "saving" | "error"
 type DealTab = "overview" | "composition" | "payment" | "bouquets"
 
+// Whether the Wazzup chat column should occupy its half of the deal layout.
+// "checking" — we don't yet know (keep the split so the frame can show its own skeleton);
+// "available" — integration is on (chat is open OR offers a link action) → show the chat column;
+// "unavailable" — integration is off / not configured → collapse the column and give the form full width.
+type ChatLayout = "checking" | "available" | "unavailable"
+
+// Per-deal iframe statuses. We only need the discriminant to decide the layout; the
+// WazzupDealFrame itself owns the full rendering of each state.
+type WazzupIframeStatus = "ok" | "not_configured" | "disabled" | "no_chat" | "error"
+
 type DealDraft = {
   customerId: string
   title: string
@@ -174,6 +184,10 @@ export function DealDetailPage({
   const [bouquetSearch, setBouquetSearch] = useState("")
   const [sendingBouquetId, setSendingBouquetId] = useState<number | null>(null)
   const [actionPending, startActionTransition] = useTransition()
+  // Drives the responsive layout: when the Wazzup integration is off/unconfigured we drop the
+  // empty chat column and let the deal form use the full width. The WazzupDealFrame still owns
+  // rendering its own states; this only governs whether its column is present.
+  const [chatLayout, setChatLayout] = useState<ChatLayout>("checking")
   const currentDealIdRef = useRef(deal.id)
   const fieldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fieldSaveChainRef = useRef<Promise<void>>(Promise.resolve())
@@ -224,6 +238,26 @@ export function DealDetailPage({
       itemTimers.forEach((timer) => clearTimeout(timer))
     }
   }, [])
+
+  // Resolve whether to keep the Wazzup chat column. We ask the same lightweight iframe endpoint the
+  // frame uses; only a globally disabled / not-configured integration collapses the column. A
+  // per-deal "no_chat" still shows the column (it offers a "link by customer" action), and transient
+  // errors keep the split so a retry stays visible.
+  useEffect(() => {
+    let isActive = true
+    setChatLayout("checking")
+
+    void resolveChatStatus(deal.id).then((status) => {
+      if (!isActive) {
+        return
+      }
+      setChatLayout(status === "disabled" || status === "not_configured" ? "unavailable" : "available")
+    })
+
+    return () => {
+      isActive = false
+    }
+  }, [deal.id])
 
   const customersById = useMemo(() => new Map(customers.map((customer) => [String(customer.id), customer])), [customers])
   const stagesById = useMemo(() => new Map(stages.map((stage) => [String(stage.id), stage])), [stages])
@@ -766,19 +800,36 @@ export function DealDetailPage({
     })
   }
 
+  const showChatColumn = chatLayout !== "unavailable"
+
   return (
     <div className="h-auto overflow-visible xl:h-[calc(100vh-10rem)] xl:overflow-hidden">
-      <div className="grid h-full grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)] 2xl:grid-cols-[minmax(640px,1fr)_minmax(560px,680px)]">
-        <section className="min-w-0 xl:min-h-0">
-          <div className="h-full min-h-[520px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
-            <WazzupDealFrame
-              key={`${deal.id}:${deal.wazzupChatType}:${deal.wazzupChatId}:${deal.wazzupChannelId}`}
-              dealId={deal.id}
-            />
-          </div>
-        </section>
+      <div
+        className={cn(
+          "grid h-full grid-cols-1 gap-5",
+          showChatColumn
+            ? "xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)] 2xl:grid-cols-[minmax(640px,1fr)_minmax(560px,680px)]"
+            : "xl:grid-cols-1"
+        )}
+      >
+        {showChatColumn && (
+          <section className="min-w-0 xl:min-h-0">
+            <div className="h-full min-h-[520px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+              <WazzupDealFrame
+                key={`${deal.id}:${deal.wazzupChatType}:${deal.wazzupChatId}:${deal.wazzupChannelId}`}
+                dealId={deal.id}
+              />
+            </div>
+          </section>
+        )}
 
-        <aside className="flex min-w-0 flex-col gap-4 overflow-visible xl:min-h-0 xl:overflow-hidden xl:pr-2">
+        <aside
+          className={cn(
+            "flex min-w-0 flex-col gap-4 overflow-visible xl:min-h-0 xl:overflow-hidden xl:pr-2",
+            // Full width without the chat column: keep the form readable with a centered max width.
+            !showChatColumn && "xl:mx-auto xl:w-full xl:max-w-4xl"
+          )}
+        >
           <div className="sticky top-0 z-20 grid gap-3 overflow-visible rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
@@ -2372,4 +2423,24 @@ function toDatetimeLocal(value: string) {
   }
 
   return date.toISOString().slice(0, 16)
+}
+
+// Asks the iframe endpoint only for its status discriminant so the page can decide the layout.
+// On any failure we fall back to "error" → the chat column stays (the frame surfaces a retry).
+async function resolveChatStatus(dealId: number): Promise<WazzupIframeStatus> {
+  try {
+    const response = await fetch(`/api/wazzup/iframe?dealId=${dealId}`, { cache: "no-store" })
+    const data = (await response.json()) as { status?: string }
+    switch (data.status) {
+      case "ok":
+      case "disabled":
+      case "not_configured":
+      case "no_chat":
+        return data.status
+      default:
+        return "error"
+    }
+  } catch {
+    return "error"
+  }
 }

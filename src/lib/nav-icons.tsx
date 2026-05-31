@@ -6,18 +6,21 @@ import {
   ClipboardListIcon,
   Flower2Icon,
   HistoryIcon,
+  LayoutDashboardIcon,
   PackageCheckIcon,
   ReceiptTextIcon,
   ScrollTextIcon,
   SettingsIcon,
   TagsIcon,
   UserCheckIcon,
+  UsersIcon,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
 // Иконки навигации, привязанные к iconKey из @/lib/nav. Вынесены в отдельный
 // "use client"-модуль, чтобы nav.ts оставался серверно-нейтральным (без lucide).
 export const NAV_ICONS: Record<string, LucideIcon> = {
+  dashboard: LayoutDashboardIcon,
   deals: TagsIcon,
   clients: UserCheckIcon,
   bouquets: Flower2Icon,
@@ -29,4 +32,5 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   history: HistoryIcon,
   shifts: BanknoteIcon,
   settings: SettingsIcon,
+  users: UsersIcon,
 }

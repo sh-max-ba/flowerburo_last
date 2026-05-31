@@ -25,6 +25,10 @@ export function getDefaultPathForRole(role: UserRole) {
     return "/orders"
   }
 
+  if (role === "owner") {
+    return "/dashboard"
+  }
+
   return "/cash"
 }
 

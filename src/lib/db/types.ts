@@ -470,6 +470,44 @@ export type DashboardData = {
   }
 }
 
+export type OwnerDashboardDebtor = {
+  customerId: number | null
+  customerName: string
+  amount: number
+  ordersCount: number
+}
+
+// Лёгкий обзор для дашборда управляющего (/dashboard). Только агрегаты,
+// без тяжёлых списков из DashboardData.
+export type OwnerDashboardData = {
+  shift: {
+    isOpen: boolean
+    openingCash: number
+    cashierName: string
+    openedAt: string | null
+    type: "day" | "night"
+    expectedCash: number
+  }
+  today: {
+    salesTotal: number
+    salesCount: number
+  }
+  stock: {
+    lowStockCount: number
+    negativeStockCount: number
+  }
+  work: {
+    incomingDealsCount: number
+    readyOrdersCount: number
+    overdueOrdersCount: number
+  }
+  debts: {
+    totalOutstanding: number
+    debtorOrdersCount: number
+    topDebtors: OwnerDashboardDebtor[]
+  }
+}
+
 export type HistoryReportData = {
   operations: Movement[]
   stockMovements: Movement[]

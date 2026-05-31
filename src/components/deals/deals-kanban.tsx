@@ -447,7 +447,7 @@ export function DealsKanban({
                 <FieldContent>
                   <Select name="customerId" defaultValue="">
                     <SelectTrigger className="h-10 w-full">
-                      <SelectValue placeholder="Выбрать клиента" />
+                      <SelectValue placeholder="Выбрать клиента">{(value) => customers.find((c) => String(c.id) === String(value))?.name ?? "Без выбранного клиента"}</SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="">Без выбранного клиента</SelectItem>
@@ -486,7 +486,7 @@ export function DealsKanban({
                   <FieldContent>
                     <Select name="stageId" defaultValue={String(stages[0]?.id ?? "")}>
                       <SelectTrigger className="h-10 w-full">
-                        <SelectValue />
+                        <SelectValue>{(value) => stages.find((s) => String(s.id) === String(value))?.name ?? ""}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {stages.map((stage) => (
@@ -503,7 +503,7 @@ export function DealsKanban({
                   <FieldContent>
                     <Select name="responsibleUserId" defaultValue={String(currentUser.id)}>
                       <SelectTrigger className="h-10 w-full">
-                        <SelectValue />
+                        <SelectValue>{(value) => users.find((u) => String(u.id) === String(value))?.name ?? ""}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {users.map((user) => (
@@ -528,7 +528,7 @@ export function DealsKanban({
                   <FieldContent>
                     <Select name="source" defaultValue="manual">
                       <SelectTrigger className="h-10 w-full">
-                        <SelectValue />
+                        <SelectValue>{(value) => sourceLabel(String(value ?? "manual"))}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="manual">Ручная</SelectItem>

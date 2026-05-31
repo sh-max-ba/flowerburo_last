@@ -21,6 +21,8 @@ export type {
   Order,
   OrderItem,
   OrderStatus,
+  OwnerDashboardData,
+  OwnerDashboardDebtor,
   PaymentMethod,
   Product,
   Sale,
@@ -139,6 +141,9 @@ export {
   getDashboardData,
   getReadyOrdersActionCount,
 } from "./db/queries/dashboard"
+export {
+  getOwnerDashboardData,
+} from "./db/queries/owner-dashboard"
 export {
   createSale,
 } from "./db/queries/sales"
