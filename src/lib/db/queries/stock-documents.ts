@@ -7,13 +7,20 @@ import { getProduct, recordStockMovement } from "../ledger"
 import { mapStockDocument, mapStockDocumentItem } from "../mappers"
 import { clean, parsePositiveInteger, parseStockDocumentType } from "../form-parsers"
 
-export function listStockDocuments(filters?: { type?: string; status?: string; query?: string }) {
+export function listStockDocuments(filters?: {
+  type?: string
+  status?: string
+  query?: string
+  supplierId?: string
+}) {
   const client = db()
   const conditions: string[] = []
-  const params: Record<string, string> = {}
+  const params: Record<string, string | number> = {}
   const type = filters?.type && filters.type !== "all" ? filters.type : ""
   const status = filters?.status && filters.status !== "all" ? filters.status : ""
   const query = String(filters?.query ?? "").trim()
+  const supplierId =
+    filters?.supplierId && filters.supplierId !== "all" ? Number(filters.supplierId) : 0
 
   if (type) {
     conditions.push("stock_documents.type = @type")
@@ -22,6 +29,10 @@ export function listStockDocuments(filters?: { type?: string; status?: string; q
   if (status) {
     conditions.push("stock_documents.status = @status")
     params.status = status
+  }
+  if (supplierId) {
+    conditions.push("stock_documents.supplier_id = @supplierId")
+    params.supplierId = supplierId
   }
   if (query) {
     conditions.push("(stock_documents.number LIKE @query OR stock_documents.comment LIKE @query)")

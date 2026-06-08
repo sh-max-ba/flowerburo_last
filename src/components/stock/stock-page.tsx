@@ -3,7 +3,7 @@
 import type React from "react"
 import { useMemo, useState, useTransition } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import {
   AlertOctagonIcon,
   AlertTriangleIcon,
@@ -210,6 +210,10 @@ export function StockPage({
   suppliers: Supplier[]
 }) {
   const router = useRouter()
+  // Ссылка со списка актов (/stock?new=stock_in|stock_out) открывает диалог создания —
+  // читаем параметр при монтировании и инициализируем им состояние диалога (без эффекта).
+  const searchParams = useSearchParams()
+  const requestedDocType = searchParams.get("new")
   const [view, setView] = useState<"active" | "archived">("active")
   const [query, setQuery] = useState("")
   const [categoryFilter, setCategoryFilter] = useState(allCategoriesValue)
@@ -220,7 +224,9 @@ export function StockPage({
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [archivingProduct, setArchivingProduct] = useState<Product | null>(null)
   const [deletingProduct, setDeletingProduct] = useState<Product | null>(null)
-  const [stockDocumentType, setStockDocumentType] = useState<StockDocumentDialogType>(null)
+  const [stockDocumentType, setStockDocumentType] = useState<StockDocumentDialogType>(
+    requestedDocType === "stock_in" || requestedDocType === "stock_out" ? requestedDocType : null
+  )
   const [warehouseImportOpen, setWarehouseImportOpen] = useState(false)
   const [warehouseImportPreview, setWarehouseImportPreview] = useState<WarehouseImportPreview | null>(null)
   const [isPending, startTransition] = useTransition()

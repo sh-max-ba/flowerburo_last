@@ -8,19 +8,12 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
-import { listStockDocuments, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
+import { listStockDocuments, listSuppliers, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
 import { stockDocumentStatusLabel, stockDocumentTypeLabel } from "@/lib/labels"
+import { StockActsSupplierFilter } from "@/components/stock/stock-acts-supplier-filter"
 
 export const dynamic = "force-dynamic"
 
@@ -34,20 +27,26 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
   const type = String(params.type ?? "all")
   const status = String(params.status ?? "all")
   const query = String(params.query ?? "")
-  const documents = listStockDocuments({ type, status, query })
+  const supplier = String(params.supplier ?? "all")
+  const documents = listStockDocuments({ type, status, query, supplierId: supplier })
+  const suppliers = listSuppliers()
 
-  function buildHref(overrides: { status?: string; type?: string }) {
+  function buildHref(overrides: { status?: string; type?: string; supplier?: string }) {
     const next = new URLSearchParams()
     if (query) {
       next.set("query", query)
     }
     const nextStatus = overrides.status ?? status
     const nextType = overrides.type ?? type
+    const nextSupplier = overrides.supplier ?? supplier
     if (nextStatus && nextStatus !== "all") {
       next.set("status", nextStatus)
     }
     if (nextType && nextType !== "all") {
       next.set("type", nextType)
+    }
+    if (nextSupplier && nextSupplier !== "all") {
+      next.set("supplier", nextSupplier)
     }
     const queryString = next.toString()
     return queryString ? `/stock/acts?${queryString}` : "/stock/acts"
@@ -73,61 +72,40 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
       shiftContext={getShiftShellContext(user)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
     >
-      <div className="flex justify-end">
-        <Link href="/stock" className={buttonVariants({ variant: "outline", size: "sm" })}>
-          Вернуться на склад
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Link href="/stock?new=stock_in" className={buttonVariants({ size: "sm" })}>
+          <PlusCircleIcon data-icon="inline-start" />
+          Пополнение
+        </Link>
+        <Link href="/stock?new=stock_out" className={buttonVariants({ variant: "outline", size: "sm" })}>
+          <MinusCircleIcon data-icon="inline-start" />
+          Списание
+        </Link>
+        <Link href="/stock" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+          На склад
         </Link>
       </div>
 
         <Card className="rounded-2xl border bg-white">
           <CardContent className="flex flex-col gap-4">
-            <form className="grid gap-2 md:grid-cols-[1fr_220px_220px_auto]">
-              <Input name="query" defaultValue={query} placeholder="Номер или комментарий" />
-              <Select
-                name="type"
-                defaultValue={type}
-                items={[
-                  { label: "Все типы", value: "all" },
-                  { label: "Пополнение", value: "stock_in" },
-                  { label: "Списание", value: "stock_out" },
-                ]}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Тип" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value="all">Все типы</SelectItem>
-                    <SelectItem value="stock_in">Пополнение</SelectItem>
-                    <SelectItem value="stock_out">Списание</SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <Select
-                name="status"
-                defaultValue={status}
-                items={[
-                  { label: "Все статусы", value: "all" },
-                  { label: "Черновик", value: "draft" },
-                  { label: "Проведен", value: "posted" },
-                  { label: "Отменен", value: "cancelled" },
-                ]}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Статус" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value="all">Все статусы</SelectItem>
-                    <SelectItem value="draft">Черновик</SelectItem>
-                    <SelectItem value="posted">Проведен</SelectItem>
-                    <SelectItem value="cancelled">Отменен</SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <button className={buttonVariants()} type="submit">
-                Применить
+            <form className="flex flex-wrap items-center gap-2">
+              <input type="hidden" name="type" value={type} />
+              <input type="hidden" name="status" value={status} />
+              {supplier !== "all" && <input type="hidden" name="supplier" value={supplier} />}
+              <Input
+                name="query"
+                defaultValue={query}
+                placeholder="Номер или комментарий"
+                className="h-9 w-full sm:max-w-xs"
+              />
+              <button className={buttonVariants({ size: "sm" })} type="submit">
+                Найти
               </button>
+              {(query || type !== "all" || status !== "all" || supplier !== "all") && (
+                <Link href="/stock/acts" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+                  Сбросить
+                </Link>
+              )}
             </form>
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -160,13 +138,23 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
                   )
                 })}
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Поставщик:</span>
+                <StockActsSupplierFilter
+                  suppliers={suppliers}
+                  value={supplier}
+                  query={query}
+                  type={type}
+                  status={status}
+                />
+              </div>
             </div>
 
             {documents.length === 0 ? (
               <Empty className="min-h-56">
                 <EmptyHeader>
                   <EmptyTitle>Акты склада не найдены</EmptyTitle>
-                  <EmptyDescription>Измените фильтры или создайте акт со страницы склада.</EmptyDescription>
+                  <EmptyDescription>Измените фильтры или создайте акт кнопками выше.</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (
