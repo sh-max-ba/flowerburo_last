@@ -49,6 +49,7 @@ import { Textarea } from "@/components/ui/textarea"
 type Line = {
   product: Product
   qty: string
+  unitCost: string
   comment: string
 }
 
@@ -89,6 +90,7 @@ export function StockDocumentForm({
           updatedAt: "",
         } satisfies Product),
       qty: String(item.qty),
+      unitCost: item.unitCost ? String(item.unitCost) : "",
       comment: item.comment,
     }))
   )
@@ -108,7 +110,9 @@ export function StockDocumentForm({
     (acc, line) => {
       if (Number.isFinite(line.qty) && line.qty > 0) {
         acc.totalQty += line.qty
-        acc.totalValue += line.qty * (line.product.costPrice || 0)
+        // Приход — по введённой цене закупки; списание — по текущей себестоимости товара.
+        const unit = isWriteOff ? line.product.costPrice || 0 : Number(line.item.unitCost) || 0
+        acc.totalValue += line.qty * unit
       }
       return acc
     },
@@ -131,13 +135,19 @@ export function StockDocumentForm({
         ]
       }
 
-      return [{ product: freshProduct, qty: "1", comment: "" }, ...current]
+      return [{ product: freshProduct, qty: "1", unitCost: "", comment: "" }, ...current]
     })
   }
 
   function updateQty(productCode: string, qty: string) {
     setItems((current) =>
       current.map((item) => (item.product.code === productCode ? { ...item, qty } : item))
+    )
+  }
+
+  function updateUnitCost(productCode: string, unitCost: string) {
+    setItems((current) =>
+      current.map((item) => (item.product.code === productCode ? { ...item, unitCost } : item))
     )
   }
 
@@ -281,6 +291,7 @@ export function StockDocumentForm({
                       <TableHead className="min-w-64">Товар</TableHead>
                       <TableHead className="w-28">Остаток</TableHead>
                       <TableHead className="w-32">Кол-во</TableHead>
+                      {!isWriteOff && <TableHead className="w-32">Цена закупки</TableHead>}
                       <TableHead className="w-36">После</TableHead>
                       <TableHead className="min-w-44">Комментарий</TableHead>
                       <TableHead className="w-12" />
@@ -317,6 +328,21 @@ export function StockDocumentForm({
                               required
                             />
                           </TableCell>
+                          {!isWriteOff && (
+                            <TableCell>
+                              <Input
+                                name="itemUnitCost"
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                inputMode="decimal"
+                                placeholder="0"
+                                value={item.unitCost}
+                                disabled={pending}
+                                onChange={(event) => updateUnitCost(product.code, event.target.value)}
+                              />
+                            </TableCell>
+                          )}
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <span>{formatNumber(afterStock)}</span>
@@ -352,13 +378,15 @@ export function StockDocumentForm({
                   </TableBody>
                   <TableFooter>
                     <TableRow>
-                      <TableCell className="font-medium">Позиций: {items.length}</TableCell>
-                      <TableCell />
+                      <TableCell className="font-medium" colSpan={2}>
+                        Позиций: {items.length}
+                      </TableCell>
                       <TableCell className="font-semibold">{formatNumber(totals.totalQty)}</TableCell>
+                      {!isWriteOff && <TableCell />}
                       <TableCell
                         colSpan={3}
                         className="text-right font-semibold"
-                        title="Оценочная стоимость по закупочной цене"
+                        title={isWriteOff ? "Оценочно по текущей себестоимости" : "По введённым ценам закупки"}
                       >
                         {isWriteOff ? "Стоимость списания" : "Стоимость прихода"}: {formatMoney(totals.totalValue)}
                       </TableCell>

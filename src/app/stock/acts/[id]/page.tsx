@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
+import { formatMoney } from "@/lib/utils"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
@@ -32,6 +33,7 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
     notFound()
   }
   const quantityHeaders = stockDocumentQuantityHeaders(document.status)
+  const isStockIn = document.type === "stock_in"
 
   return (
     <CrmShell
@@ -101,6 +103,7 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
                   <TableRow>
                     <TableHead>Товар</TableHead>
                     <TableHead>Кол-во</TableHead>
+                    {isStockIn && <TableHead>Цена закупки</TableHead>}
                     <TableHead>Изменение</TableHead>
                     <TableHead>{quantityHeaders.before}</TableHead>
                     <TableHead>{quantityHeaders.after}</TableHead>
@@ -118,6 +121,16 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
                           <div className="text-xs text-muted-foreground">{item.productCode}</div>
                         </TableCell>
                         <TableCell>{formatNumber(item.qty)}</TableCell>
+                        {isStockIn && (
+                          <TableCell>
+                            {item.unitCost > 0 ? formatMoney(item.unitCost) : "—"}
+                            {item.costAfter != null && (
+                              <div className="text-xs text-muted-foreground">
+                                себест.: {formatMoney(item.costAfter)}
+                              </div>
+                            )}
+                          </TableCell>
+                        )}
                         <TableCell>
                           <DeltaBadge value={row.delta} />
                         </TableCell>

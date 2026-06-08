@@ -26,6 +26,7 @@ import {
   generateWazzupCrmKeyAction,
   getSecureWazzupWebhookUrlAction,
   saveOrderSettingsAction,
+  saveStockCostSettingsAction,
   saveSupplierAction,
   saveWazzupSettingsAction,
   setSupplierActiveAction,
@@ -151,8 +152,9 @@ export function SettingsPage({
             onToggleActive={setActiveToggleSupplier}
           />
         </TabsContent>
-        <TabsContent value="orders">
+        <TabsContent value="orders" className="flex flex-col gap-4">
           <OrderPolicyBlock orderSettings={orderSettings} />
+          <StockCostPolicyBlock orderSettings={orderSettings} />
         </TabsContent>
         <TabsContent value="wazzup">
           <WazzupSettingsBlock status={wazzupStatus} />
@@ -453,6 +455,88 @@ function OrderPolicyBlock({ orderSettings }: { orderSettings: OrderSettings }) {
                   Если включено, заказ можно создать и изменить, даже когда товара не хватает на складе — остаток уйдет в
                   минус. По умолчанию выключено: система не дает зарезервировать больше, чем доступно («Недостаточно
                   остатка»). Касса (продажи) работает без этой проверки в любом случае.
+                </FieldDescription>
+              </FieldContent>
+            </Field>
+          </FieldGroup>
+          <div>
+            <GatedButton
+              type="submit"
+              disabled={pending || !isDirty}
+              reason={!isDirty ? "Нет несохраненных изменений" : null}
+            >
+              Сохранить настройки
+            </GatedButton>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  )
+}
+
+function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings }) {
+  const router = useRouter()
+  const [recompute, setRecompute] = useState(orderSettings.recomputeCostOnReceipt)
+  const [pending, startTransition] = useTransition()
+
+  // Ресинхронизация после router.refresh() (подстройка во время рендера, без эффекта).
+  const [lastSaved, setLastSaved] = useState(orderSettings.recomputeCostOnReceipt)
+  if (lastSaved !== orderSettings.recomputeCostOnReceipt) {
+    setLastSaved(orderSettings.recomputeCostOnReceipt)
+    setRecompute(orderSettings.recomputeCostOnReceipt)
+  }
+
+  const isDirty = recompute !== orderSettings.recomputeCostOnReceipt
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const formData = new FormData()
+    if (recompute) {
+      formData.set("recomputeCostOnReceipt", "on")
+    }
+    startTransition(async () => {
+      const result = await saveStockCostSettingsAction(formData)
+      if (result.ok) {
+        toast.success(result.message)
+        router.refresh()
+      } else {
+        toast.error(result.message)
+      }
+    })
+  }
+
+  return (
+    <Card className="rounded-2xl border bg-white">
+      <CardHeader>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle>Себестоимость</CardTitle>
+            <CardDescription>Пересчёт себестоимости товара при проведении приходного акта</CardDescription>
+          </div>
+          {isDirty ? (
+            <Badge variant="outline">
+              <AlertCircleIcon data-icon="inline-start" />
+              Несохраненные изменения
+            </Badge>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent>
+        <form className="flex flex-col gap-4" onSubmit={submit}>
+          <FieldGroup>
+            <Field orientation="horizontal">
+              <Checkbox
+                id="recompute-cost-on-receipt"
+                checked={recompute}
+                onCheckedChange={(checked) => setRecompute(checked === true)}
+                disabled={pending}
+              />
+              <FieldContent>
+                <FieldLabel htmlFor="recompute-cost-on-receipt">Пересчитывать себестоимость при приходе</FieldLabel>
+                <FieldDescription>
+                  Если включено, при проведении приходного акта себестоимость товара пересчитывается по
+                  средневзвешенной из введённых цен закупки (учитывается остаток и новое поступление). По умолчанию
+                  выключено — себестоимость меняется только вручную или импортом. Влияет лишь на новые приходы.
                 </FieldDescription>
               </FieldContent>
             </Field>

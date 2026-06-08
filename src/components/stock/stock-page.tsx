@@ -1401,9 +1401,10 @@ function nullableNumber(value: number | null) {
 type StockDocumentLine = {
   product: Product
   qty: string
+  unitCost: string
 }
 
-function computeStockDocumentTotals(items: StockDocumentLine[], products: Product[]) {
+function computeStockDocumentTotals(items: StockDocumentLine[], products: Product[], isWriteOff: boolean) {
   let totalQty = 0
   let totalValue = 0
 
@@ -1414,7 +1415,9 @@ function computeStockDocumentTotals(items: StockDocumentLine[], products: Produc
     }
     const product = products.find((candidate) => candidate.code === item.product.code) ?? item.product
     totalQty += qty
-    totalValue += qty * (product.costPrice || 0)
+    // Приход — по введённой цене закупки; списание — по текущей себестоимости товара.
+    const unit = isWriteOff ? product.costPrice || 0 : Number(item.unitCost) || 0
+    totalValue += qty * unit
   }
 
   return { positions: items.length, totalQty, totalValue }
@@ -1444,7 +1447,7 @@ function StockDocumentDialog({
   const title = isWriteOff ? "Акт списания" : "Акт пополнения"
   const description = "Добавьте товары, проверьте количество и сохраните или проведите акт"
   const operationAtLabel = isWriteOff ? "Дата и время списания" : "Дата и время приемки"
-  const totals = computeStockDocumentTotals(items, products)
+  const totals = computeStockDocumentTotals(items, products, isWriteOff)
 
   function addProduct(product: Product) {
     const freshProduct = products.find((item) => item.code === product.code) ?? product
@@ -1462,13 +1465,19 @@ function StockDocumentDialog({
         ]
       }
 
-      return [{ product: freshProduct, qty: "1" }, ...current]
+      return [{ product: freshProduct, qty: "1", unitCost: "" }, ...current]
     })
   }
 
   function updateQty(productCode: string, qty: string) {
     setItems((current) =>
       current.map((item) => (item.product.code === productCode ? { ...item, qty } : item))
+    )
+  }
+
+  function updateUnitCost(productCode: string, unitCost: string) {
+    setItems((current) =>
+      current.map((item) => (item.product.code === productCode ? { ...item, unitCost } : item))
     )
   }
 
@@ -1611,6 +1620,7 @@ function StockDocumentDialog({
                               <TableHead className="min-w-64">Товар</TableHead>
                               <TableHead className="w-28">Остаток</TableHead>
                               <TableHead className="w-32">Кол-во</TableHead>
+                              {!isWriteOff && <TableHead className="w-32">Цена закупки</TableHead>}
                               <TableHead className="w-36">После</TableHead>
                               <TableHead className="min-w-44">Комментарий</TableHead>
                               <TableHead className="w-12" />
@@ -1647,6 +1657,21 @@ function StockDocumentDialog({
                                       required
                                     />
                                   </TableCell>
+                                  {!isWriteOff && (
+                                    <TableCell>
+                                      <Input
+                                        name="itemUnitCost"
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        inputMode="decimal"
+                                        placeholder="0"
+                                        value={item.unitCost}
+                                        disabled={pending}
+                                        onChange={(event) => updateUnitCost(product.code, event.target.value)}
+                                      />
+                                    </TableCell>
+                                  )}
                                   <TableCell>
                                     <div className="flex items-center gap-2">
                                       <span>{number(nextStock)}</span>
@@ -1677,13 +1702,15 @@ function StockDocumentDialog({
                           </TableBody>
                           <TableFooter>
                             <TableRow>
-                              <TableCell className="font-medium">Позиций: {totals.positions}</TableCell>
-                              <TableCell />
+                              <TableCell className="font-medium" colSpan={2}>
+                                Позиций: {totals.positions}
+                              </TableCell>
                               <TableCell className="font-semibold">{number(totals.totalQty)}</TableCell>
+                              {!isWriteOff && <TableCell />}
                               <TableCell
                                 colSpan={3}
                                 className="text-right font-semibold"
-                                title="Оценочная стоимость по закупочной цене"
+                                title={isWriteOff ? "Оценочно по текущей себестоимости" : "По введённым ценам закупки"}
                               >
                                 {isWriteOff ? "Стоимость списания" : "Стоимость прихода"}: {formatMoney(totals.totalValue)}
                               </TableCell>

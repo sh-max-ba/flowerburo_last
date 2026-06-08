@@ -70,6 +70,7 @@ import {
   setSupplierActive,
   setUserActive,
   setAllowOversellOrders,
+  setRecomputeCostOnReceipt,
   startOrderWork,
   toggleBouquetTemplateActive,
   updateUser,
@@ -301,6 +302,12 @@ export async function saveOrderSettingsAction(formData: FormData) {
   return runRoleAction(["owner"], () => {
     setAllowOversellOrders(formData.get("allowOversellOrders") === "on")
   }, "Настройки заказов сохранены.")
+}
+
+export async function saveStockCostSettingsAction(formData: FormData) {
+  return runRoleAction(["owner"], () => {
+    setRecomputeCostOnReceipt(formData.get("recomputeCostOnReceipt") === "on")
+  }, "Настройки себестоимости сохранены.")
 }
 
 export async function getSecureWazzupWebhookUrlAction(): Promise<DataActionResult<{ url: string }>> {
