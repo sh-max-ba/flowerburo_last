@@ -717,6 +717,8 @@ export function migrateBaseline(client: Database.Database) {
   migrateStockOverhead(client)
   // Корректировка приходов (v16).
   migrateStockDocCorrection(client)
+  // Партии/сроки годности (v17).
+  migrateStockLots(client)
   client.exec(`
     CREATE INDEX IF NOT EXISTS idx_customers_wazzup_chat ON customers(wazzup_chat_type, wazzup_chat_id);
     CREATE INDEX IF NOT EXISTS idx_deals_wazzup_chat ON deals(wazzup_chat_type, wazzup_chat_id, status);
@@ -995,5 +997,55 @@ export function migrateStockDocCorrection(client: Database.Database) {
   client.exec(`
     CREATE INDEX IF NOT EXISTS idx_stock_documents_corrects ON stock_documents(corrects_document_id);
     CREATE INDEX IF NOT EXISTS idx_stock_documents_corrected_by ON stock_documents(corrected_by_document_id);
+  `)
+}
+
+// Версия 17: партии/сроки годности (Вариант A — advisory). Партия = строка проведённого прихода:
+// stock_lots хранит остаток партии (qty_remaining), срок годности (expiry_date = дата прихода +
+// стойкость vase_life_days), себестоимость СПРАВОЧНО (unit_cost) и статус (active|depleted|written_off|
+// reverted). Себестоимость products.cost_price партиями НЕ управляется (остаётся средневзвешенной).
+// stock_lot_movements — журнал по партии (receipt|consume|write_off|reconcile|revert). products:
+// track_lots (учитывать ли товар по партиям) + vase_life_days (стойкость, дней). Партии создаются
+// ТОЛЬКО при включённом флаге app_settings.track_lots_enabled (по умолчанию OFF) и track_lots у товара —
+// до явного включения поведение прода не меняется. Потребление остатка партиями не управляется:
+// applyProductDelta не трогаем, партии «сверяются от истины» (FEFO к products.stock). Аддитивно,
+// идемпотентно. Старый остаток партиями не бэкфиллится (= остаток «без партии»).
+export function migrateStockLots(client: Database.Database) {
+  ensureColumn("products", "track_lots", "ALTER TABLE products ADD COLUMN track_lots INTEGER NOT NULL DEFAULT 0", client)
+  ensureColumn("products", "vase_life_days", "ALTER TABLE products ADD COLUMN vase_life_days INTEGER", client)
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS stock_lots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_code TEXT NOT NULL,
+      document_id INTEGER,
+      supplier_id INTEGER,
+      supplier_name TEXT,
+      received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      expiry_date TEXT,
+      qty_received REAL NOT NULL DEFAULT 0,
+      qty_remaining REAL NOT NULL DEFAULT 0,
+      unit_cost REAL,
+      status TEXT NOT NULL DEFAULT 'active',
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS stock_lot_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lot_id INTEGER NOT NULL,
+      product_code TEXT NOT NULL,
+      type TEXT NOT NULL,
+      qty REAL NOT NULL DEFAULT 0,
+      reason TEXT,
+      document_id INTEGER,
+      user_id INTEGER,
+      comment TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_stock_lots_product_status ON stock_lots(product_code, status);
+    CREATE INDEX IF NOT EXISTS idx_stock_lots_expiry ON stock_lots(expiry_date);
+    CREATE INDEX IF NOT EXISTS idx_stock_lots_document ON stock_lots(document_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_lot_movements_lot ON stock_lot_movements(lot_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_lot_movements_product ON stock_lot_movements(product_code);
   `)
 }

@@ -37,6 +37,8 @@ export type Product = {
   costPrice: number
   salePrice: number
   isActive: boolean
+  trackLots: boolean
+  vaseLifeDays: number | null
   available: number
   updatedAt: string
 }
@@ -397,6 +399,51 @@ export type StockDocument = {
   itemsCount: number
   items: StockDocumentItem[]
   overheads: StockDocumentOverhead[]
+}
+
+// Партии/сроки годности (v17, Вариант A). active — есть остаток; depleted — остаток выработан
+// (продажами/сверкой); written_off — списана (порча/уценка); reverted — откат при корректировке прихода.
+export type StockLotStatus = "active" | "depleted" | "written_off" | "reverted"
+export const stockLotStatuses = new Set<StockLotStatus>(["active", "depleted", "written_off", "reverted"])
+
+// Журнал партии. receipt — создана приходом; consume — расход по сверке (FEFO к остатку товара);
+// write_off — списание с причиной (порча/уценка); reconcile — корректировка сверкой; revert — откат
+// при корректировке исходного прихода.
+export type StockLotMovementType = "receipt" | "consume" | "write_off" | "reconcile" | "revert"
+export const stockLotMovementTypes = new Set<StockLotMovementType>([
+  "receipt",
+  "consume",
+  "write_off",
+  "reconcile",
+  "revert",
+])
+
+// Причины списания партии (порча/уценка и т.п.). Хранится строкой; "other" — прочее.
+export type StockLotWriteOffReason = "spoilage" | "markdown" | "shrinkage" | "other"
+export const stockLotWriteOffReasons = new Set<StockLotWriteOffReason>([
+  "spoilage",
+  "markdown",
+  "shrinkage",
+  "other",
+])
+
+export type StockLot = {
+  id: number
+  productCode: string
+  productName: string
+  documentId: number | null
+  documentNumber: string | null
+  supplierId: number | null
+  supplierName: string
+  receivedAt: string
+  expiryDate: string | null
+  qtyReceived: number
+  qtyRemaining: number
+  unitCost: number | null
+  status: StockLotStatus
+  note: string
+  createdAt: string
+  updatedAt: string
 }
 
 export type Supplier = {

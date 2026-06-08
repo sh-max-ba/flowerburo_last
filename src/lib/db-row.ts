@@ -84,6 +84,8 @@ export function mapProductRow(row: Row): Product {
     costPrice: numberFromRow(row.cost_price),
     salePrice: numberFromRow(row.sale_price),
     isActive: numberFromRow(row.is_active ?? 1) === 1,
+    trackLots: numberFromRow(row.track_lots ?? 0) === 1,
+    vaseLifeDays: row.vase_life_days == null ? null : numberFromRow(row.vase_life_days),
     available: stock - reserved,
     updatedAt: String(row.updated_at),
   }

@@ -45,6 +45,10 @@ export type {
   StockDocumentOverhead,
   StockDocumentStatus,
   StockDocumentType,
+  StockLot,
+  StockLotMovementType,
+  StockLotStatus,
+  StockLotWriteOffReason,
   StockMovementType,
   StockOverheadKind,
   Supplier,
@@ -181,9 +185,19 @@ export {
   setAllowOversellOrders,
   getRecomputeCostOnReceipt,
   setRecomputeCostOnReceipt,
+  getTrackLotsEnabled,
+  setTrackLotsEnabled,
   getOrderSettings,
 } from "./db/queries/app-settings"
 export type { OrderSettings } from "./db/queries/app-settings"
+export {
+  listProductLots,
+  listExpiringLots,
+  reconcileAllLots,
+  writeOffLot,
+  setProductLotSettings,
+} from "./db/queries/stock-lots"
+export type { ExpiringLot } from "./db/queries/stock-lots"
 export {
   createSale,
 } from "./db/queries/sales"

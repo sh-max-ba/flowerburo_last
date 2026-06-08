@@ -7,7 +7,8 @@ import { db } from "../connection"
 import { getProduct, recordStockMovement } from "../ledger"
 import { mapStockDocument, mapStockDocumentItem, mapStockDocumentOverhead, normalizeAllocationMethod } from "../mappers"
 import { clean, parsePositiveInteger, parseStockDocumentType, roundMoney, toNumber } from "../form-parsers"
-import { getRecomputeCostOnReceipt } from "./app-settings"
+import { getRecomputeCostOnReceipt, getTrackLotsEnabled } from "./app-settings"
+import { maybeCreateReceiptLot, revertLotsForDocument } from "./stock-lots"
 
 export function listStockDocuments(filters?: {
   type?: string
@@ -360,6 +361,11 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
   const type = parseStockDocumentType(String(document.type))
   // Пересчёт себестоимости при приходе — за флагом (по умолчанию OFF). При OFF cost_price не меняется.
   const recomputeCost = getRecomputeCostOnReceipt(client)
+  // Учёт по партиям — за флагом (по умолчанию OFF). При ON приход создаёт партии для товаров с track_lots.
+  const trackLotsEnabled = getTrackLotsEnabled(client)
+  const receivedAt = document.operation_at == null ? null : String(document.operation_at)
+  const documentSupplierId = document.supplier_id == null ? null : numberFromRow(document.supplier_id)
+  const documentSupplierName = String(document.supplier_name ?? "")
   const items = client
     .prepare("SELECT * FROM stock_document_items WHERE document_id = ? ORDER BY id")
     .all(documentId) as Array<Record<string, unknown>>
@@ -449,6 +455,20 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
       userId: currentUser.id,
       comment: `Акт ${String(document.number)}`,
     })
+
+    // Партия по строке прихода (если включён учёт по партиям и товар учитывается по партиям).
+    if (type === "stock_in" && trackLotsEnabled) {
+      maybeCreateReceiptLot(client, {
+        product,
+        qty,
+        landedUnitCost,
+        documentId,
+        supplierId: documentSupplierId,
+        supplierName: documentSupplierName,
+        receivedAt,
+        userId: currentUser.id,
+      })
+    }
   }
 
   const landedTotal = roundMoney(goodsTotal + overheadTotal)
@@ -539,6 +559,14 @@ function postStockCorrectionInTransaction(client: Database.Database, correctionI
     })
   }
 
+  // Откат партий исходного акта (если создавались) — безусловно, по document_id. Новые партии для
+  // исправленных строк создаются ниже при включённом учёте по партиям.
+  revertLotsForDocument(client, originalId, currentUser, `Откат партии: корректировка ${corrNumber}`)
+  const trackLotsEnabled = getTrackLotsEnabled(client)
+  const correctionReceivedAt = correction.operation_at == null ? null : String(correction.operation_at)
+  const correctionSupplierId = correction.supplier_id == null ? null : numberFromRow(correction.supplier_id)
+  const correctionSupplierName = String(correction.supplier_name ?? "")
+
   // 2) Применение исправленных позиций: +newQty. Накладные расходы распределяем для отображения
   // (себестоимость не трогаем).
   const overheadRows = client
@@ -592,6 +620,20 @@ function postStockCorrectionInTransaction(client: Database.Database, correctionI
       userId: currentUser.id,
       comment: `Корректировка акта ${origNumber}`,
     })
+
+    // Новая партия по исправленной строке (привязана к корректировке).
+    if (trackLotsEnabled) {
+      maybeCreateReceiptLot(client, {
+        product,
+        qty,
+        landedUnitCost,
+        documentId: correctionId,
+        supplierId: correctionSupplierId,
+        supplierName: correctionSupplierName,
+        receivedAt: correctionReceivedAt,
+        userId: currentUser.id,
+      })
+    }
   }
 
   const landedTotal = roundMoney(goodsTotal + overheadTotal)

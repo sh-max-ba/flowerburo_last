@@ -46,14 +46,29 @@ export function setRecomputeCostOnReceipt(value: boolean, client: Database.Datab
   setAppSetting(RECOMPUTE_COST_ON_RECEIPT_KEY, value ? "1" : "0", client)
 }
 
+// «Учёт по партиям»: когда включено, проведение приходного акта создаёт партии (stock_lots) для
+// товаров с track_lots, считает сроки годности и включает FEFO-сверку/виджет свежести. По умолчанию
+// ВЫКЛЮЧЕНО — до явного включения партии не создаются и поведение прода не меняется.
+const TRACK_LOTS_ENABLED_KEY = "track_lots_enabled"
+
+export function getTrackLotsEnabled(client: Database.Database = db()): boolean {
+  return getAppSetting(TRACK_LOTS_ENABLED_KEY, client) === "1"
+}
+
+export function setTrackLotsEnabled(value: boolean, client: Database.Database = db()): void {
+  setAppSetting(TRACK_LOTS_ENABLED_KEY, value ? "1" : "0", client)
+}
+
 export type OrderSettings = {
   allowOversellOrders: boolean
   recomputeCostOnReceipt: boolean
+  trackLotsEnabled: boolean
 }
 
 export function getOrderSettings(client: Database.Database = db()): OrderSettings {
   return {
     allowOversellOrders: getAllowOversellOrders(client),
     recomputeCostOnReceipt: getRecomputeCostOnReceipt(client),
+    trackLotsEnabled: getTrackLotsEnabled(client),
   }
 }

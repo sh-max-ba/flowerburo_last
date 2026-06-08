@@ -10,6 +10,8 @@ import type {
   StockDocumentItem,
   StockDocumentOverhead,
   StockDocumentStatus,
+  StockLot,
+  StockLotStatus,
   StockOverheadKind,
   Supplier,
   User,
@@ -17,7 +19,7 @@ import type {
   WarehouseImportItem,
   WazzupMessage,
 } from "./types"
-import { stockOverheadKinds } from "./types"
+import { stockLotStatuses, stockOverheadKinds } from "./types"
 import { parseStockDocumentType } from "./form-parsers"
 
 export function mapUser(row: Record<string, unknown>): User {
@@ -219,6 +221,28 @@ export function mapStockDocumentItem(row: Record<string, unknown>): StockDocumen
 
 export function normalizeAllocationMethod(value: unknown): AllocationMethod {
   return value === "by_qty" ? "by_qty" : "by_value"
+}
+
+export function mapStockLot(row: Record<string, unknown>): StockLot {
+  const status = String(row.status ?? "active")
+  return {
+    id: numberFromRow(row.id),
+    productCode: String(row.product_code ?? ""),
+    productName: String(row.product_name ?? ""),
+    documentId: row.document_id == null ? null : numberFromRow(row.document_id),
+    documentNumber: row.document_number == null ? null : String(row.document_number),
+    supplierId: row.supplier_id == null ? null : numberFromRow(row.supplier_id),
+    supplierName: String(row.supplier_name ?? ""),
+    receivedAt: String(row.received_at ?? ""),
+    expiryDate: row.expiry_date == null ? null : String(row.expiry_date),
+    qtyReceived: numberFromRow(row.qty_received),
+    qtyRemaining: numberFromRow(row.qty_remaining),
+    unitCost: row.unit_cost == null ? null : numberFromRow(row.unit_cost),
+    status: stockLotStatuses.has(status as StockLotStatus) ? (status as StockLotStatus) : "active",
+    note: String(row.note ?? ""),
+    createdAt: String(row.created_at ?? ""),
+    updatedAt: String(row.updated_at ?? ""),
+  }
 }
 
 export function mapStockDocumentOverhead(row: Record<string, unknown>): StockDocumentOverhead {

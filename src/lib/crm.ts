@@ -130,7 +130,8 @@ export function listProducts(options: { includeArchived?: boolean } = {}): Produ
     .prepare(
       `SELECT code, category_path as categoryPath, article, name, unit, stock, reserved, expected,
         cost_price as costPrice, sale_price as salePrice, image_path as imagePath,
-        COALESCE(is_active, 1) as isActive, updated_at as updatedAt
+        COALESCE(is_active, 1) as isActive, COALESCE(track_lots, 0) as trackLots,
+        vase_life_days as vaseLifeDays, updated_at as updatedAt
        FROM products
        ${where}
        ORDER BY name COLLATE NOCASE`
@@ -151,6 +152,8 @@ export function listProducts(options: { includeArchived?: boolean } = {}): Produ
     costPrice: toNumber(row.costPrice),
     salePrice: toNumber(row.salePrice),
     isActive: toNumber(row.isActive) === 1,
+    trackLots: toNumber(row.trackLots) === 1,
+    vaseLifeDays: row.vaseLifeDays == null ? null : toNumber(row.vaseLifeDays),
     updatedAt: String(row.updatedAt ?? ""),
   }))
 }
@@ -1013,7 +1016,8 @@ function getProduct(client: Database.Database, productCode: string) {
     .prepare(
       `SELECT code, category_path as categoryPath, article, name, unit, stock, reserved, expected,
         cost_price as costPrice, sale_price as salePrice, image_path as imagePath,
-        COALESCE(is_active, 1) as isActive, updated_at as updatedAt
+        COALESCE(is_active, 1) as isActive, COALESCE(track_lots, 0) as trackLots,
+        vase_life_days as vaseLifeDays, updated_at as updatedAt
        FROM products
        WHERE code = ?`
     )
@@ -1034,6 +1038,8 @@ function getProduct(client: Database.Database, productCode: string) {
         costPrice: toNumber(row.costPrice),
         salePrice: toNumber(row.salePrice),
         isActive: toNumber(row.isActive) === 1,
+        trackLots: toNumber(row.trackLots) === 1,
+        vaseLifeDays: row.vaseLifeDays == null ? null : toNumber(row.vaseLifeDays),
         updatedAt: String(row.updatedAt ?? ""),
       } satisfies Product)
     : null

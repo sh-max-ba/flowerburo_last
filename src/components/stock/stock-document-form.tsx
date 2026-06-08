@@ -87,6 +87,8 @@ export function StockDocumentForm({
           costPrice: 0,
           salePrice: 0,
           isActive: true,
+          trackLots: false,
+          vaseLifeDays: null,
           available: item.beforeStock ?? 0,
           updatedAt: "",
         } satisfies Product),
