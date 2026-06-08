@@ -345,6 +345,21 @@ export function listProductLots(productCode: string): StockLot[] {
   return rows.map(mapStockLot)
 }
 
+// Все активные партии (с остатком), FEFO-порядок. Перед выборкой — сверка всех партий к остаткам.
+export function listActiveLots(): StockLot[] {
+  reconcileAllLots()
+  const client = db()
+  const rows = client
+    .prepare(
+      `${LOT_SELECT}
+       WHERE stock_lots.status = 'active' AND stock_lots.qty_remaining > 0
+       ORDER BY (stock_lots.expiry_date IS NULL), stock_lots.expiry_date ASC,
+         stock_lots.received_at ASC, stock_lots.id ASC`
+    )
+    .all() as Array<Record<string, unknown>>
+  return rows.map(mapStockLot)
+}
+
 export type ExpiringLot = StockLot & { daysLeft: number | null; bucket: "expired" | "soon" | "ok" }
 
 // Виджет свежести: активные партии с остатком и сроком годности, истекающие в пределах withinDays

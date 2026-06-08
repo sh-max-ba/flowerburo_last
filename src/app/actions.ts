@@ -72,6 +72,8 @@ import {
   setUserActive,
   setAllowOversellOrders,
   setRecomputeCostOnReceipt,
+  setTrackLotsEnabled,
+  writeOffLot,
   startOrderWork,
   toggleBouquetTemplateActive,
   updateUser,
@@ -308,7 +310,24 @@ export async function saveOrderSettingsAction(formData: FormData) {
 export async function saveStockCostSettingsAction(formData: FormData) {
   return runRoleAction(["owner"], () => {
     setRecomputeCostOnReceipt(formData.get("recomputeCostOnReceipt") === "on")
-  }, "Настройки себестоимости сохранены.")
+    setTrackLotsEnabled(formData.get("trackLotsEnabled") === "on")
+  }, "Настройки склада сохранены.")
+}
+
+export async function writeOffLotAction(formData: FormData) {
+  const lotId = Number(formData.get("lotId"))
+  const qty = Number(formData.get("qty"))
+  const reason = String(formData.get("reason") ?? "spoilage")
+  const comment = String(formData.get("comment") ?? "")
+  return runRoleAction(
+    ["owner"],
+    (user) => {
+      writeOffLot({ lotId, qty, reason, comment }, user)
+      revalidatePath("/stock/lots")
+      revalidatePath("/stock")
+    },
+    "Партия списана."
+  )
 }
 
 export async function getSecureWazzupWebhookUrlAction(): Promise<DataActionResult<{ url: string }>> {

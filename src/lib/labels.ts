@@ -126,6 +126,28 @@ export function stockOverheadKindLabel(value: string) {
   return labels[value] ?? value
 }
 
+export function stockLotStatusLabel(value: string) {
+  const labels: Record<string, string> = {
+    active: "Активна",
+    depleted: "Выработана",
+    written_off: "Списана",
+    reverted: "Откачена",
+  }
+
+  return labels[value] ?? value
+}
+
+export function stockLotWriteOffReasonLabel(value: string) {
+  const labels: Record<string, string> = {
+    spoilage: "Порча",
+    markdown: "Уценка",
+    shrinkage: "Недостача",
+    other: "Прочее",
+  }
+
+  return labels[value] ?? value
+}
+
 export function discountTypeLabel(value: string) {
   const labels: Record<string, string> = {
     none: "Без скидки",

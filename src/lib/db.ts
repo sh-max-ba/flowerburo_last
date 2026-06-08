@@ -193,6 +193,7 @@ export type { OrderSettings } from "./db/queries/app-settings"
 export {
   listProductLots,
   listExpiringLots,
+  listActiveLots,
   reconcileAllLots,
   writeOffLot,
   setProductLotSettings,

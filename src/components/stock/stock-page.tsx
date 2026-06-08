@@ -907,6 +907,38 @@ function ProductSheet({
                 </Field>
               </div>
               <FieldSet>
+                <FieldLegend>Учёт по партиям (сроки годности)</FieldLegend>
+                {/* Маркер: форма содержит настройки партий — иначе upsertProduct сохранит прежние. */}
+                <input type="hidden" name="lotSettingsPresent" value="on" />
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field orientation="horizontal">
+                    <input
+                      id="track-lots"
+                      name="trackLots"
+                      type="checkbox"
+                      defaultChecked={Boolean(product?.trackLots)}
+                      className="size-4 rounded border-input accent-primary"
+                    />
+                    <FieldLabel htmlFor="track-lots" className="font-normal">
+                      Вести по партиям
+                    </FieldLabel>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="vaseLifeDays">Стойкость, дней</FieldLabel>
+                    <Input
+                      id="vaseLifeDays"
+                      name="vaseLifeDays"
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={product?.vaseLifeDays ?? ""}
+                      placeholder="напр. 7"
+                    />
+                    <FieldDescription>Срок годности партии = дата прихода + стойкость</FieldDescription>
+                  </Field>
+                </div>
+              </FieldSet>
+              <FieldSet>
                 <FieldLegend>Фото товара</FieldLegend>
                 <div className="flex items-start gap-3">
                   <ProductThumbnail

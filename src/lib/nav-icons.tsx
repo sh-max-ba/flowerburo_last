@@ -3,6 +3,7 @@
 import {
   BanknoteIcon,
   BoxesIcon,
+  CalendarClockIcon,
   ClipboardListIcon,
   Flower2Icon,
   HistoryIcon,
@@ -30,6 +31,7 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   "ready-orders": PackageCheckIcon,
   stock: BoxesIcon,
   "stock-acts": ScrollTextIcon,
+  "stock-lots": CalendarClockIcon,
   suppliers: TruckIcon,
   history: HistoryIcon,
   shifts: BanknoteIcon,

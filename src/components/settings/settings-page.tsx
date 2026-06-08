@@ -477,22 +477,32 @@ function OrderPolicyBlock({ orderSettings }: { orderSettings: OrderSettings }) {
 function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings }) {
   const router = useRouter()
   const [recompute, setRecompute] = useState(orderSettings.recomputeCostOnReceipt)
+  const [trackLots, setTrackLots] = useState(orderSettings.trackLotsEnabled)
   const [pending, startTransition] = useTransition()
 
   // Ресинхронизация после router.refresh() (подстройка во время рендера, без эффекта).
-  const [lastSaved, setLastSaved] = useState(orderSettings.recomputeCostOnReceipt)
-  if (lastSaved !== orderSettings.recomputeCostOnReceipt) {
-    setLastSaved(orderSettings.recomputeCostOnReceipt)
+  const [lastSavedRecompute, setLastSavedRecompute] = useState(orderSettings.recomputeCostOnReceipt)
+  if (lastSavedRecompute !== orderSettings.recomputeCostOnReceipt) {
+    setLastSavedRecompute(orderSettings.recomputeCostOnReceipt)
     setRecompute(orderSettings.recomputeCostOnReceipt)
   }
+  const [lastSavedTrackLots, setLastSavedTrackLots] = useState(orderSettings.trackLotsEnabled)
+  if (lastSavedTrackLots !== orderSettings.trackLotsEnabled) {
+    setLastSavedTrackLots(orderSettings.trackLotsEnabled)
+    setTrackLots(orderSettings.trackLotsEnabled)
+  }
 
-  const isDirty = recompute !== orderSettings.recomputeCostOnReceipt
+  const isDirty =
+    recompute !== orderSettings.recomputeCostOnReceipt || trackLots !== orderSettings.trackLotsEnabled
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const formData = new FormData()
     if (recompute) {
       formData.set("recomputeCostOnReceipt", "on")
+    }
+    if (trackLots) {
+      formData.set("trackLotsEnabled", "on")
     }
     startTransition(async () => {
       const result = await saveStockCostSettingsAction(formData)
@@ -510,8 +520,8 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
       <CardHeader>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <CardTitle>Себестоимость</CardTitle>
-            <CardDescription>Пересчёт себестоимости товара при проведении приходного акта</CardDescription>
+            <CardTitle>Склад: себестоимость и партии</CardTitle>
+            <CardDescription>Политика пересчёта себестоимости и учёта по партиям/срокам годности</CardDescription>
           </div>
           {isDirty ? (
             <Badge variant="outline">
@@ -537,6 +547,23 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
                   Если включено, при проведении приходного акта себестоимость товара пересчитывается по
                   средневзвешенной из введённых цен закупки (учитывается остаток и новое поступление). По умолчанию
                   выключено — себестоимость меняется только вручную или импортом. Влияет лишь на новые приходы.
+                </FieldDescription>
+              </FieldContent>
+            </Field>
+            <Field orientation="horizontal">
+              <Checkbox
+                id="track-lots-enabled"
+                checked={trackLots}
+                onCheckedChange={(checked) => setTrackLots(checked === true)}
+                disabled={pending}
+              />
+              <FieldContent>
+                <FieldLabel htmlFor="track-lots-enabled">Учитывать партии и сроки годности</FieldLabel>
+                <FieldDescription>
+                  Если включено, при проведении прихода для товаров с включённым учётом по партиям создаются
+                  партии со сроком годности (дата прихода + стойкость). Появляется раздел «Партии и сроки» с
+                  контролем свежести (FEFO) и списанием порчи. Себестоимость остаётся средневзвешенной — партии
+                  только операционные. По умолчанию выключено — партии не создаются.
                 </FieldDescription>
               </FieldContent>
             </Field>

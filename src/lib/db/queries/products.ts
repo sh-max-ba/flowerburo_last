@@ -36,12 +36,33 @@ export function upsertProduct(formData: FormData, currentUser: CurrentUser) {
     const reserved = before ? numberFromRow(before.reserved) : toNumber(formData.get("reserved"))
     const expected = before ? numberFromRow(before.expected) : toNumber(formData.get("expected"))
 
+    // Настройки учёта по партиям приходят из формы товара только если она их содержит
+    // (скрытый маркер lotSettingsPresent). Иначе сохраняем существующие — чтобы не сбросить
+    // непереданным чекбоксом (снятый чекбокс не отправляет ключ).
+    const hasLotSettings = formData.get("lotSettingsPresent") === "on"
+    const trackLots = hasLotSettings
+      ? formData.get("trackLots") === "on"
+        ? 1
+        : 0
+      : before
+        ? numberFromRow(before.track_lots ?? 0)
+        : 0
+    let vaseLifeDays: number | null
+    if (hasLotSettings) {
+      const raw = toNumber(formData.get("vaseLifeDays"))
+      vaseLifeDays = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : null
+    } else {
+      vaseLifeDays = before && before.vase_life_days != null ? numberFromRow(before.vase_life_days) : null
+    }
+
     client
       .prepare(
         `INSERT INTO products (
-          code, category_path, article, name, unit, stock, reserved, expected, cost_price, sale_price, updated_at
+          code, category_path, article, name, unit, stock, reserved, expected, cost_price, sale_price,
+          track_lots, vase_life_days, updated_at
         ) VALUES (
-          @code, @categoryPath, @article, @name, @unit, @stock, @reserved, @expected, @costPrice, @salePrice, CURRENT_TIMESTAMP
+          @code, @categoryPath, @article, @name, @unit, @stock, @reserved, @expected, @costPrice, @salePrice,
+          @trackLots, @vaseLifeDays, CURRENT_TIMESTAMP
         )
         ON CONFLICT(code) DO UPDATE SET
           category_path = excluded.category_path,
@@ -53,6 +74,8 @@ export function upsertProduct(formData: FormData, currentUser: CurrentUser) {
           expected = excluded.expected,
           cost_price = excluded.cost_price,
           sale_price = excluded.sale_price,
+          track_lots = excluded.track_lots,
+          vase_life_days = excluded.vase_life_days,
           updated_at = CURRENT_TIMESTAMP`
       )
       .run({
@@ -66,6 +89,8 @@ export function upsertProduct(formData: FormData, currentUser: CurrentUser) {
         expected,
         costPrice,
         salePrice,
+        trackLots,
+        vaseLifeDays,
       })
 
     const after = getProduct(client, code)
