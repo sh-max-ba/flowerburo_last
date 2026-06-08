@@ -737,6 +737,7 @@ export async function saveSupplierAction(formData: FormData) {
   return runRoleAction(["owner"], () => {
     upsertSupplier(formData)
     revalidatePath("/settings")
+    revalidatePath("/suppliers")
   }, "Поставщик сохранен")
 }
 
@@ -744,6 +745,7 @@ export async function setSupplierActiveAction(supplierId: number, isActive: bool
   return runRoleAction(["owner"], () => {
     setSupplierActive(supplierId, isActive)
     revalidatePath("/settings")
+    revalidatePath("/suppliers")
   }, isActive ? "Поставщик включен" : "Поставщик отключен")
 }
 

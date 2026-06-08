@@ -20,17 +20,27 @@ export function upsertSupplier(formData: FormData) {
   const client = db()
   const id = Number(clean(formData.get("id")))
   const name = clean(formData.get("name"))
-  const isActive = clean(formData.get("isActive")) !== "0"
-
   if (!name) {
     throw new Error("Название поставщика обязательно.")
   }
 
-  // Реквизиты опциональны: пустое значение допустимо, но непустое — валидируем по форме.
-  const inn = clean(formData.get("inn"))
-  const kpp = clean(formData.get("kpp"))
-  const ogrn = clean(formData.get("ogrn"))
-  const email = clean(formData.get("email"))
+  // При редактировании читаем текущую строку: поля, ОТСУТСТВУЮЩИЕ в форме, сохраняются как есть.
+  // Так короткая форма в /settings (только основные поля) не затирает реквизиты, заполненные в /suppliers.
+  const existing = id
+    ? (client.prepare("SELECT * FROM suppliers WHERE id = ?").get(id) as Record<string, unknown> | undefined)
+    : undefined
+  if (id && !existing) {
+    throw new Error("Поставщик не найден.")
+  }
+
+  const field = (key: string, column: string) =>
+    formData.has(key) ? clean(formData.get(key)) : existing ? String(existing[column] ?? "") : ""
+
+  // Реквизиты опциональны: пустое значение допустимо, непустое — валидируем по форме.
+  const inn = field("inn", "inn")
+  const kpp = field("kpp", "kpp")
+  const ogrn = field("ogrn", "ogrn")
+  const email = field("email", "email")
   if (inn && !/^(\d{10}|\d{12})$/.test(inn)) {
     throw new Error("ИНН должен содержать 10 или 12 цифр.")
   }
@@ -44,16 +54,28 @@ export function upsertSupplier(formData: FormData) {
     throw new Error("Некорректный e-mail.")
   }
 
-  // Отсрочка: пусто = не задано (NULL); иначе целое число дней >= 0.
-  const paymentDelayRaw = clean(formData.get("paymentDelayDays"))
-  let paymentDelayDays: number | null = null
-  if (paymentDelayRaw) {
-    const parsed = Number(paymentDelayRaw)
-    if (!Number.isInteger(parsed) || parsed < 0) {
-      throw new Error("Отсрочка платежа — целое число дней (0 или больше).")
+  // Отсрочка: пусто = не задано (NULL); иначе целое число дней >= 0. Поле отсутствует — сохранить текущее.
+  let paymentDelayDays: number | null
+  if (formData.has("paymentDelayDays")) {
+    const raw = clean(formData.get("paymentDelayDays"))
+    if (!raw) {
+      paymentDelayDays = null
+    } else {
+      const parsed = Number(raw)
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        throw new Error("Отсрочка платежа — целое число дней (0 или больше).")
+      }
+      paymentDelayDays = parsed
     }
-    paymentDelayDays = parsed
+  } else {
+    paymentDelayDays = existing && existing.payment_delay_days != null ? Number(existing.payment_delay_days) : null
   }
+
+  const isActive = formData.has("isActive")
+    ? clean(formData.get("isActive")) !== "0"
+    : existing
+      ? Number(existing.is_active ?? 1) === 1
+      : true
 
   const duplicate = client.prepare("SELECT id FROM suppliers WHERE name = ?").get(name) as
     | { id: number }
@@ -64,24 +86,24 @@ export function upsertSupplier(formData: FormData) {
 
   const fields = {
     name,
-    legal_name: clean(formData.get("legalName")),
+    legal_name: field("legalName", "legal_name"),
     inn,
     kpp,
     ogrn,
-    phone: clean(formData.get("phone")),
-    phone_2: clean(formData.get("phone2")),
+    phone: field("phone", "phone"),
+    phone_2: field("phone2", "phone_2"),
     email,
-    contact_name: clean(formData.get("contactName")),
-    contact_name_2: clean(formData.get("contactName2")),
-    responsible_name: clean(formData.get("responsibleName")),
-    address: clean(formData.get("address")),
-    bank_name: clean(formData.get("bankName")),
-    bank_account: clean(formData.get("bankAccount")),
-    bik: clean(formData.get("bik")),
-    corr_account: clean(formData.get("corrAccount")),
-    payment_terms: clean(formData.get("paymentTerms")),
+    contact_name: field("contactName", "contact_name"),
+    contact_name_2: field("contactName2", "contact_name_2"),
+    responsible_name: field("responsibleName", "responsible_name"),
+    address: field("address", "address"),
+    bank_name: field("bankName", "bank_name"),
+    bank_account: field("bankAccount", "bank_account"),
+    bik: field("bik", "bik"),
+    corr_account: field("corrAccount", "corr_account"),
+    payment_terms: field("paymentTerms", "payment_terms"),
     payment_delay_days: paymentDelayDays,
-    comment: clean(formData.get("comment")),
+    comment: field("comment", "comment"),
     is_active: isActive ? 1 : 0,
   }
 

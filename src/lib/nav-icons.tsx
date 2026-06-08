@@ -12,6 +12,7 @@ import {
   ScrollTextIcon,
   SettingsIcon,
   TagsIcon,
+  TruckIcon,
   UserCheckIcon,
   UsersIcon,
 } from "lucide-react"
@@ -29,6 +30,7 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   "ready-orders": PackageCheckIcon,
   stock: BoxesIcon,
   "stock-acts": ScrollTextIcon,
+  suppliers: TruckIcon,
   history: HistoryIcon,
   shifts: BanknoteIcon,
   settings: SettingsIcon,
