@@ -12,6 +12,7 @@ import {
   migrateCashReversal,
   migrateSaleReversal,
   migrateProductArchive,
+  migrateSupplierExtraInfo,
 } from "./schema"
 import { seedDefaultDealPipeline } from "./seed"
 
@@ -33,6 +34,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 10, up: migrateCashReversal },
   { version: 11, up: migrateSaleReversal },
   { version: 12, up: migrateProductArchive },
+  { version: 13, up: migrateSupplierExtraInfo },
 ]
 
 export function migrate(client: Database.Database) {

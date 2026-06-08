@@ -84,6 +84,8 @@ export {
 } from "./db/queries/users"
 export {
   listSuppliers,
+  getSupplier,
+  getSupplierPurchaseHistory,
   upsertSupplier,
   setSupplierActive,
 } from "./db/queries/suppliers"

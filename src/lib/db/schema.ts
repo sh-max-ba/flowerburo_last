@@ -709,6 +709,8 @@ export function migrateBaseline(client: Database.Database) {
     "ALTER TABLE integration_settings ADD COLUMN webhook_auth_required INTEGER DEFAULT 0",
     client
   )
+  // Доп. поля поставщика (v13) — единый источник DDL, чтобы свежие БД получали их сразу.
+  migrateSupplierExtraInfo(client)
   client.exec(`
     CREATE INDEX IF NOT EXISTS idx_customers_wazzup_chat ON customers(wazzup_chat_type, wazzup_chat_id);
     CREATE INDEX IF NOT EXISTS idx_deals_wazzup_chat ON deals(wazzup_chat_type, wazzup_chat_id, status);
@@ -882,4 +884,31 @@ export function migrateProductArchive(client: Database.Database) {
     client
   )
   client.exec("CREATE INDEX IF NOT EXISTS idx_products_is_active ON products(is_active);")
+}
+
+// Версия 13: расширенная карточка поставщика — реквизиты (ИНН/КПП/ОГРН, юр. название, адрес),
+// банк (наименование, р/с, БИК, к/с), условия оплаты + отсрочка, ответственное лицо и доп. контакт.
+// Все колонки опциональные (NULL у существующих строк) — аддитивно и безопасно. Идемпотентно
+// (ensureColumn). Вызывается и из migrateBaseline (свежие БД), и отдельной версией (существующие).
+export function migrateSupplierExtraInfo(client: Database.Database) {
+  const columns: Array<[string, string]> = [
+    ["legal_name", "TEXT"],
+    ["inn", "TEXT"],
+    ["kpp", "TEXT"],
+    ["ogrn", "TEXT"],
+    ["email", "TEXT"],
+    ["address", "TEXT"],
+    ["bank_name", "TEXT"],
+    ["bank_account", "TEXT"],
+    ["bik", "TEXT"],
+    ["corr_account", "TEXT"],
+    ["payment_terms", "TEXT"],
+    ["payment_delay_days", "INTEGER"],
+    ["responsible_name", "TEXT"],
+    ["contact_name_2", "TEXT"],
+    ["phone_2", "TEXT"],
+  ]
+  for (const [column, type] of columns) {
+    ensureColumn("suppliers", column, `ALTER TABLE suppliers ADD COLUMN ${column} ${type}`, client)
+  }
 }

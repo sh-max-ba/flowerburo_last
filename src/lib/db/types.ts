@@ -368,8 +368,23 @@ export type StockDocument = {
 export type Supplier = {
   id: number
   name: string
+  legalName: string
+  inn: string
+  kpp: string
+  ogrn: string
   phone: string
+  phone2: string
+  email: string
   contactName: string
+  contactName2: string
+  responsibleName: string
+  address: string
+  bankName: string
+  bankAccount: string
+  bik: string
+  corrAccount: string
+  paymentTerms: string
+  paymentDelayDays: number | null
   comment: string
   isActive: boolean
   createdAt: string
