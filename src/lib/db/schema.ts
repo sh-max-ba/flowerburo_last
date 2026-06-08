@@ -719,6 +719,8 @@ export function migrateBaseline(client: Database.Database) {
   migrateStockDocCorrection(client)
   // Партии/сроки годности (v17).
   migrateStockLots(client)
+  // Инвентаризация (v18).
+  migrateStockInventory(client)
   client.exec(`
     CREATE INDEX IF NOT EXISTS idx_customers_wazzup_chat ON customers(wazzup_chat_type, wazzup_chat_id);
     CREATE INDEX IF NOT EXISTS idx_deals_wazzup_chat ON deals(wazzup_chat_type, wazzup_chat_id, status);
@@ -1048,4 +1050,34 @@ export function migrateStockLots(client: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_stock_lot_movements_lot ON stock_lot_movements(lot_id);
     CREATE INDEX IF NOT EXISTS idx_stock_lot_movements_product ON stock_lot_movements(product_code);
   `)
+}
+
+// Версия 18: инвентаризация (пересчёт фактических остатков). Опция A — отдельный тип акта 'count'
+// в той же таблице stock_documents (новый StockDocumentType; БД не ограничивает type CHECK'ом).
+// На позиции: expected_qty — снимок учётного остатка на СТАРТЕ (для отчёта/аудита); counted_qty —
+// введённый факт; counted_at — момент ввода (маркер «строка сосчитана», отличает delta=0 от
+// «не считали»); variance_reason — опциональная причина; applied — строка обработана при проведении
+// (даже при нулевой дельте). На документе: count_started_at — момент снимка. Дельта при ПРОВЕДЕНИИ
+// считается от ЖИВОГО products.stock (не от снимка) → параллельные продажи не затираются. Движения —
+// существующий тип 'adjustment' (новый StockMovementType не нужен). Аддитивно, идемпотентно.
+export function migrateStockInventory(client: Database.Database) {
+  ensureColumn("stock_document_items", "expected_qty", "ALTER TABLE stock_document_items ADD COLUMN expected_qty REAL", client)
+  ensureColumn("stock_document_items", "counted_qty", "ALTER TABLE stock_document_items ADD COLUMN counted_qty REAL", client)
+  ensureColumn("stock_document_items", "counted_at", "ALTER TABLE stock_document_items ADD COLUMN counted_at TEXT", client)
+  ensureColumn(
+    "stock_document_items",
+    "variance_reason",
+    "ALTER TABLE stock_document_items ADD COLUMN variance_reason TEXT",
+    client
+  )
+  ensureColumn(
+    "stock_document_items",
+    "applied",
+    "ALTER TABLE stock_document_items ADD COLUMN applied INTEGER NOT NULL DEFAULT 0",
+    client
+  )
+  ensureColumn("stock_documents", "count_started_at", "ALTER TABLE stock_documents ADD COLUMN count_started_at TEXT", client)
+  client.exec(
+    "CREATE INDEX IF NOT EXISTS idx_stock_document_items_variance ON stock_document_items(document_id, variance_reason);"
+  )
 }

@@ -55,6 +55,13 @@ import {
   createBouquetTemplate,
   createAndPostStockDocument,
   createStockCorrectionDraft,
+  createInventoryDraftWithSnapshot,
+  saveInventoryDraft,
+  recalcInventoryExpected,
+  postInventory,
+  cancelInventory,
+  getInventoryEnabled,
+  setInventoryEnabled,
   createUser,
   deleteBouquetTemplate,
   deleteProduct,
@@ -311,7 +318,80 @@ export async function saveStockCostSettingsAction(formData: FormData) {
   return runRoleAction(["owner"], () => {
     setRecomputeCostOnReceipt(formData.get("recomputeCostOnReceipt") === "on")
     setTrackLotsEnabled(formData.get("trackLotsEnabled") === "on")
+    setInventoryEnabled(formData.get("enableInventory") === "on")
   }, "Настройки склада сохранены.")
+}
+
+function revalidateInventory(documentId?: number) {
+  revalidatePath("/stock/inventory")
+  if (documentId) {
+    revalidatePath(`/stock/inventory/${documentId}`)
+  }
+  revalidatePath("/stock/acts")
+  revalidatePath("/history/stock")
+  revalidatePath("/stock")
+}
+
+export async function createInventoryAction(
+  formData: FormData
+): Promise<DataActionResult<{ documentId: number }>> {
+  return runDataAction(
+    ["owner"],
+    (user) => {
+      if (!getInventoryEnabled()) {
+        throw new Error("Инвентаризация выключена. Включите её в настройках.")
+      }
+      const documentId = createInventoryDraftWithSnapshot(formData, user)
+      revalidateInventory(documentId)
+      return { documentId }
+    },
+    "Инвентаризация создана.",
+    "Инвентаризация не создана."
+  )
+}
+
+export async function saveInventoryDraftAction(formData: FormData) {
+  return runRoleAction(
+    ["owner"],
+    () => {
+      saveInventoryDraft(formData)
+      revalidateInventory(Number(formData.get("documentId")) || undefined)
+    },
+    "Черновик инвентаризации сохранён."
+  )
+}
+
+export async function recalcInventoryExpectedAction(documentId: number) {
+  return runRoleAction(
+    ["owner"],
+    () => {
+      recalcInventoryExpected(documentId)
+      revalidateInventory(documentId)
+    },
+    "Расчётный остаток пересчитан."
+  )
+}
+
+export async function postInventoryAction(documentId: number) {
+  return runRoleAction(
+    ["owner"],
+    (user) => {
+      postInventory(documentId, user)
+      revalidateInventory(documentId)
+    },
+    "Инвентаризация проведена."
+  )
+}
+
+export async function cancelInventoryAction(documentId: number) {
+  return runRoleAction(
+    ["owner"],
+    () => {
+      cancelInventory(documentId)
+      revalidateInventory(documentId)
+    },
+    "Инвентаризация отменена."
+  )
 }
 
 export async function writeOffLotAction(formData: FormData) {

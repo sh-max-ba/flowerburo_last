@@ -89,6 +89,18 @@ export function stockDocumentTypeLabel(value: string) {
   const labels: Record<string, string> = {
     stock_in: "Пополнение",
     stock_out: "Списание",
+    count: "Инвентаризация",
+  }
+
+  return labels[value] ?? value
+}
+
+export function stockVarianceReasonLabel(value: string) {
+  const labels: Record<string, string> = {
+    spoilage: "Порча",
+    shrinkage: "Недостача/кража",
+    admin_error: "Учётная ошибка",
+    other: "Прочее",
   }
 
   return labels[value] ?? value

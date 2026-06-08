@@ -59,10 +59,24 @@ export function setTrackLotsEnabled(value: boolean, client: Database.Database = 
   setAppSetting(TRACK_LOTS_ENABLED_KEY, value ? "1" : "0", client)
 }
 
+// «Инвентаризация»: когда включено, доступен раздел /stock/inventory (пересчёт фактических остатков).
+// По умолчанию ВЫКЛЮЧЕНО — до явного включения раздел скрыт и создание актов инвентаризации блокируется
+// (безопасный поэтапный выкат + мгновенный выключатель при инциденте).
+const ENABLE_INVENTORY_KEY = "enable_inventory"
+
+export function getInventoryEnabled(client: Database.Database = db()): boolean {
+  return getAppSetting(ENABLE_INVENTORY_KEY, client) === "1"
+}
+
+export function setInventoryEnabled(value: boolean, client: Database.Database = db()): void {
+  setAppSetting(ENABLE_INVENTORY_KEY, value ? "1" : "0", client)
+}
+
 export type OrderSettings = {
   allowOversellOrders: boolean
   recomputeCostOnReceipt: boolean
   trackLotsEnabled: boolean
+  inventoryEnabled: boolean
 }
 
 export function getOrderSettings(client: Database.Database = db()): OrderSettings {
@@ -70,5 +84,6 @@ export function getOrderSettings(client: Database.Database = db()): OrderSetting
     allowOversellOrders: getAllowOversellOrders(client),
     recomputeCostOnReceipt: getRecomputeCostOnReceipt(client),
     trackLotsEnabled: getTrackLotsEnabled(client),
+    inventoryEnabled: getInventoryEnabled(client),
   }
 }

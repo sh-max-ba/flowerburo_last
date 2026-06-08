@@ -10,6 +10,7 @@ import type {
   StockDocumentItem,
   StockDocumentOverhead,
   StockDocumentStatus,
+  StockDocumentType,
   StockLot,
   StockLotStatus,
   StockOverheadKind,
@@ -20,7 +21,6 @@ import type {
   WazzupMessage,
 } from "./types"
 import { stockLotStatuses, stockOverheadKinds } from "./types"
-import { parseStockDocumentType } from "./form-parsers"
 
 export function mapUser(row: Record<string, unknown>): User {
   const role = String(row.role)
@@ -211,6 +211,11 @@ export function mapStockDocumentItem(row: Record<string, unknown>): StockDocumen
     costAfter: row.cost_after == null ? null : numberFromRow(row.cost_after),
     beforeStock: row.before_stock === null ? null : numberFromRow(row.before_stock),
     afterStock: row.after_stock === null ? null : numberFromRow(row.after_stock),
+    expectedQty: row.expected_qty == null ? null : numberFromRow(row.expected_qty),
+    countedQty: row.counted_qty == null ? null : numberFromRow(row.counted_qty),
+    countedAt: row.counted_at == null ? null : String(row.counted_at),
+    varianceReason: row.variance_reason == null ? null : String(row.variance_reason),
+    applied: numberFromRow(row.applied ?? 0) === 1,
     currentStock: row.current_stock === null || row.current_stock === undefined ? null : numberFromRow(row.current_stock),
     currentReserved:
       row.current_reserved === null || row.current_reserved === undefined ? null : numberFromRow(row.current_reserved),
@@ -221,6 +226,17 @@ export function mapStockDocumentItem(row: Record<string, unknown>): StockDocumen
 
 export function normalizeAllocationMethod(value: unknown): AllocationMethod {
   return value === "by_qty" ? "by_qty" : "by_value"
+}
+
+// Мягкая нормализация типа акта для ЧТЕНИЯ (в отличие от parseStockDocumentType, который валидирует
+// ввод и бросает). Forward-compatible: неизвестный тип не роняет рендер списков/истории, а мягко
+// падает в "stock_out" (для отображения). Так появление нового типа не ломает старые страницы.
+function normalizeStockDocumentType(value: unknown): StockDocumentType {
+  const type = String(value ?? "")
+  if (type === "stock_in" || type === "stock_out" || type === "count") {
+    return type
+  }
+  return "stock_out"
 }
 
 export function mapStockLot(row: Record<string, unknown>): StockLot {
@@ -265,7 +281,7 @@ export function mapStockDocument(
   return {
     id: numberFromRow(row.id),
     number: String(row.number ?? ""),
-    type: parseStockDocumentType(String(row.type)),
+    type: normalizeStockDocumentType(row.type),
     status: normalizeStockDocumentStatus(row.status),
     supplierId: row.supplier_id === null || row.supplier_id === undefined ? null : numberFromRow(row.supplier_id),
     supplierName: String(row.supplier_name ?? ""),
@@ -284,6 +300,8 @@ export function mapStockDocument(
         ? null
         : numberFromRow(row.corrected_by_document_id),
     correctedAt: row.corrected_at === null || row.corrected_at === undefined ? null : String(row.corrected_at),
+    countStartedAt:
+      row.count_started_at === null || row.count_started_at === undefined ? null : String(row.count_started_at),
     createdByUserId: row.created_by_user_id === null ? null : numberFromRow(row.created_by_user_id),
     createdByName: String(row.created_by_name ?? ""),
     createdAt: String(row.created_at ?? ""),

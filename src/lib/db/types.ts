@@ -21,8 +21,17 @@ export type StockMovementType =
   | "stock_in"
   | "stock_out"
 
-export type StockDocumentType = "stock_in" | "stock_out"
+export type StockDocumentType = "stock_in" | "stock_out" | "count"
 export type StockDocumentStatus = "draft" | "posted" | "cancelled" | "corrected"
+
+// Причина расхождения при инвентаризации (опциональна). admin_error — учётная ошибка.
+export type StockVarianceReason = "spoilage" | "shrinkage" | "admin_error" | "other"
+export const stockVarianceReasons = new Set<StockVarianceReason>([
+  "spoilage",
+  "shrinkage",
+  "admin_error",
+  "other",
+])
 
 export type Product = {
   code: string
@@ -346,6 +355,14 @@ export type StockDocumentItem = {
   costAfter: number | null
   beforeStock: number | null
   afterStock: number | null
+  // Инвентаризация (v18): expectedQty — снимок учётного остатка на старте (для отчёта);
+  // countedQty — введённый факт; countedAt — момент ввода факта (маркер «строка сосчитана»);
+  // varianceReason — опциональная причина расхождения; applied — строка обработана при проведении.
+  expectedQty: number | null
+  countedQty: number | null
+  countedAt: string | null
+  varianceReason: string | null
+  applied: boolean
   currentStock: number | null
   currentReserved: number | null
   comment: string
@@ -389,6 +406,8 @@ export type StockDocument = {
   correctsDocumentId: number | null
   correctedByDocumentId: number | null
   correctedAt: string | null
+  // Инвентаризация (v18): момент снимка расчётного остатка (expected_qty по позициям).
+  countStartedAt: string | null
   createdByUserId: number | null
   createdByName: string
   createdAt: string

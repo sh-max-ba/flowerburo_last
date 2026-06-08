@@ -1,0 +1,305 @@
+import type Database from "better-sqlite3"
+import { numberFromRow } from "@/lib/db-row"
+import { fromDatetimeLocalValue } from "@/lib/datetime"
+import { db } from "../connection"
+import { getProduct, recordStockMovement } from "../ledger"
+import { clean, roundMoney, toNumber } from "../form-parsers"
+import type { CurrentUser, StockVarianceReason } from "../types"
+import { stockVarianceReasons } from "../types"
+import { getTrackLotsEnabled } from "./app-settings"
+import { generateStockDocumentNumberInTransaction } from "./stock-documents"
+import { reconcileProductLots } from "./stock-lots"
+
+// Реселект статуса под локом — первый шаг каждой мутирующей транзакции инвентаризации. better-sqlite3
+// синхронный, соединение одно → даёт корректную сериализацию (второй конкурент увидит не-draft и упадёт).
+function loadDraftInventory(client: Database.Database, documentId: number): Record<string, unknown> {
+  const document = client.prepare("SELECT * FROM stock_documents WHERE id = ?").get(documentId) as
+    | Record<string, unknown>
+    | undefined
+  if (!document) {
+    throw new Error("Акт инвентаризации не найден.")
+  }
+  if (String(document.type) !== "count") {
+    throw new Error("Это не инвентаризация.")
+  }
+  if (String(document.status) !== "draft") {
+    throw new Error("Можно редактировать только черновик инвентаризации.")
+  }
+  return document
+}
+
+function normalizeVarianceReason(value: unknown): string | null {
+  const reason = String(value ?? "").trim()
+  if (!reason) {
+    return null
+  }
+  return stockVarianceReasons.has(reason as StockVarianceReason) ? reason : "other"
+}
+
+// Создаёт черновик инвентаризации со СНИМКОМ расчётного остатка (expected_qty = products.stock на этот
+// момент) по охвату: вся активная номенклатура / категория (по префиксу пути) / явный список кодов.
+export function createInventoryDraftWithSnapshot(formData: FormData, currentUser: CurrentUser) {
+  const client = db()
+  const scope = clean(formData.get("scope")) || "all"
+  const category = clean(formData.get("category"))
+  const codes = formData.getAll("code").map((value) => clean(value)).filter(Boolean)
+  const comment = clean(formData.get("comment"))
+  const operationAt = fromDatetimeLocalValue(formData.get("operationAt"))
+
+  const run = client.transaction(() => {
+    let products: Array<Record<string, unknown>>
+    if (scope === "codes") {
+      if (!codes.length) {
+        throw new Error("Выберите хотя бы один товар.")
+      }
+      const placeholders = codes.map(() => "?").join(",")
+      products = client
+        .prepare(`SELECT code, name, stock FROM products WHERE code IN (${placeholders}) ORDER BY name COLLATE NOCASE`)
+        .all(...codes) as Array<Record<string, unknown>>
+    } else if (scope === "category") {
+      if (!category) {
+        throw new Error("Укажите категорию.")
+      }
+      products = client
+        .prepare(
+          `SELECT code, name, stock FROM products
+           WHERE COALESCE(is_active, 1) = 1 AND (category_path = ? OR category_path LIKE ?)
+           ORDER BY name COLLATE NOCASE`
+        )
+        .all(category, `${category}%`) as Array<Record<string, unknown>>
+    } else {
+      products = client
+        .prepare("SELECT code, name, stock FROM products WHERE COALESCE(is_active, 1) = 1 ORDER BY name COLLATE NOCASE")
+        .all() as Array<Record<string, unknown>>
+    }
+
+    if (!products.length) {
+      throw new Error("По выбранному охвату нет товаров.")
+    }
+
+    const number = generateStockDocumentNumberInTransaction(client, "count")
+    const inserted = client
+      .prepare(
+        `INSERT INTO stock_documents (
+          number, type, status, comment, operation_at, count_started_at, created_by_user_id, created_by_name
+        ) VALUES (
+          @number, 'count', 'draft', @comment, @operationAt, CURRENT_TIMESTAMP, @createdByUserId, @createdByName
+        )`
+      )
+      .run({
+        number,
+        comment,
+        operationAt,
+        createdByUserId: currentUser.id,
+        createdByName: currentUser.name,
+      })
+    const documentId = Number(inserted.lastInsertRowid)
+
+    const insertItem = client.prepare(
+      `INSERT INTO stock_document_items (
+        document_id, product_code, product_name, qty, expected_qty, counted_qty, counted_at, applied
+      ) VALUES (
+        @documentId, @productCode, @productName, 0, @expectedQty, NULL, NULL, 0
+      )`
+    )
+    for (const product of products) {
+      insertItem.run({
+        documentId,
+        productCode: String(product.code),
+        productName: String(product.name ?? ""),
+        expectedQty: numberFromRow(product.stock),
+      })
+    }
+
+    return documentId
+  })
+
+  return run()
+}
+
+// Сохранение факта: counted_qty (пусто → «не считали», NULL), counted_at, variance_reason по строкам.
+export function saveInventoryDraft(formData: FormData) {
+  const client = db()
+  const documentId = Number(clean(formData.get("documentId")))
+  if (!Number.isInteger(documentId) || documentId <= 0) {
+    throw new Error("Акт инвентаризации не найден.")
+  }
+
+  const run = client.transaction(() => {
+    loadDraftInventory(client, documentId)
+
+    const comment = clean(formData.get("comment"))
+    const operationAt = fromDatetimeLocalValue(formData.get("operationAt"))
+    client
+      .prepare("UPDATE stock_documents SET comment = ?, operation_at = ? WHERE id = ?")
+      .run(comment, operationAt, documentId)
+
+    const itemIds = formData.getAll("itemId").map((value) => clean(value))
+    const countedValues = formData.getAll("countedQty")
+    const reasonValues = formData.getAll("varianceReason")
+
+    const updateItem = client.prepare(
+      `UPDATE stock_document_items
+       SET counted_qty = @countedQty, counted_at = @countedAt, variance_reason = @varianceReason
+       WHERE id = @id AND document_id = @documentId`
+    )
+
+    itemIds.forEach((rawId, index) => {
+      const id = Number(rawId)
+      if (!Number.isInteger(id) || id <= 0) {
+        return
+      }
+      const rawCounted = countedValues[index]
+      const isBlank = rawCounted == null || String(rawCounted).trim() === ""
+      let countedQty: number | null = null
+      let countedAt: string | null = null
+      if (!isBlank) {
+        const value = toNumber(rawCounted)
+        if (!Number.isFinite(value) || value < 0) {
+          throw new Error("Фактическое количество не может быть отрицательным.")
+        }
+        countedQty = value
+        countedAt = new Date().toISOString()
+      }
+      updateItem.run({
+        id,
+        documentId,
+        countedQty,
+        countedAt,
+        varianceReason: countedQty == null ? null : normalizeVarianceReason(reasonValues[index]),
+      })
+    })
+
+    return documentId
+  })
+
+  return run()
+}
+
+// Пересчитать расчётный остаток (expected_qty) к текущему products.stock — если остатки правили после
+// старта инвентаризации. Только для черновика. Обновляет и count_started_at (новый снимок).
+export function recalcInventoryExpected(documentId: number) {
+  const client = db()
+  const run = client.transaction(() => {
+    loadDraftInventory(client, documentId)
+    client
+      .prepare(
+        `UPDATE stock_document_items
+         SET expected_qty = COALESCE((SELECT stock FROM products WHERE products.code = stock_document_items.product_code), expected_qty)
+         WHERE document_id = ?`
+      )
+      .run(documentId)
+    client.prepare("UPDATE stock_documents SET count_started_at = CURRENT_TIMESTAMP WHERE id = ?").run(documentId)
+  })
+  run()
+}
+
+// Проведение инвентаризации: для каждой сосчитанной строки дельта = counted_qty − ЖИВОЙ products.stock
+// (не от снимка → параллельные продажи не затираются), применяется как 'adjustment'-движение,
+// ПРИВЯЗАННОЕ к документу (не через applyProductDelta). reserved не трогаем. Себестоимость излишков —
+// по текущей средней (cost_price не меняется). Затем FEFO-сверка партий по затронутым кодам.
+function postInventoryInTransaction(client: Database.Database, documentId: number, currentUser: CurrentUser) {
+  const document = loadDraftInventory(client, documentId)
+  const number = String(document.number)
+
+  const items = client
+    .prepare("SELECT * FROM stock_document_items WHERE document_id = ? ORDER BY id")
+    .all(documentId) as Array<Record<string, unknown>>
+
+  const affected = new Set<string>()
+
+  for (const item of items) {
+    // Несосчитанная строка (факт не введён) — остаток не трогаем.
+    if (item.counted_qty == null) {
+      continue
+    }
+    const productCode = String(item.product_code)
+    const counted = numberFromRow(item.counted_qty)
+    const product = getProduct(client, productCode)
+
+    // Товар удалён между стартом и проведением — пропускаем строку с пометкой, остальное проводим.
+    if (!product) {
+      const note = String(item.comment ?? "").trim()
+      client
+        .prepare("UPDATE stock_document_items SET applied = 0, comment = ? WHERE id = ?")
+        .run(note ? `${note}; товар удалён — строка не применена` : "товар удалён — строка не применена", item.id)
+      continue
+    }
+
+    const beforeStock = numberFromRow(product.stock)
+    const beforeReserved = numberFromRow(product.reserved)
+    const delta = roundMoney(counted - beforeStock)
+
+    client
+      .prepare("UPDATE stock_document_items SET before_stock = ?, after_stock = ?, qty = ?, applied = 1 WHERE id = ?")
+      .run(beforeStock, counted, delta, item.id)
+
+    if (delta !== 0) {
+      client
+        .prepare("UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE code = ?")
+        .run(counted, productCode)
+      recordStockMovement(client, {
+        productCode,
+        type: "adjustment",
+        qty: delta,
+        beforeStock,
+        afterStock: counted,
+        beforeReserved,
+        afterReserved: beforeReserved,
+        documentId,
+        userId: currentUser.id,
+        comment: `Инвентаризация ${number}`,
+      })
+      affected.add(productCode)
+    }
+  }
+
+  // Партии — только по кодам с реально применённой ненулевой дельтой (пересчёт без расхождений их не трогает).
+  if (getTrackLotsEnabled(client)) {
+    for (const productCode of affected) {
+      reconcileProductLots(client, productCode, currentUser)
+    }
+  }
+
+  client
+    .prepare(
+      `UPDATE stock_documents
+       SET status = 'posted', posted_by_user_id = ?, posted_by_name = ?,
+           operation_at = COALESCE(NULLIF(operation_at, ''), CURRENT_TIMESTAMP), posted_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .run(currentUser.id, currentUser.name, documentId)
+}
+
+export function postInventory(documentId: number, currentUser: CurrentUser) {
+  const client = db()
+  const run = client.transaction(() => postInventoryInTransaction(client, documentId, currentUser))
+  run()
+}
+
+// Отмена — только черновик (как cancelStockDocument). Проведённую не откатываем (журнал append-only;
+// исправление = новая инвентаризация).
+export function cancelInventory(documentId: number) {
+  const client = db()
+  const run = client.transaction(() => {
+    const document = client.prepare("SELECT type, status FROM stock_documents WHERE id = ?").get(documentId) as
+      | { type: string; status: string }
+      | undefined
+    if (!document) {
+      throw new Error("Акт инвентаризации не найден.")
+    }
+    if (document.type !== "count") {
+      throw new Error("Это не инвентаризация.")
+    }
+    if (document.status === "posted") {
+      throw new Error("Проведённую инвентаризацию нельзя отменить. Создайте новую.")
+    }
+    if (document.status === "cancelled") {
+      return
+    }
+    client
+      .prepare("UPDATE stock_documents SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .run(documentId)
+  })
+  run()
+}

@@ -49,6 +49,7 @@ export type {
   StockLotMovementType,
   StockLotStatus,
   StockLotWriteOffReason,
+  StockVarianceReason,
   StockMovementType,
   StockOverheadKind,
   Supplier,
@@ -187,9 +188,18 @@ export {
   setRecomputeCostOnReceipt,
   getTrackLotsEnabled,
   setTrackLotsEnabled,
+  getInventoryEnabled,
+  setInventoryEnabled,
   getOrderSettings,
 } from "./db/queries/app-settings"
 export type { OrderSettings } from "./db/queries/app-settings"
+export {
+  createInventoryDraftWithSnapshot,
+  saveInventoryDraft,
+  recalcInventoryExpected,
+  postInventory,
+  cancelInventory,
+} from "./db/queries/stock-inventory"
 export {
   listProductLots,
   listExpiringLots,

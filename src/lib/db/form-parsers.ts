@@ -77,7 +77,7 @@ export function parsePositiveInteger(value: FormDataEntryValue | string | null |
 }
 
 export function parseStockDocumentType(value: string): StockDocumentType {
-  if (value !== "stock_in" && value !== "stock_out") {
+  if (value !== "stock_in" && value !== "stock_out" && value !== "count") {
     throw new Error("Некорректный тип акта склада.")
   }
 

@@ -94,7 +94,7 @@ export function getStockDocument(documentId: number) {
 
 export function generateStockDocumentNumber(type: StockDocumentType) {
   const client = db()
-  const prefix = type === "stock_in" ? "IN" : "OUT"
+  const prefix = type === "stock_in" ? "IN" : type === "count" ? "INV" : "OUT"
   const row = client
     .prepare("SELECT number FROM stock_documents WHERE type = ? AND number LIKE ? ORDER BY id DESC LIMIT 1")
     .get(type, `${prefix}-%`) as { number: string } | undefined
@@ -104,8 +104,8 @@ export function generateStockDocumentNumber(type: StockDocumentType) {
   return `${prefix}-${String(nextSequence).padStart(6, "0")}`
 }
 
-function generateStockDocumentNumberInTransaction(client: Database.Database, type: StockDocumentType) {
-  const prefix = type === "stock_in" ? "IN" : "OUT"
+export function generateStockDocumentNumberInTransaction(client: Database.Database, type: StockDocumentType) {
+  const prefix = type === "stock_in" ? "IN" : type === "count" ? "INV" : "OUT"
   const row = client
     .prepare("SELECT number FROM stock_documents WHERE type = ? AND number LIKE ? ORDER BY id DESC LIMIT 1")
     .get(type, `${prefix}-%`) as { number: string } | undefined
@@ -350,6 +350,11 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
   if (String(document.status) !== "draft") {
     throw new Error("Можно провести только черновик акта.")
   }
+  // Инвентаризацию (type='count') проводят ТОЛЬКО через её раздел (postInventory): здесь qty —
+  // плейсхолдер/дельта, а движение должно быть 'adjustment'. Строгий гейт, а не дисциплина UI.
+  if (String(document.type) === "count") {
+    throw new Error("Инвентаризацию проводите через её раздел.")
+  }
 
   // Корректировка (связана с исходным актом) проводится по особому пути: откат исходного + применение
   // исправленного, без пересчёта себестоимости (см. postStockCorrectionInTransaction).
@@ -406,6 +411,8 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
 
     const beforeStock = numberFromRow(product.stock)
     const beforeReserved = numberFromRow(product.reserved)
+    // type здесь только stock_in|stock_out (count отсеян гейтом выше) — сужаем для StockMovementType.
+    const movementType = type === "stock_in" ? "stock_in" : "stock_out"
     const movementQty = type === "stock_in" ? qty : -qty
     const afterStock = beforeStock + movementQty
 
@@ -445,7 +452,7 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
 
     recordStockMovement(client, {
       productCode,
-      type,
+      type: movementType,
       qty: movementQty,
       beforeStock,
       afterStock,
