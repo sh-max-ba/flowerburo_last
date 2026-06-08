@@ -11,6 +11,7 @@ export type NavSectionId =
   | "stock"
   | "stock-acts"
   | "stock-lots"
+  | "stock-inventory"
   | "suppliers"
   | "shifts"
   | "history"
@@ -50,6 +51,7 @@ export const NAV: NavItem[] = [
   { id: "stock", label: "Склад", href: "/stock", iconKey: "stock", roles: ["owner"] },
   { id: "stock-acts", label: "Акты склада", href: "/stock/acts", iconKey: "stock-acts", roles: ["owner"] },
   { id: "stock-lots", label: "Партии и сроки", href: "/stock/lots", iconKey: "stock-lots", roles: ["owner"] },
+  { id: "stock-inventory", label: "Инвентаризация", href: "/stock/inventory", iconKey: "stock-inventory", roles: ["owner"] },
   { id: "suppliers", label: "Поставщики", href: "/suppliers", iconKey: "suppliers", roles: ["owner"] },
   { id: "history-cash", label: "История кассы", href: "/history", iconKey: "history", roles: ["owner", "manager"] },
   { id: "history", label: "История склада", href: "/history/stock", iconKey: "history", roles: ["owner"] },
@@ -62,7 +64,7 @@ export const NAV_GROUPS: NavGroup[] = [
   { id: "overview", label: "Обзор", ids: ["dashboard"] },
   { id: "crm", label: "CRM", ids: ["deals", "clients", "bouquets"] },
   { id: "work", label: "Работа", ids: ["sales", "orders", "ready-orders", "history-cash"] },
-  { id: "stock", label: "Склад", ids: ["stock", "stock-acts", "stock-lots", "suppliers", "history"] },
+  { id: "stock", label: "Склад", ids: ["stock", "stock-acts", "stock-lots", "stock-inventory", "suppliers", "history"] },
   { id: "admin", label: "Администрирование", ids: ["shifts", "settings", "users"] },
 ]
 

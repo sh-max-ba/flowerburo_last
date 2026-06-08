@@ -478,6 +478,7 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
   const router = useRouter()
   const [recompute, setRecompute] = useState(orderSettings.recomputeCostOnReceipt)
   const [trackLots, setTrackLots] = useState(orderSettings.trackLotsEnabled)
+  const [inventory, setInventory] = useState(orderSettings.inventoryEnabled)
   const [pending, startTransition] = useTransition()
 
   // Ресинхронизация после router.refresh() (подстройка во время рендера, без эффекта).
@@ -491,9 +492,16 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
     setLastSavedTrackLots(orderSettings.trackLotsEnabled)
     setTrackLots(orderSettings.trackLotsEnabled)
   }
+  const [lastSavedInventory, setLastSavedInventory] = useState(orderSettings.inventoryEnabled)
+  if (lastSavedInventory !== orderSettings.inventoryEnabled) {
+    setLastSavedInventory(orderSettings.inventoryEnabled)
+    setInventory(orderSettings.inventoryEnabled)
+  }
 
   const isDirty =
-    recompute !== orderSettings.recomputeCostOnReceipt || trackLots !== orderSettings.trackLotsEnabled
+    recompute !== orderSettings.recomputeCostOnReceipt ||
+    trackLots !== orderSettings.trackLotsEnabled ||
+    inventory !== orderSettings.inventoryEnabled
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -503,6 +511,9 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
     }
     if (trackLots) {
       formData.set("trackLotsEnabled", "on")
+    }
+    if (inventory) {
+      formData.set("enableInventory", "on")
     }
     startTransition(async () => {
       const result = await saveStockCostSettingsAction(formData)
@@ -564,6 +575,23 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
                   партии со сроком годности (дата прихода + стойкость). Появляется раздел «Партии и сроки» с
                   контролем свежести (FEFO) и списанием порчи. Себестоимость остаётся средневзвешенной — партии
                   только операционные. По умолчанию выключено — партии не создаются.
+                </FieldDescription>
+              </FieldContent>
+            </Field>
+            <Field orientation="horizontal">
+              <Checkbox
+                id="enable-inventory"
+                checked={inventory}
+                onCheckedChange={(checked) => setInventory(checked === true)}
+                disabled={pending}
+              />
+              <FieldContent>
+                <FieldLabel htmlFor="enable-inventory">Инвентаризация</FieldLabel>
+                <FieldDescription>
+                  Если включено, появляется раздел «Инвентаризация» — пересчёт фактических остатков с фиксацией
+                  излишков и недостач. На старте фиксируется учётный остаток, при проведении остаток
+                  выравнивается к факту (разница считается от живого остатка, параллельные продажи не теряются).
+                  По умолчанию выключено.
                 </FieldDescription>
               </FieldContent>
             </Field>
