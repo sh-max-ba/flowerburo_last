@@ -104,6 +104,27 @@ export function stockDocumentStatusLabel(value: string) {
   return labels[value] ?? value
 }
 
+export function allocationMethodLabel(value: string) {
+  const labels: Record<string, string> = {
+    by_value: "По стоимости",
+    by_qty: "По количеству",
+  }
+
+  return labels[value] ?? value
+}
+
+export function stockOverheadKindLabel(value: string) {
+  const labels: Record<string, string> = {
+    delivery: "Доставка",
+    customs: "Таможня",
+    commission: "Комиссия",
+    packaging: "Упаковка",
+    other: "Прочее",
+  }
+
+  return labels[value] ?? value
+}
+
 export function discountTypeLabel(value: string) {
   const labels: Record<string, string> = {
     none: "Без скидки",

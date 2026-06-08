@@ -713,6 +713,8 @@ export function migrateBaseline(client: Database.Database) {
   migrateSupplierExtraInfo(client)
   // Себестоимость в приходе (v14).
   migrateStockCostAtReceipt(client)
+  // Накладные расходы (v15).
+  migrateStockOverhead(client)
   client.exec(`
     CREATE INDEX IF NOT EXISTS idx_customers_wazzup_chat ON customers(wazzup_chat_type, wazzup_chat_id);
     CREATE INDEX IF NOT EXISTS idx_deals_wazzup_chat ON deals(wazzup_chat_type, wazzup_chat_id, status);
@@ -932,4 +934,44 @@ export function migrateStockCostAtReceipt(client: Database.Database) {
   ensureColumn("stock_document_items", "cost_before", "ALTER TABLE stock_document_items ADD COLUMN cost_before REAL", client)
   ensureColumn("stock_document_items", "cost_after", "ALTER TABLE stock_document_items ADD COLUMN cost_after REAL", client)
   ensureColumn("stock_document_items", "stock_before_cost", "ALTER TABLE stock_document_items ADD COLUMN stock_before_cost REAL", client)
+}
+
+// Версия 15: накладные расходы на приходе (доставка/таможня/комиссия и т.п.) с распределением на
+// себестоимость. stock_document_overheads — строки расходов документа. На документе: overhead_total
+// (сумма расходов), allocation_method (by_value | by_qty), goods_total/landed_total (снимки при
+// проведении). На позиции: allocated_overhead (доля расходов, заполняется при проведении) +
+// landed_unit_cost (из v14) = (qty*unit_cost + allocated_overhead)/qty. Аддитивно, идемпотентно.
+// Пересчёт себестоимости — за тем же флагом recompute_cost_on_receipt (по умолчанию OFF).
+export function migrateStockOverhead(client: Database.Database) {
+  ensureColumn(
+    "stock_documents",
+    "overhead_total",
+    "ALTER TABLE stock_documents ADD COLUMN overhead_total REAL NOT NULL DEFAULT 0",
+    client
+  )
+  ensureColumn(
+    "stock_documents",
+    "allocation_method",
+    "ALTER TABLE stock_documents ADD COLUMN allocation_method TEXT NOT NULL DEFAULT 'by_value'",
+    client
+  )
+  ensureColumn("stock_documents", "goods_total", "ALTER TABLE stock_documents ADD COLUMN goods_total REAL NOT NULL DEFAULT 0", client)
+  ensureColumn("stock_documents", "landed_total", "ALTER TABLE stock_documents ADD COLUMN landed_total REAL NOT NULL DEFAULT 0", client)
+  ensureColumn(
+    "stock_document_items",
+    "allocated_overhead",
+    "ALTER TABLE stock_document_items ADD COLUMN allocated_overhead REAL NOT NULL DEFAULT 0",
+    client
+  )
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS stock_document_overheads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      document_id INTEGER NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'other',
+      label TEXT NOT NULL DEFAULT '',
+      amount REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_stock_document_overheads_document_id ON stock_document_overheads(document_id);
+  `)
 }

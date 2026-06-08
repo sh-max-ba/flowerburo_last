@@ -338,6 +338,7 @@ export type StockDocumentItem = {
   productName: string
   qty: number
   unitCost: number
+  allocatedOverhead: number
   landedUnitCost: number | null
   costBefore: number | null
   costAfter: number | null
@@ -346,6 +347,27 @@ export type StockDocumentItem = {
   currentStock: number | null
   currentReserved: number | null
   comment: string
+  createdAt: string
+}
+
+export type AllocationMethod = "by_value" | "by_qty"
+export const allocationMethods = new Set<AllocationMethod>(["by_value", "by_qty"])
+
+export type StockOverheadKind = "delivery" | "customs" | "commission" | "packaging" | "other"
+export const stockOverheadKinds = new Set<StockOverheadKind>([
+  "delivery",
+  "customs",
+  "commission",
+  "packaging",
+  "other",
+])
+
+export type StockDocumentOverhead = {
+  id: number
+  documentId: number
+  kind: StockOverheadKind
+  label: string
+  amount: number
   createdAt: string
 }
 
@@ -358,6 +380,10 @@ export type StockDocument = {
   supplierName: string
   comment: string
   operationAt: string | null
+  overheadTotal: number
+  allocationMethod: AllocationMethod
+  goodsTotal: number
+  landedTotal: number
   createdByUserId: number | null
   createdByName: string
   createdAt: string
@@ -367,6 +393,7 @@ export type StockDocument = {
   cancelledAt: string | null
   itemsCount: number
   items: StockDocumentItem[]
+  overheads: StockDocumentOverhead[]
 }
 
 export type Supplier = {

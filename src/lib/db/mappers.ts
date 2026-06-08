@@ -1,5 +1,6 @@
 import { numberFromRow } from "@/lib/db-row"
 import type {
+  AllocationMethod,
   BouquetTemplate,
   BouquetTemplateItem,
   CurrentUser,
@@ -7,13 +8,16 @@ import type {
   DealBouquetMessageStatus,
   StockDocument,
   StockDocumentItem,
+  StockDocumentOverhead,
   StockDocumentStatus,
+  StockOverheadKind,
   Supplier,
   User,
   WarehouseImport,
   WarehouseImportItem,
   WazzupMessage,
 } from "./types"
+import { stockOverheadKinds } from "./types"
 import { parseStockDocumentType } from "./form-parsers"
 
 export function mapUser(row: Record<string, unknown>): User {
@@ -199,6 +203,7 @@ export function mapStockDocumentItem(row: Record<string, unknown>): StockDocumen
     productName: String(row.product_name ?? ""),
     qty: numberFromRow(row.qty),
     unitCost: numberFromRow(row.unit_cost),
+    allocatedOverhead: numberFromRow(row.allocated_overhead),
     landedUnitCost: row.landed_unit_cost == null ? null : numberFromRow(row.landed_unit_cost),
     costBefore: row.cost_before == null ? null : numberFromRow(row.cost_before),
     costAfter: row.cost_after == null ? null : numberFromRow(row.cost_after),
@@ -212,7 +217,27 @@ export function mapStockDocumentItem(row: Record<string, unknown>): StockDocumen
   }
 }
 
-export function mapStockDocument(row: Record<string, unknown>, items: StockDocumentItem[] = []): StockDocument {
+export function normalizeAllocationMethod(value: unknown): AllocationMethod {
+  return value === "by_qty" ? "by_qty" : "by_value"
+}
+
+export function mapStockDocumentOverhead(row: Record<string, unknown>): StockDocumentOverhead {
+  const kind = String(row.kind ?? "other")
+  return {
+    id: numberFromRow(row.id),
+    documentId: numberFromRow(row.document_id),
+    kind: stockOverheadKinds.has(kind as StockOverheadKind) ? (kind as StockOverheadKind) : "other",
+    label: String(row.label ?? ""),
+    amount: numberFromRow(row.amount),
+    createdAt: String(row.created_at ?? ""),
+  }
+}
+
+export function mapStockDocument(
+  row: Record<string, unknown>,
+  items: StockDocumentItem[] = [],
+  overheads: StockDocumentOverhead[] = []
+): StockDocument {
   return {
     id: numberFromRow(row.id),
     number: String(row.number ?? ""),
@@ -222,6 +247,10 @@ export function mapStockDocument(row: Record<string, unknown>, items: StockDocum
     supplierName: String(row.supplier_name ?? ""),
     comment: String(row.comment ?? ""),
     operationAt: row.operation_at === null || row.operation_at === undefined ? null : String(row.operation_at),
+    overheadTotal: numberFromRow(row.overhead_total),
+    allocationMethod: normalizeAllocationMethod(row.allocation_method),
+    goodsTotal: numberFromRow(row.goods_total),
+    landedTotal: numberFromRow(row.landed_total),
     createdByUserId: row.created_by_user_id === null ? null : numberFromRow(row.created_by_user_id),
     createdByName: String(row.created_by_name ?? ""),
     createdAt: String(row.created_at ?? ""),
@@ -231,5 +260,6 @@ export function mapStockDocument(row: Record<string, unknown>, items: StockDocum
     cancelledAt: row.cancelled_at === null ? null : String(row.cancelled_at ?? ""),
     itemsCount: numberFromRow(row.items_count ?? items.length),
     items,
+    overheads,
   }
 }
