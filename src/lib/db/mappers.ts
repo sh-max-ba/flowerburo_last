@@ -188,7 +188,7 @@ export function mapWazzupMessage(row: Record<string, unknown>): WazzupMessage {
 
 export function normalizeStockDocumentStatus(value: unknown): StockDocumentStatus {
   const status = String(value)
-  if (status === "posted" || status === "cancelled") {
+  if (status === "posted" || status === "cancelled" || status === "corrected") {
     return status
   }
 
@@ -251,6 +251,15 @@ export function mapStockDocument(
     allocationMethod: normalizeAllocationMethod(row.allocation_method),
     goodsTotal: numberFromRow(row.goods_total),
     landedTotal: numberFromRow(row.landed_total),
+    correctsDocumentId:
+      row.corrects_document_id === null || row.corrects_document_id === undefined
+        ? null
+        : numberFromRow(row.corrects_document_id),
+    correctedByDocumentId:
+      row.corrected_by_document_id === null || row.corrected_by_document_id === undefined
+        ? null
+        : numberFromRow(row.corrected_by_document_id),
+    correctedAt: row.corrected_at === null || row.corrected_at === undefined ? null : String(row.corrected_at),
     createdByUserId: row.created_by_user_id === null ? null : numberFromRow(row.created_by_user_id),
     createdByName: String(row.created_by_name ?? ""),
     createdAt: String(row.created_at ?? ""),

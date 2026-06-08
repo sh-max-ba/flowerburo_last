@@ -99,6 +99,7 @@ export function stockDocumentStatusLabel(value: string) {
     draft: "Черновик",
     posted: "Проведен",
     cancelled: "Отменен",
+    corrected: "Скорректирован",
   }
 
   return labels[value] ?? value

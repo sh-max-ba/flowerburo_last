@@ -22,7 +22,7 @@ export type StockMovementType =
   | "stock_out"
 
 export type StockDocumentType = "stock_in" | "stock_out"
-export type StockDocumentStatus = "draft" | "posted" | "cancelled"
+export type StockDocumentStatus = "draft" | "posted" | "cancelled" | "corrected"
 
 export type Product = {
   code: string
@@ -384,6 +384,9 @@ export type StockDocument = {
   allocationMethod: AllocationMethod
   goodsTotal: number
   landedTotal: number
+  correctsDocumentId: number | null
+  correctedByDocumentId: number | null
+  correctedAt: string | null
   createdByUserId: number | null
   createdByName: string
   createdAt: string

@@ -15,6 +15,7 @@ import {
   migrateSupplierExtraInfo,
   migrateStockCostAtReceipt,
   migrateStockOverhead,
+  migrateStockDocCorrection,
 } from "./schema"
 import { seedDefaultDealPipeline } from "./seed"
 
@@ -39,6 +40,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 13, up: migrateSupplierExtraInfo },
   { version: 14, up: migrateStockCostAtReceipt },
   { version: 15, up: migrateStockOverhead },
+  { version: 16, up: migrateStockDocCorrection },
 ]
 
 export function migrate(client: Database.Database) {

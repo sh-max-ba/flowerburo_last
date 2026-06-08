@@ -151,6 +151,7 @@ export {
   saveStockDocumentDraft,
   postStockDocument,
   createAndPostStockDocument,
+  createStockCorrectionDraft,
   cancelStockDocument,
 } from "./db/queries/stock-documents"
 export {

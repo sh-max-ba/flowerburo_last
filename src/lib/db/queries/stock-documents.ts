@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3"
 import { fromDatetimeLocalValue } from "@/lib/datetime"
 import { numberFromRow } from "@/lib/db-row"
-import type { CurrentUser, StockDocumentType, StockOverheadKind } from "../types"
+import type { AllocationMethod, CurrentUser, StockDocumentType, StockOverheadKind } from "../types"
 import { stockOverheadKinds } from "../types"
 import { db } from "../connection"
 import { getProduct, recordStockMovement } from "../ledger"
@@ -162,6 +162,46 @@ function buildStockDocumentOverheads(formData: FormData) {
   return overheads
 }
 
+// Распределение суммы накладных расходов по позициям: вес = стоимость строки (по стоимости) или
+// количество (по количеству); при нулевой сумме весов — падаем на распределение по количеству.
+// Остаток округления добавляем к строке с наибольшим весом — сумма долей == overheadTotal ровно.
+function allocateOverhead(
+  lines: Array<{ id: number; qty: number; lineValue: number }>,
+  overheadTotal: number,
+  method: AllocationMethod
+): Map<number, number> {
+  const allocated = new Map<number, number>()
+  if (overheadTotal <= 0 || lines.length === 0) {
+    return allocated
+  }
+
+  let weights = lines.map((line) => (method === "by_qty" ? line.qty : line.lineValue))
+  let sumWeights = weights.reduce((a, b) => a + b, 0)
+  if (sumWeights <= 0) {
+    weights = lines.map((line) => line.qty)
+    sumWeights = weights.reduce((a, b) => a + b, 0)
+  }
+  if (sumWeights <= 0) {
+    return allocated
+  }
+
+  const shares = weights.map((weight) => roundMoney((overheadTotal * weight) / sumWeights))
+  const assigned = roundMoney(shares.reduce((a, b) => a + b, 0))
+  const remainder = roundMoney(overheadTotal - assigned)
+  if (remainder !== 0) {
+    let maxIndex = 0
+    for (let i = 1; i < weights.length; i += 1) {
+      if (weights[i] > weights[maxIndex]) {
+        maxIndex = i
+      }
+    }
+    shares[maxIndex] = roundMoney(shares[maxIndex] + remainder)
+  }
+  lines.forEach((line, index) => allocated.set(line.id, shares[index]))
+
+  return allocated
+}
+
 function getSupplierSnapshot(client: Database.Database, type: StockDocumentType, supplierId: number | null) {
   if (type !== "stock_in" || !supplierId) {
     return { supplierId: null, supplierName: "" }
@@ -310,6 +350,13 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
     throw new Error("Можно провести только черновик акта.")
   }
 
+  // Корректировка (связана с исходным актом) проводится по особому пути: откат исходного + применение
+  // исправленного, без пересчёта себестоимости (см. postStockCorrectionInTransaction).
+  if (document.corrects_document_id != null) {
+    postStockCorrectionInTransaction(client, documentId, currentUser)
+    return
+  }
+
   const type = parseStockDocumentType(String(document.type))
   // Пересчёт себестоимости при приходе — за флагом (по умолчанию OFF). При OFF cost_price не меняется.
   const recomputeCost = getRecomputeCostOnReceipt(client)
@@ -334,33 +381,14 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
   })
   const goodsTotal = roundMoney(lines.reduce((sum, line) => sum + line.lineValue, 0))
 
-  // Доли расходов по позициям: вес = стоимость строки (по стоимости) или количество (по количеству).
-  // Остаток округления добавляем к строке с наибольшим весом, чтобы сумма долей сошлась ровно.
-  const allocated = new Map<number, number>()
-  if (type === "stock_in" && overheadTotal > 0) {
-    let weights = lines.map((line) => (allocationMethod === "by_qty" ? line.qty : line.lineValue))
-    let sumWeights = weights.reduce((a, b) => a + b, 0)
-    if (sumWeights <= 0) {
-      // Все цены закупки нулевые — распределяем по количеству.
-      weights = lines.map((line) => line.qty)
-      sumWeights = weights.reduce((a, b) => a + b, 0)
-    }
-    if (sumWeights > 0) {
-      const shares = weights.map((weight) => roundMoney((overheadTotal * weight) / sumWeights))
-      const assigned = roundMoney(shares.reduce((a, b) => a + b, 0))
-      const remainder = roundMoney(overheadTotal - assigned)
-      if (remainder !== 0) {
-        let maxIndex = 0
-        for (let i = 1; i < weights.length; i += 1) {
-          if (weights[i] > weights[maxIndex]) {
-            maxIndex = i
-          }
-        }
-        shares[maxIndex] = roundMoney(shares[maxIndex] + remainder)
-      }
-      lines.forEach((line, index) => allocated.set(Number(line.item.id), shares[index]))
-    }
-  }
+  const allocated =
+    type === "stock_in"
+      ? allocateOverhead(
+          lines.map((line) => ({ id: Number(line.item.id), qty: line.qty, lineValue: line.lineValue })),
+          overheadTotal,
+          allocationMethod
+        )
+      : new Map<number, number>()
 
   for (const line of lines) {
     const { item, qty, unitCost } = line
@@ -438,6 +466,235 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
        WHERE id = ?`
     )
     .run(currentUser.id, currentUser.name, goodsTotal, landedTotal, documentId)
+}
+
+// Проведение корректировки: откатываем влияние исходного акта на остаток и применяем исправленные
+// позиции. Себестоимость (products.cost_price) НЕ пересчитывается — точное переигрывание
+// средневзвешенной невозможно (начальные остатки не в журнале); при необходимости правится вручную.
+// Исходный акт остаётся в истории (статус 'corrected'), журнал движений append-only.
+function postStockCorrectionInTransaction(client: Database.Database, correctionId: number, currentUser: CurrentUser) {
+  const correction = client.prepare("SELECT * FROM stock_documents WHERE id = ?").get(correctionId) as
+    | Record<string, unknown>
+    | undefined
+  if (!correction) {
+    throw new Error("Корректировка не найдена.")
+  }
+  if (String(correction.status) !== "draft") {
+    throw new Error("Можно провести только черновик корректировки.")
+  }
+  const originalId = correction.corrects_document_id == null ? null : numberFromRow(correction.corrects_document_id)
+  if (!originalId) {
+    throw new Error("Это не корректировка.")
+  }
+
+  const original = client.prepare("SELECT * FROM stock_documents WHERE id = ?").get(originalId) as
+    | Record<string, unknown>
+    | undefined
+  if (!original) {
+    throw new Error("Исходный акт не найден.")
+  }
+  if (String(original.status) !== "posted") {
+    throw new Error("Исходный акт уже не проведён (возможно, уже скорректирован).")
+  }
+  if (original.corrected_by_document_id != null) {
+    throw new Error("Этот акт уже скорректирован.")
+  }
+
+  const correctionItems = client
+    .prepare("SELECT * FROM stock_document_items WHERE document_id = ? ORDER BY id")
+    .all(correctionId) as Array<Record<string, unknown>>
+  if (!correctionItems.length) {
+    throw new Error("В корректировке нет позиций.")
+  }
+  const originalItems = client
+    .prepare("SELECT * FROM stock_document_items WHERE document_id = ? ORDER BY id")
+    .all(originalId) as Array<Record<string, unknown>>
+
+  const origNumber = String(original.number)
+  const corrNumber = String(correction.number)
+
+  // 1) Откат остатка исходного прихода: на каждую позицию -origQty.
+  for (const item of originalItems) {
+    const productCode = String(item.product_code)
+    const qty = numberFromRow(item.qty)
+    const product = getProduct(client, productCode)
+    if (!product) {
+      continue
+    }
+    const beforeStock = numberFromRow(product.stock)
+    const beforeReserved = numberFromRow(product.reserved)
+    const afterStock = beforeStock - qty
+    client.prepare("UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE code = ?").run(afterStock, productCode)
+    recordStockMovement(client, {
+      productCode,
+      type: "adjustment",
+      qty: -qty,
+      beforeStock,
+      afterStock,
+      beforeReserved,
+      afterReserved: beforeReserved,
+      documentId: correctionId,
+      userId: currentUser.id,
+      comment: `Откат акта ${origNumber} (корректировка ${corrNumber})`,
+    })
+  }
+
+  // 2) Применение исправленных позиций: +newQty. Накладные расходы распределяем для отображения
+  // (себестоимость не трогаем).
+  const overheadRows = client
+    .prepare("SELECT amount FROM stock_document_overheads WHERE document_id = ?")
+    .all(correctionId) as Array<Record<string, unknown>>
+  const overheadTotal = roundMoney(overheadRows.reduce((sum, row) => sum + numberFromRow(row.amount), 0))
+  const allocationMethod = normalizeAllocationMethod(correction.allocation_method)
+
+  const lines = correctionItems.map((item) => {
+    const qty = parsePositiveInteger(String(item.qty), "Количество")
+    const unitCost = numberFromRow(item.unit_cost)
+    return { item, qty, unitCost, lineValue: qty * unitCost }
+  })
+  const goodsTotal = roundMoney(lines.reduce((sum, line) => sum + line.lineValue, 0))
+  const allocated = allocateOverhead(
+    lines.map((line) => ({ id: Number(line.item.id), qty: line.qty, lineValue: line.lineValue })),
+    overheadTotal,
+    allocationMethod
+  )
+
+  for (const line of lines) {
+    const { item, qty, unitCost } = line
+    const productCode = String(item.product_code)
+    const product = getProduct(client, productCode)
+    if (!product) {
+      throw new Error(`Товар ${productCode} не найден.`)
+    }
+    const beforeStock = numberFromRow(product.stock)
+    const beforeReserved = numberFromRow(product.reserved)
+    const afterStock = beforeStock + qty
+    const allocatedOverhead = allocated.get(Number(item.id)) ?? 0
+    const landedUnitCost = roundMoney((qty * unitCost + allocatedOverhead) / qty)
+
+    client.prepare("UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE code = ?").run(afterStock, productCode)
+    client
+      .prepare(
+        `UPDATE stock_document_items
+         SET before_stock = ?, after_stock = ?, allocated_overhead = ?, landed_unit_cost = ?
+         WHERE id = ?`
+      )
+      .run(beforeStock, afterStock, allocatedOverhead, landedUnitCost, item.id)
+    recordStockMovement(client, {
+      productCode,
+      type: "adjustment",
+      qty,
+      beforeStock,
+      afterStock,
+      beforeReserved,
+      afterReserved: beforeReserved,
+      documentId: correctionId,
+      userId: currentUser.id,
+      comment: `Корректировка акта ${origNumber}`,
+    })
+  }
+
+  const landedTotal = roundMoney(goodsTotal + overheadTotal)
+  client
+    .prepare(
+      `UPDATE stock_documents
+       SET status = 'posted', posted_by_user_id = ?, posted_by_name = ?,
+           operation_at = COALESCE(NULLIF(operation_at, ''), CURRENT_TIMESTAMP), posted_at = CURRENT_TIMESTAMP,
+           goods_total = ?, landed_total = ?
+       WHERE id = ?`
+    )
+    .run(currentUser.id, currentUser.name, goodsTotal, landedTotal, correctionId)
+  client
+    .prepare(
+      "UPDATE stock_documents SET status = 'corrected', corrected_by_document_id = ?, corrected_at = CURRENT_TIMESTAMP WHERE id = ?"
+    )
+    .run(correctionId, originalId)
+}
+
+// Создаёт черновик корректировки по проведённому приходному акту: копирует позиции (с ценами),
+// накладные расходы, поставщика и метод распределения. Возвращает id нового черновика.
+export function createStockCorrectionDraft(originalDocumentId: number, currentUser: CurrentUser) {
+  const client = db()
+  const run = client.transaction(() => {
+    const original = client.prepare("SELECT * FROM stock_documents WHERE id = ?").get(originalDocumentId) as
+      | Record<string, unknown>
+      | undefined
+    if (!original) {
+      throw new Error("Акт склада не найден.")
+    }
+    if (parseStockDocumentType(String(original.type)) !== "stock_in") {
+      throw new Error("Корректировать можно только приходный акт.")
+    }
+    if (String(original.status) !== "posted") {
+      throw new Error("Корректировать можно только проведённый акт.")
+    }
+    if (original.corrected_by_document_id != null) {
+      throw new Error("Этот акт уже скорректирован.")
+    }
+
+    const number = generateStockDocumentNumberInTransaction(client, "stock_in")
+    const inserted = client
+      .prepare(
+        `INSERT INTO stock_documents (
+          number, type, status, supplier_id, supplier_name, comment, operation_at,
+          overhead_total, allocation_method, corrects_document_id, created_by_user_id, created_by_name
+        ) VALUES (
+          @number, 'stock_in', 'draft', @supplierId, @supplierName, @comment, @operationAt,
+          @overheadTotal, @allocationMethod, @correctsId, @createdByUserId, @createdByName
+        )`
+      )
+      .run({
+        number,
+        supplierId: original.supplier_id ?? null,
+        supplierName: String(original.supplier_name ?? ""),
+        comment: String(original.comment ?? ""),
+        operationAt: original.operation_at ?? null,
+        overheadTotal: numberFromRow(original.overhead_total),
+        allocationMethod: normalizeAllocationMethod(original.allocation_method),
+        correctsId: originalDocumentId,
+        createdByUserId: currentUser.id,
+        createdByName: currentUser.name,
+      })
+    const newId = Number(inserted.lastInsertRowid)
+
+    const items = client
+      .prepare("SELECT * FROM stock_document_items WHERE document_id = ? ORDER BY id")
+      .all(originalDocumentId) as Array<Record<string, unknown>>
+    const insertItem = client.prepare(
+      `INSERT INTO stock_document_items (document_id, product_code, product_name, qty, unit_cost, comment)
+       VALUES (@documentId, @productCode, @productName, @qty, @unitCost, @comment)`
+    )
+    for (const item of items) {
+      insertItem.run({
+        documentId: newId,
+        productCode: String(item.product_code),
+        productName: String(item.product_name ?? ""),
+        qty: numberFromRow(item.qty),
+        unitCost: numberFromRow(item.unit_cost),
+        comment: String(item.comment ?? ""),
+      })
+    }
+
+    const overheads = client
+      .prepare("SELECT * FROM stock_document_overheads WHERE document_id = ? ORDER BY id")
+      .all(originalDocumentId) as Array<Record<string, unknown>>
+    const insertOverhead = client.prepare(
+      `INSERT INTO stock_document_overheads (document_id, kind, label, amount)
+       VALUES (@documentId, @kind, @label, @amount)`
+    )
+    for (const overhead of overheads) {
+      insertOverhead.run({
+        documentId: newId,
+        kind: String(overhead.kind ?? "other"),
+        label: String(overhead.label ?? ""),
+        amount: numberFromRow(overhead.amount),
+      })
+    }
+
+    return newId
+  })
+
+  return run()
 }
 
 export function saveStockDocumentDraft(formData: FormData, type: StockDocumentType, currentUser: CurrentUser) {

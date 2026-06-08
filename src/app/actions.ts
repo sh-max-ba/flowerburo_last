@@ -54,6 +54,7 @@ import {
   createSale,
   createBouquetTemplate,
   createAndPostStockDocument,
+  createStockCorrectionDraft,
   createUser,
   deleteBouquetTemplate,
   deleteProduct,
@@ -685,6 +686,21 @@ export async function createStockDocumentAction(type: StockDocumentType, formDat
       revalidatePath("/history/stock")
     },
     message
+  )
+}
+
+export async function createStockCorrectionDraftAction(
+  originalDocumentId: number
+): Promise<DataActionResult<{ documentId: number }>> {
+  return runDataAction(
+    ["owner"],
+    (user) => {
+      const documentId = createStockCorrectionDraft(originalDocumentId, user)
+      revalidatePath("/stock/acts")
+      revalidatePath(`/stock/acts/${originalDocumentId}`)
+      return { documentId }
+    },
+    "Создан черновик корректировки"
   )
 }
 

@@ -715,6 +715,8 @@ export function migrateBaseline(client: Database.Database) {
   migrateStockCostAtReceipt(client)
   // Накладные расходы (v15).
   migrateStockOverhead(client)
+  // Корректировка приходов (v16).
+  migrateStockDocCorrection(client)
   client.exec(`
     CREATE INDEX IF NOT EXISTS idx_customers_wazzup_chat ON customers(wazzup_chat_type, wazzup_chat_id);
     CREATE INDEX IF NOT EXISTS idx_deals_wazzup_chat ON deals(wazzup_chat_type, wazzup_chat_id, status);
@@ -973,5 +975,25 @@ export function migrateStockOverhead(client: Database.Database) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_stock_document_overheads_document_id ON stock_document_overheads(document_id);
+  `)
+}
+
+// Версия 16: корректировка приходных актов. Корректировка — НОВЫЙ связанный документ:
+// corrects_document_id (у корректировки → исходный акт), corrected_by_document_id (у исходного →
+// корректировка), corrected_at. Исходный акт остаётся неизменным (журнал append-only), получает
+// статус 'corrected'. При проведении корректировки откатывается остаток исходного и применяется
+// исправленный (себестоимость в v1 НЕ пересчитывается). Аддитивно, идемпотентно.
+export function migrateStockDocCorrection(client: Database.Database) {
+  ensureColumn("stock_documents", "corrects_document_id", "ALTER TABLE stock_documents ADD COLUMN corrects_document_id INTEGER", client)
+  ensureColumn(
+    "stock_documents",
+    "corrected_by_document_id",
+    "ALTER TABLE stock_documents ADD COLUMN corrected_by_document_id INTEGER",
+    client
+  )
+  ensureColumn("stock_documents", "corrected_at", "ALTER TABLE stock_documents ADD COLUMN corrected_at TEXT", client)
+  client.exec(`
+    CREATE INDEX IF NOT EXISTS idx_stock_documents_corrects ON stock_documents(corrects_document_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_documents_corrected_by ON stock_documents(corrected_by_document_id);
   `)
 }
