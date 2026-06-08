@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { useMemo, useState, useTransition } from "react"
+import { SearchIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
   cancelInventoryAction,
@@ -19,6 +20,13 @@ import type { StockDocument } from "@/lib/db"
 import { stockDocumentStatusLabel, stockVarianceReasonLabel } from "@/lib/labels"
 
 const REASONS = ["spoilage", "shrinkage", "admin_error", "other"] as const
+
+const FILTERS = [
+  { value: "all", label: "Все" },
+  { value: "uncounted", label: "Не сосчитано" },
+  { value: "variance", label: "Расхождения" },
+  { value: "counted", label: "Сосчитано" },
+] as const
 
 function formatDateTime(value: string | null) {
   if (!value) return "—"
@@ -46,6 +54,46 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
 
   function setRow(id: number, patch: Partial<RowState>) {
     setRows((current) => ({ ...current, [id]: { ...current[id], ...patch } }))
+  }
+
+  const [query, setQuery] = useState("")
+  const [filter, setFilter] = useState<"all" | "uncounted" | "variance" | "counted">("all")
+
+  // Фильтр статуса основан на СОХРАНЁННЫХ полях (item.countedQty/applied), а не на живом вводе —
+  // иначе строка исчезала бы из «не сосчитано» при первом же нажатии. Поиск — по названию/коду.
+  const visibleItems = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return doc.items.filter((item) => {
+      if (q) {
+        const haystack = `${item.productName} ${item.productCode}`.toLowerCase()
+        if (!haystack.includes(q)) return false
+      }
+      if (filter === "all") return true
+      if (filter === "uncounted") return item.countedQty == null
+      if (filter === "counted") return item.countedQty != null
+      // variance
+      if (isDraft) return item.countedQty != null && item.countedQty - (item.expectedQty ?? 0) !== 0
+      return item.applied && item.qty !== 0
+    })
+  }, [doc.items, query, filter, isDraft])
+
+  // Быстрое «факт = расчётному» для одной строки.
+  function quickFill(item: StockDocument["items"][number]) {
+    setRow(item.id, { counted: String(item.expectedQty ?? 0) })
+  }
+
+  // Принять расчётный для всех несосчитанных среди ВИДИМЫХ (учёт фильтра/поиска) — как «факт=расчётный».
+  function bulkFillExpected() {
+    setRows((current) => {
+      const next = { ...current }
+      for (const item of visibleItems) {
+        const fact = current[item.id]?.counted ?? ""
+        if (fact.trim() === "") {
+          next[item.id] = { ...current[item.id], counted: String(item.expectedQty ?? 0) }
+        }
+      }
+      return next
+    })
   }
 
   // Сводка расхождений (по введённому факту против расчётного — что видит кладовщик).
@@ -151,6 +199,40 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
 
       <Card className="rounded-2xl border bg-white">
         <CardContent>
+          <div className="mb-4 flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative w-full sm:max-w-xs">
+                <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Поиск по названию или коду"
+                  className="h-9 pl-8"
+                />
+              </div>
+              {FILTERS.map((option) => (
+                <Button
+                  key={option.value}
+                  type="button"
+                  size="sm"
+                  variant={filter === option.value ? "default" : "outline"}
+                  onClick={() => setFilter(option.value)}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">
+                Показано {visibleItems.length} из {doc.items.length}
+              </span>
+              {isDraft && (
+                <Button type="button" variant="outline" size="sm" onClick={bulkFillExpected} disabled={pending}>
+                  Принять расчётный для несосчитанных
+                </Button>
+              )}
+            </div>
+          </div>
           <Table>
             <TableHeader>
               <TableRow>
@@ -159,7 +241,7 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
                 {isDraft ? (
                   <>
                     <TableHead className="text-right">Текущий</TableHead>
-                    <TableHead className="w-28 text-right">Факт</TableHead>
+                    <TableHead className="w-40 text-right">Факт</TableHead>
                     <TableHead className="text-right">Разница</TableHead>
                     <TableHead className="w-44">Причина</TableHead>
                   </>
@@ -175,7 +257,14 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {doc.items.map((item) => {
+              {visibleItems.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
+                    Ничего не найдено
+                  </TableCell>
+                </TableRow>
+              )}
+              {visibleItems.map((item) => {
                 const expected = item.expectedQty ?? 0
                 if (isDraft) {
                   const row = rows[item.id] ?? { counted: "", reason: "" }
@@ -187,15 +276,28 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
                       <TableCell className="text-right">{expected}</TableCell>
                       <TableCell className="text-right text-muted-foreground">{item.currentStock ?? "—"}</TableCell>
                       <TableCell className="text-right">
-                        <Input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={row.counted}
-                          onChange={(event) => setRow(item.id, { counted: event.target.value })}
-                          className="h-8 w-24 text-right"
-                          disabled={pending}
-                        />
+                        <div className="flex items-center justify-end gap-1">
+                          <Input
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={row.counted}
+                            onChange={(event) => setRow(item.id, { counted: event.target.value })}
+                            className="h-8 w-20 text-right"
+                            disabled={pending}
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs"
+                            onClick={() => quickFill(item)}
+                            disabled={pending}
+                            title="Факт = расчётному"
+                          >
+                            =расч.
+                          </Button>
+                        </div>
                       </TableCell>
                       <TableCell className={`text-right tabular-nums ${diffColor(diff)}`}>
                         {diff == null ? "—" : diff > 0 ? `+${diff}` : diff}
