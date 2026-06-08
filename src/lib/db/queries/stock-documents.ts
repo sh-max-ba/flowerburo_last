@@ -5,7 +5,8 @@ import type { CurrentUser, StockDocumentType } from "../types"
 import { db } from "../connection"
 import { getProduct, recordStockMovement } from "../ledger"
 import { mapStockDocument, mapStockDocumentItem } from "../mappers"
-import { clean, parsePositiveInteger, parseStockDocumentType } from "../form-parsers"
+import { clean, parsePositiveInteger, parseStockDocumentType, roundMoney, toNumber } from "../form-parsers"
+import { getRecomputeCostOnReceipt } from "./app-settings"
 
 export function listStockDocuments(filters?: {
   type?: string
@@ -111,6 +112,7 @@ function generateStockDocumentNumberInTransaction(client: Database.Database, typ
 function buildStockDocumentItems(formData: FormData) {
   const productCodes = formData.getAll("itemProductCode").map((value) => clean(value))
   const qtyValues = formData.getAll("itemQty")
+  const unitCostValues = formData.getAll("itemUnitCost")
   const commentValues = formData.getAll("itemComment")
 
   if (!productCodes.length || productCodes.every((code) => !code)) {
@@ -122,9 +124,13 @@ function buildStockDocumentItems(formData: FormData) {
       throw new Error("У каждой позиции акта должен быть товар.")
     }
 
+    // Цена закупки опциональна (по умолчанию 0); не может быть отрицательной.
+    const unitCost = roundMoney(Math.max(0, toNumber(unitCostValues[index])))
+
     return {
       productCode,
       qty: parsePositiveInteger(qtyValues[index], "Количество"),
+      unitCost,
       comment: clean(commentValues[index]),
     }
   })
@@ -210,9 +216,9 @@ function saveStockDocumentDraftInTransaction(
 
   const insertItem = client.prepare(
     `INSERT INTO stock_document_items (
-      document_id, product_code, product_name, qty, comment
+      document_id, product_code, product_name, qty, unit_cost, comment
     ) VALUES (
-      @documentId, @productCode, @productName, @qty, @comment
+      @documentId, @productCode, @productName, @qty, @unitCost, @comment
     )`
   )
 
@@ -227,6 +233,7 @@ function saveStockDocumentDraftInTransaction(
       productCode: item.productCode,
       productName: String(product.name),
       qty: item.qty,
+      unitCost: item.unitCost,
       comment: item.comment,
     })
   }
@@ -246,6 +253,8 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
   }
 
   const type = parseStockDocumentType(String(document.type))
+  // Пересчёт себестоимости при приходе — за флагом (по умолчанию OFF). При OFF cost_price не меняется.
+  const recomputeCost = getRecomputeCostOnReceipt(client)
   const items = client
     .prepare("SELECT * FROM stock_document_items WHERE document_id = ? ORDER BY id")
     .all(documentId) as Array<Record<string, unknown>>
@@ -266,12 +275,36 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
     const movementQty = type === "stock_in" ? qty : -qty
     const afterStock = beforeStock + movementQty
 
+    // Средневзвешенная себестоимость — только для прихода, при включённом флаге и заданной цене
+    // закупки (unit_cost > 0; нулевая цена не «размывает» себестоимость). Снимки cost_before/after/
+    // stock_before_cost нужны для будущей корректировки (переигрывания); NULL — позиция не влияла.
+    const oldCost = numberFromRow(product.cost_price)
+    const unitCost = numberFromRow(item.unit_cost)
+    let newCost = oldCost
+    let landedUnitCost: number | null = null
+    let costBefore: number | null = null
+    let costAfter: number | null = null
+    let stockBeforeCost: number | null = null
+    if (recomputeCost && type === "stock_in" && unitCost > 0) {
+      const basis = beforeStock > 0 ? beforeStock : 0
+      newCost =
+        basis + qty > 0 ? roundMoney((basis * oldCost + qty * unitCost) / (basis + qty)) : roundMoney(unitCost)
+      landedUnitCost = unitCost
+      costBefore = oldCost
+      costAfter = newCost
+      stockBeforeCost = basis
+    }
+
     client
-      .prepare("UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE code = ?")
-      .run(afterStock, productCode)
+      .prepare("UPDATE products SET stock = ?, cost_price = ?, updated_at = CURRENT_TIMESTAMP WHERE code = ?")
+      .run(afterStock, newCost, productCode)
     client
-      .prepare("UPDATE stock_document_items SET before_stock = ?, after_stock = ? WHERE id = ?")
-      .run(beforeStock, afterStock, item.id)
+      .prepare(
+        `UPDATE stock_document_items
+         SET before_stock = ?, after_stock = ?, landed_unit_cost = ?, cost_before = ?, cost_after = ?, stock_before_cost = ?
+         WHERE id = ?`
+      )
+      .run(beforeStock, afterStock, landedUnitCost, costBefore, costAfter, stockBeforeCost, item.id)
 
     recordStockMovement(client, {
       productCode,

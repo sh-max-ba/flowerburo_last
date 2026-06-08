@@ -711,6 +711,8 @@ export function migrateBaseline(client: Database.Database) {
   )
   // Доп. поля поставщика (v13) — единый источник DDL, чтобы свежие БД получали их сразу.
   migrateSupplierExtraInfo(client)
+  // Себестоимость в приходе (v14).
+  migrateStockCostAtReceipt(client)
   client.exec(`
     CREATE INDEX IF NOT EXISTS idx_customers_wazzup_chat ON customers(wazzup_chat_type, wazzup_chat_id);
     CREATE INDEX IF NOT EXISTS idx_deals_wazzup_chat ON deals(wazzup_chat_type, wazzup_chat_id, status);
@@ -911,4 +913,23 @@ export function migrateSupplierExtraInfo(client: Database.Database) {
   for (const [column, type] of columns) {
     ensureColumn("suppliers", column, `ALTER TABLE suppliers ADD COLUMN ${column} ${type}`, client)
   }
+}
+
+// Версия 14: себестоимость в приходе. unit_cost — закупочная цена за единицу (вводится в позиции
+// приходного акта). landed_unit_cost/cost_before/cost_after/stock_before_cost — снимки при ПРОВЕДЕНИИ
+// для средневзвешенного пересчёта products.cost_price и будущей корректировки/переигрывания (NULL
+// у позиций, не повлиявших на себестоимость, и у всех старых проводок). Пересчёт идёт ТОЛЬКО при
+// включённом флаге recompute_cost_on_receipt (по умолчанию OFF) — до явного включения поведение
+// прода не меняется. Идемпотентно. Вызывается из migrateBaseline и отдельной версией.
+export function migrateStockCostAtReceipt(client: Database.Database) {
+  ensureColumn(
+    "stock_document_items",
+    "unit_cost",
+    "ALTER TABLE stock_document_items ADD COLUMN unit_cost REAL NOT NULL DEFAULT 0",
+    client
+  )
+  ensureColumn("stock_document_items", "landed_unit_cost", "ALTER TABLE stock_document_items ADD COLUMN landed_unit_cost REAL", client)
+  ensureColumn("stock_document_items", "cost_before", "ALTER TABLE stock_document_items ADD COLUMN cost_before REAL", client)
+  ensureColumn("stock_document_items", "cost_after", "ALTER TABLE stock_document_items ADD COLUMN cost_after REAL", client)
+  ensureColumn("stock_document_items", "stock_before_cost", "ALTER TABLE stock_document_items ADD COLUMN stock_before_cost REAL", client)
 }

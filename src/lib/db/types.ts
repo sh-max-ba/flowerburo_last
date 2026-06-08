@@ -337,6 +337,10 @@ export type StockDocumentItem = {
   productCode: string
   productName: string
   qty: number
+  unitCost: number
+  landedUnitCost: number | null
+  costBefore: number | null
+  costAfter: number | null
   beforeStock: number | null
   afterStock: number | null
   currentStock: number | null

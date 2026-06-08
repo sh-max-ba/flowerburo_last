@@ -175,6 +175,8 @@ export {
   setAppSetting,
   getAllowOversellOrders,
   setAllowOversellOrders,
+  getRecomputeCostOnReceipt,
+  setRecomputeCostOnReceipt,
   getOrderSettings,
 } from "./db/queries/app-settings"
 export type { OrderSettings } from "./db/queries/app-settings"
