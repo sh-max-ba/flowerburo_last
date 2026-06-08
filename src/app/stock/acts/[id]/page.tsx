@@ -12,7 +12,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getStockDocument, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
-import { stockDocumentStatusLabel, stockDocumentTypeLabel } from "@/lib/labels"
+import {
+  allocationMethodLabel,
+  stockDocumentStatusLabel,
+  stockDocumentTypeLabel,
+  stockOverheadKindLabel,
+} from "@/lib/labels"
 
 export const dynamic = "force-dynamic"
 
@@ -124,6 +129,11 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
                         {isStockIn && (
                           <TableCell>
                             {item.unitCost > 0 ? formatMoney(item.unitCost) : "—"}
+                            {item.allocatedOverhead > 0 && (
+                              <div className="text-xs text-muted-foreground">
+                                + накл.: {formatMoney(item.allocatedOverhead)}
+                              </div>
+                            )}
                             {item.costAfter != null && (
                               <div className="text-xs text-muted-foreground">
                                 себест.: {formatMoney(item.costAfter)}
@@ -152,6 +162,42 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
             </div>
           </CardContent>
         </Card>
+
+        {isStockIn && document.overheadTotal > 0 && (
+          <Card className="rounded-2xl border bg-white">
+            <CardHeader>
+              <CardTitle>Накладные расходы</CardTitle>
+              <CardDescription>Распределение: {allocationMethodLabel(document.allocationMethod)}</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <ul className="flex flex-col gap-1 text-sm">
+                {document.overheads.map((overhead) => (
+                  <li key={overhead.id} className="flex items-center justify-between gap-3">
+                    <span>
+                      {stockOverheadKindLabel(overhead.kind)}
+                      {overhead.label ? ` — ${overhead.label}` : ""}
+                    </span>
+                    <span className="font-medium">{formatMoney(overhead.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex flex-col gap-1 border-t pt-2 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Стоимость товаров</span>
+                  <span>{formatMoney(document.goodsTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Накладные расходы</span>
+                  <span>{formatMoney(document.overheadTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between font-semibold">
+                  <span>Итого с расходами</span>
+                  <span>{formatMoney(document.landedTotal)}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
     </CrmShell>
   )
 }

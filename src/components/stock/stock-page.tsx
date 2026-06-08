@@ -116,6 +116,7 @@ import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, Table
 import { Textarea } from "@/components/ui/textarea"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
 import { StockActProductPicker } from "@/components/stock/stock-act-product-picker"
+import { OverheadEditor } from "@/components/stock/overhead-editor"
 
 type Result = Awaited<ReturnType<typeof saveProductAction>>
 type StockDocumentDialogType = StockDocumentType | null
@@ -1721,6 +1722,7 @@ function StockDocumentDialog({
                     </div>
                   )}
                 </div>
+                {!isWriteOff && <OverheadEditor disabled={pending} />}
               </div>
             </div>
             <SheetFooter className="sticky bottom-0 flex-row justify-end border-t bg-background px-6 py-4">

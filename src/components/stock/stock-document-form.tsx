@@ -25,6 +25,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { StockActProductPicker } from "@/components/stock/stock-act-product-picker"
+import { OverheadEditor } from "@/components/stock/overhead-editor"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
@@ -272,6 +273,13 @@ export function StockDocumentForm({
               />
             </Field>
           </FieldGroup>
+          {!isWriteOff && (
+            <OverheadEditor
+              initialOverheads={document.overheads}
+              initialMethod={document.allocationMethod}
+              disabled={pending}
+            />
+          )}
         </CardContent>
       </Card>
 
