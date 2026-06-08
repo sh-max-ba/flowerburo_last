@@ -85,7 +85,7 @@ export function CustomerCombobox({
           <ChevronsUpDownIcon className="opacity-60" />
         </PopoverTrigger>
         <PopoverContent align="start" sideOffset={6} className="w-(--anchor-width) min-w-[320px] p-0">
-          <Command shouldFilter={false}>
+          <Command shouldFilter={false} loop>
             <CommandInput value={search} onValueChange={setSearch} placeholder={placeholder} autoFocus />
             <CommandList className="max-h-[320px] overflow-y-auto">
               <CommandGroup>

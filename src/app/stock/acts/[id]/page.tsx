@@ -6,8 +6,9 @@ import { StockDocumentActions } from "@/components/stock/stock-document-actions"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { getShiftShellContext } from "@/lib/app-shell"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getStockDocument, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
 import { stockDocumentStatusLabel, stockDocumentTypeLabel } from "@/lib/labels"
@@ -33,7 +34,13 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
   const quantityHeaders = stockDocumentQuantityHeaders(document.status)
 
   return (
-    <CrmShell user={user} active="stock-acts" title={`Акт ${document.number}`} shiftContext={getShiftShellContext(user)}>
+    <CrmShell
+      user={user}
+      active="stock-acts"
+      title={`Акт ${document.number}`}
+      shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
+    >
       <div className="flex justify-end">
         <Link href="/stock/acts" className={buttonVariants({ variant: "outline", size: "sm" })}>
           Все акты
@@ -245,6 +252,6 @@ function formatNumber(value: number) {
 }
 
 function formatDateTime(value: string) {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("ru-RU")
+  const date = parseDbInstant(value)
+  return date ? date.toLocaleString("ru-RU", { timeZone: SHOP_TIME_ZONE }) : value
 }

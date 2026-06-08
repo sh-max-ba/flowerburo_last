@@ -42,43 +42,40 @@ export type WazzupWebhookAuthResult = {
   warning?: string
 }
 
+function safeKeyEqual(a: string, b: string) {
+  const bufferA = Buffer.from(a)
+  const bufferB = Buffer.from(b)
+  return bufferA.length === bufferB.length && crypto.timingSafeEqual(bufferA, bufferB)
+}
+
 export function isWazzupWebhookAuthorized(input: {
   authorization: string | null
   queryKey?: string | null
 }): WazzupWebhookAuthResult {
-  const { crmKey, webhookAuthRequired } = getWazzupSettingsForServer()
+  const { crmKey } = getWazzupSettingsForServer()
   const authorization = clean(input.authorization)
   const queryKey = clean(input.queryKey)
   const hasAuthorization = Boolean(authorization)
 
+  // Без настроенного CRM key webhook отклоняется — он не должен быть открытым.
+  // Сгенерируйте CRM key в /settings → Wazzup и переподключите webhook.
   if (!crmKey) {
     return {
-      authorized: true,
-      required: false,
+      authorized: false,
+      required: true,
       method: "none",
       hasAuthorization,
-      warning: "CRM key не настроен; webhook принят без проверки ключа.",
+      error: "CRM key не настроен: webhook отклонён.",
     }
   }
 
-  if (authorization === `Bearer ${crmKey}`) {
-    return { authorized: true, required: webhookAuthRequired, method: "bearer", hasAuthorization }
+  const bearerToken = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : ""
+  if (bearerToken && safeKeyEqual(bearerToken, crmKey)) {
+    return { authorized: true, required: true, method: "bearer", hasAuthorization }
   }
 
-  if (queryKey === crmKey) {
-    return { authorized: true, required: webhookAuthRequired, method: "query", hasAuthorization }
-  }
-
-  if (!webhookAuthRequired) {
-    return {
-      authorized: true,
-      required: false,
-      method: "none",
-      hasAuthorization,
-      warning: hasAuthorization
-        ? "Webhook принят без совпадающего CRM key; обязательная проверка выключена."
-        : "Webhook принят без Authorization; обязательная проверка выключена.",
-    }
+  if (queryKey && safeKeyEqual(queryKey, crmKey)) {
+    return { authorized: true, required: true, method: "query", hasAuthorization }
   }
 
   return {
@@ -86,7 +83,7 @@ export function isWazzupWebhookAuthorized(input: {
     required: true,
     method: "none",
     hasAuthorization,
-    error: "unauthorized webhook: missing or invalid Authorization",
+    error: "unauthorized webhook: missing or invalid CRM key",
   }
 }
 
@@ -133,12 +130,14 @@ export function saveWazzupWebhookEvent(input: {
 
   if (result.changes === 0) {
     const existing = client
-      .prepare("SELECT id FROM wazzup_webhook_events WHERE event_hash = ?")
-      .get(input.eventHash) as { id: number } | undefined
-    return { eventId: existing?.id ?? null, duplicate: true }
+      .prepare("SELECT id, status FROM wazzup_webhook_events WHERE event_hash = ?")
+      .get(input.eventHash) as { id: number; status: string } | undefined
+    // Возвращаем статус прошлой попытки: маршрут переобработает событие, если оно осталось
+    // 'received'/'failed' (например, упало на временной ошибке БД), и не потеряет сообщение.
+    return { eventId: existing?.id ?? null, duplicate: true, status: existing?.status ?? null }
   }
 
-  return { eventId: Number(result.lastInsertRowid), duplicate: false }
+  return { eventId: Number(result.lastInsertRowid), duplicate: false, status: "received" }
 }
 
 export function markWazzupWebhookEvent(
@@ -215,24 +214,65 @@ function processMessages(client: Database.Database, messages: unknown[]) {
     const record = asRecord(message)
     const messageId = clean(record.messageId)
     if (!messageId) {
+      console.warn("Wazzup webhook: пропущено сообщение без messageId", {
+        chatType: clean(record.chatType),
+        chatId: clean(record.chatId),
+        type: clean(record.type),
+      })
       continue
     }
 
     const context = contextFromMessage(record)
     const isEcho = record.isEcho === true
     const direction = isEcho ? "outbound" : "inbound"
+
+    // Защитный матчинг по crmMessageId. Документированный эхо-вебхук его НЕ содержит (дедуп идёт по
+    // Wazzup messageId), но если конкретный аккаунт всё же вернёт crmMessageId — «усыновляем» нашу
+    // исходящую строку (проставляем реальный messageId) вместо вставки дубля.
+    const echoedCrmMessageId = isEcho ? clean(record.crmMessageId) : ""
+    if (echoedCrmMessageId) {
+      const claimed = client
+        .prepare(
+          `UPDATE wazzup_messages
+           SET message_id = @messageId,
+            status = COALESCE(NULLIF(@status, ''), status),
+            content_uri = COALESCE(content_uri, @contentUri),
+            updated_at = CURRENT_TIMESTAMP
+           WHERE crm_message_id = @crmMessageId
+            AND (message_id IS NULL OR message_id = @messageId)`
+        )
+        .run({
+          messageId,
+          status: clean(record.status) || "",
+          contentUri: clean(record.contentUri) || null,
+          crmMessageId: echoedCrmMessageId,
+        })
+      if (claimed.changes > 0) {
+        const owner = client
+          .prepare("SELECT customer_id, deal_id FROM wazzup_messages WHERE message_id = ?")
+          .get(messageId) as { customer_id: number | null; deal_id: number | null } | undefined
+        contactId = owner?.customer_id ?? contactId
+        dealId = owner?.deal_id ?? dealId
+        continue
+      }
+    }
+
+    const quoted = quotedFromMessage(record)
     const inserted = client
       .prepare(
         `INSERT OR IGNORE INTO wazzup_messages (
-          message_id, channel_id, chat_type, chat_id, direction, message_type, text,
-          content_uri, status, is_echo, date_time, raw_payload
+          message_id, crm_message_id, channel_id, chat_type, chat_id, direction, message_type, text,
+          content_uri, status, is_echo, author_name, quoted_message_id, quoted_text, date_time,
+          raw_payload, updated_at
         ) VALUES (
-          @messageId, @channelId, @chatType, @chatId, @direction, @messageType, @text,
-          @contentUri, @status, @isEcho, @dateTime, @rawPayload
+          @messageId, @crmMessageId, @channelId, @chatType, @chatId, @direction, @messageType, @text,
+          @contentUri, @status, @isEcho, @authorName, @quotedMessageId, @quotedText, @dateTime,
+          @rawPayload, CURRENT_TIMESTAMP
         )`
       )
       .run({
         messageId,
+        crmMessageId: echoedCrmMessageId || null,
         channelId: context.channelId || null,
         chatType: context.chatType || null,
         chatId: context.chatId || null,
@@ -242,6 +282,9 @@ function processMessages(client: Database.Database, messages: unknown[]) {
         contentUri: clean(record.contentUri) || null,
         status: clean(record.status) || null,
         isEcho: isEcho ? 1 : 0,
+        authorName: clean(record.authorName) || null,
+        quotedMessageId: quoted.quotedMessageId || null,
+        quotedText: quoted.quotedText || null,
         dateTime: clean(record.dateTime) || null,
         rawPayload: JSON.stringify(record),
       })
@@ -272,7 +315,10 @@ function processMessages(client: Database.Database, messages: unknown[]) {
 
 function processStatuses(client: Database.Database, statuses: unknown[]) {
   let updated = 0
-  const update = client.prepare("UPDATE wazzup_messages SET status = ? WHERE message_id = ?")
+  // updated_at трогаем, чтобы revision-поллинг собственного чата заметил смену статуса.
+  const update = client.prepare(
+    "UPDATE wazzup_messages SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE message_id = ?"
+  )
 
   for (const status of statuses) {
     const record = asRecord(status)
@@ -651,6 +697,22 @@ function chatTypeToSource(chatType: string) {
 
 function normalizeChatId(chatType: string, chatId: string) {
   return chatType === "whatsapp" || chatType === "viber" ? chatId.replace(/\D/g, "") : chatId
+}
+
+// Цитата из входящего вебхука. Точная форма quotedMessage не зафиксирована в доке — читаем
+// messageId/text/type оборонительно (см. references/webhooks.md, ключ quotedMessage).
+function quotedFromMessage(record: JsonRecord): { quotedMessageId: string; quotedText: string } {
+  const quoted = asRecord(record.quotedMessage)
+  if (!Object.keys(quoted).length) {
+    return { quotedMessageId: "", quotedText: "" }
+  }
+
+  const text = clean(quoted.text)
+  const type = clean(quoted.type)
+  return {
+    quotedMessageId: clean(quoted.messageId),
+    quotedText: text || (type ? `[${type}]` : ""),
+  }
 }
 
 function messagePreview(message: JsonRecord) {

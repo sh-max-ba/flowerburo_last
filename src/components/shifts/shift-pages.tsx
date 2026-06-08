@@ -2,15 +2,26 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ArrowLeftIcon, BanknoteIcon, ChevronDownIcon, EyeIcon } from "lucide-react"
-import { Fragment, useState, useTransition } from "react"
-import { toast } from "sonner"
-import { closeShiftAction } from "@/app/actions"
+import {
+  ArrowDownIcon,
+  ArrowLeftIcon,
+  ArrowUpIcon,
+  AlertTriangleIcon,
+  CalendarClockIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  EyeIcon,
+  MessageSquareIcon,
+  SunIcon,
+} from "lucide-react"
+import { Fragment, useState } from "react"
 import type { DashboardData, ShiftDetails } from "@/lib/db"
 import { cashTransactionTypeLabel, getPaymentMethodLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
+import { formatInstant } from "@/lib/datetime"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { Button, buttonVariants } from "@/components/ui/button"
+import { buttonVariants } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -18,19 +29,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Textarea } from "@/components/ui/textarea"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 export function ShiftsPage({ data }: { data: DashboardData }) {
   const router = useRouter()
@@ -42,11 +43,13 @@ export function ShiftsPage({ data }: { data: DashboardData }) {
         {!data.shifts.length ? (
           <CompactEmpty title="Смен пока нет" />
         ) : (
+          <TooltipProvider>
           <div className="min-w-0 overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>№</TableHead>
+                  <TableHead>Тип</TableHead>
                   <TableHead>Ответственный</TableHead>
                   <TableHead>Открыта</TableHead>
                   <TableHead>Закрыта</TableHead>
@@ -66,11 +69,36 @@ export function ShiftsPage({ data }: { data: DashboardData }) {
                   return (
                     <TableRow
                       key={shift.id}
-                      className="cursor-pointer"
+                      className="cursor-pointer transition-colors hover:bg-muted/50"
                       onClick={() => router.push(`/shifts/${shift.id}`)}
                     >
                       <TableCell className="font-medium">#{shift.id}</TableCell>
-                      <TableCell>{detail?.cashier ?? (shift.cashierName || "-")}</TableCell>
+                      <TableCell>
+                        <ShiftTypeBadge type={shift.type} />
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1.5">
+                          <span>{detail?.cashier ?? (shift.cashierName || "-")}</span>
+                          {shift.note?.trim() ? (
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <span
+                                    className="inline-flex text-muted-foreground"
+                                    aria-label="Комментарий к смене"
+                                    onClick={(event) => event.stopPropagation()}
+                                  />
+                                }
+                              >
+                                <MessageSquareIcon className="size-3.5" />
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs whitespace-pre-wrap">
+                                {shift.note}
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : null}
+                        </div>
+                      </TableCell>
                       <TableCell>{dateTime(shift.openedAt)}</TableCell>
                       <TableCell>{shift.closedAt ? dateTime(shift.closedAt) : "активна"}</TableCell>
                       <TableCell>{formatMoney(shift.openingCash)}</TableCell>
@@ -98,6 +126,7 @@ export function ShiftsPage({ data }: { data: DashboardData }) {
               </TableBody>
             </Table>
           </div>
+          </TooltipProvider>
         )}
       </CardContent>
     </Card>
@@ -109,34 +138,77 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
   const difference = shift.closingCash === null ? null : shift.closingCash - shift.expectedCash
   const revenueByMethod = getRevenueByMethod(detail)
 
+  const note = shift.note?.trim()
+  const methodMetrics = [
+    { label: "Наличные", value: revenueByMethod.cash },
+    { label: "Карта", value: revenueByMethod.card },
+    { label: "Терминал", value: revenueByMethod.terminal },
+    { label: "Mbank", value: revenueByMethod.mbank },
+    { label: "Optima", value: revenueByMethod.optima },
+    { label: "ЭлСом", value: revenueByMethod.elsom },
+    { label: "Бакай", value: revenueByMethod.bakai },
+    { label: "Перевод", value: revenueByMethod.transfer },
+    { label: "Внесения", value: detail.summary.cashIn },
+    { label: "Изъятия", value: detail.breakdown.cashOutOther },
+    { label: "Выплаты курьеру", value: detail.breakdown.courierPayouts },
+    { label: "Возвраты безналичными", value: getNonCashRefunds(detail) },
+  ].filter((metric) => Math.abs(metric.value) >= 0.01)
+
   return (
       <div className="flex flex-col gap-5">
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <ShiftStatusBadge status={shift.status} />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-lg font-semibold">Смена #{shift.id}</span>
+            <ShiftTypeBadge type={shift.type} />
+            <ShiftStatusBadge status={shift.status} />
+            <span className="text-sm text-muted-foreground">{detail.cashier}</span>
+            <span className="text-sm text-muted-foreground">
+              {dateTime(shift.openedAt)} → {shift.closedAt ? dateTime(shift.closedAt) : "активна"}
+            </span>
+          </div>
           <Link className={buttonVariants({ variant: "outline", size: "sm" })} href="/shifts">
             <ArrowLeftIcon data-icon="inline-start" />
             Назад к сменам
           </Link>
         </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+
+        <ReconciliationPanel
+          expectedCash={shift.expectedCash}
+          closingCash={shift.closingCash}
+          difference={difference}
+        />
+
+        {note ? (
+          <Alert>
+            <MessageSquareIcon />
+            <AlertTitle>Комментарий к смене</AlertTitle>
+            <AlertDescription className="whitespace-pre-wrap text-foreground">{note}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        <FormulaCard detail={detail} />
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <ShiftStat title="Выручка до скидок" value={formatMoney(detail.summary.revenueBeforeDiscount)} />
           <ShiftStat title="Скидки" value={formatMoney(detail.summary.discountTotal)} />
           <ShiftStat title="Выручка после скидок" value={formatMoney(detail.summary.revenueTotal)} />
-          <ShiftStat title="Наличные" value={formatMoney(revenueByMethod.cash)} />
-          <ShiftStat title="Карта" value={formatMoney(revenueByMethod.card)} />
-          <ShiftStat title="Терминал" value={formatMoney(revenueByMethod.terminal)} />
-          <ShiftStat title="Mbank" value={formatMoney(revenueByMethod.mbank)} />
-          <ShiftStat title="Optima" value={formatMoney(revenueByMethod.optima)} />
-          <ShiftStat title="ЭлСом" value={formatMoney(revenueByMethod.elsom)} />
-          <ShiftStat title="Перевод" value={formatMoney(revenueByMethod.transfer)} />
-          <ShiftStat title="Внесения" value={formatMoney(detail.summary.cashIn)} />
-          <ShiftStat title="Изъятия" value={formatMoney(detail.breakdown.cashOutOther)} />
-          <ShiftStat title="Ожидается в кассе" value={formatMoney(shift.expectedCash)} emphasis />
-          <ShiftStat title="Фактическая наличка" value={shift.closingCash === null ? "-" : formatMoney(shift.closingCash)} />
-          <ShiftStat title="Разница" value={difference === null ? "-" : formatMoney(difference)} />
         </div>
 
-        <FormulaCard detail={detail} />
+        {methodMetrics.length ? (
+          <Card className="rounded-2xl border bg-white">
+            <CardHeader>
+              <CardTitle>Разбивка по способам оплаты</CardTitle>
+              <CardDescription>Показаны только ненулевые способы и движения наличных</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {methodMetrics.map((metric) => (
+                  <Metric key={metric.label} label={metric.label} value={formatMoney(metric.value)} />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <Card className="rounded-2xl border bg-white">
           <CardHeader>
@@ -201,77 +273,59 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
   )
 }
 
-export function ShiftCloseDialog({ detail }: { detail: ShiftDetails }) {
-  const router = useRouter()
-  const [open, setOpen] = useState(false)
-  const [actualCash, setActualCash] = useState(detail.shift.expectedCash)
-  const [isPending, startTransition] = useTransition()
-  const difference = actualCash - detail.shift.expectedCash
-
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const formData = new FormData(event.currentTarget)
-    startTransition(async () => {
-      const result = await closeShiftAction(formData)
-      if (result.ok) {
-        toast.success(result.message)
-        setOpen(false)
-        router.refresh()
-      } else {
-        toast.error(result.message)
-      }
-    })
-  }
+function ReconciliationPanel({
+  expectedCash,
+  closingCash,
+  difference,
+}: {
+  expectedCash: number
+  closingCash: number | null
+  difference: number | null
+}) {
+  const counted = closingCash !== null
 
   return (
-    <>
-      <Button onClick={() => setOpen(true)}>
-        <BanknoteIcon data-icon="inline-start" />
-        Закрыть смену
-      </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Закрыть смену #{detail.shift.id}</DialogTitle>
-            <DialogDescription>Проверьте сводку и внесите фактическую наличку в кассе.</DialogDescription>
-          </DialogHeader>
-          <form onSubmit={submit} className="flex flex-col gap-4">
-            <input type="hidden" name="shiftId" value={detail.shift.id} />
-            <ShiftCloseSummary detail={detail} />
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="closingCash">Фактическая наличка в кассе</FieldLabel>
-                <Input
-                  id="closingCash"
-                  name="closingCash"
-                  type="number"
-                  step="0.01"
-                  value={Number.isFinite(actualCash) ? actualCash : ""}
-                  onChange={(event) => setActualCash(Number(event.target.value) || 0)}
-                  required
-                />
-              </Field>
-              <div className="rounded-xl border bg-muted/30 p-3">
-                <div className="text-xs text-muted-foreground">Разница = факт - ожидается</div>
-                <div className="mt-1 flex items-center gap-2">
-                  <div className="text-xl font-semibold">{formatMoney(difference)}</div>
-                  <DifferenceBadge difference={difference} />
-                </div>
-              </div>
-              <Field>
-                <FieldLabel htmlFor="shift-note">Комментарий</FieldLabel>
-                <Textarea id="shift-note" name="note" />
-              </Field>
-            </FieldGroup>
-            <DialogFooter>
-              <Button type="submit" disabled={isPending}>
-                Закрыть смену
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-    </>
+    <Card className="overflow-hidden rounded-2xl border bg-white">
+      <div className="grid grid-cols-1 divide-y sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        <div className="p-5">
+          <div className="text-xs text-muted-foreground">Ожидается в кассе</div>
+          <div className="mt-1 text-2xl font-semibold tabular-nums">{formatMoney(expectedCash)}</div>
+        </div>
+        <div className="p-5">
+          <div className="text-xs text-muted-foreground">Фактическая наличка</div>
+          {counted ? (
+            <div className="mt-1 text-2xl font-semibold tabular-nums">{formatMoney(closingCash)}</div>
+          ) : (
+            <div className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
+              <AlertTriangleIcon className="size-4" />
+              Ещё не пересчитана
+            </div>
+          )}
+        </div>
+        <div className={cn("p-5", counted && difference !== null && Math.abs(difference) >= 0.01 && difference < 0 && "bg-destructive/5")}>
+          <div className="text-xs text-muted-foreground">Разница</div>
+          {counted && difference !== null ? (
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <span
+                className={cn(
+                  "text-2xl font-bold tabular-nums",
+                  Math.abs(difference) < 0.01
+                    ? "text-foreground"
+                    : difference < 0
+                      ? "text-destructive"
+                      : "text-amber-700"
+                )}
+              >
+                {Math.abs(difference) < 0.01 ? formatMoney(0) : formatMoney(difference)}
+              </span>
+              <DifferenceBadge difference={difference} />
+            </div>
+          ) : (
+            <div className="mt-1 text-sm text-muted-foreground">Появится после закрытия смены</div>
+          )}
+        </div>
+      </div>
+    </Card>
   )
 }
 
@@ -294,6 +348,7 @@ export function ShiftCloseSummary({ detail }: { detail: ShiftDetails }) {
         <Metric label="Mbank" value={formatMoney(revenueByMethod.mbank)} />
         <Metric label="Optima" value={formatMoney(revenueByMethod.optima)} />
         <Metric label="ЭлСом" value={formatMoney(revenueByMethod.elsom)} />
+        <Metric label="Бакай" value={formatMoney(revenueByMethod.bakai)} />
         <Metric label="Перевод" value={formatMoney(revenueByMethod.transfer)} />
         <Metric label="Предоплаты" value={formatMoney(getPrepayments(detail))} />
         <Metric label="Доплаты по заказам" value={formatMoney(getOrderPayments(detail))} />
@@ -301,6 +356,9 @@ export function ShiftCloseSummary({ detail }: { detail: ShiftDetails }) {
         <Metric label="Внесения" value={formatMoney(detail.summary.cashIn)} />
         <Metric label="Изъятия" value={formatMoney(detail.breakdown.cashOutOther)} />
         <Metric label="Выплаты курьеру" value={formatMoney(detail.breakdown.courierPayouts)} />
+        {getNonCashRefunds(detail) > 0.009 ? (
+          <Metric label="Возвраты безналичными" value={formatMoney(getNonCashRefunds(detail))} />
+        ) : null}
       </div>
       <FormulaCard detail={detail} compact />
     </div>
@@ -358,8 +416,8 @@ function ShiftSalesCard({ sales }: { sales: ShiftDetails["sales"] }) {
               <TableHeader>
                   <TableRow>
                     <TableHead>Время</TableHead>
-                    <TableHead>Провел</TableHead>
-                    <TableHead>Sale ID</TableHead>
+                    <TableHead>Провёл</TableHead>
+                    <TableHead>№ продажи</TableHead>
                     <TableHead>До скидки</TableHead>
                     <TableHead>Скидка</TableHead>
                     <TableHead>Итого</TableHead>
@@ -645,10 +703,57 @@ function ShiftStatusBadge({ status }: { status: "open" | "closed" }) {
   )
 }
 
-function DifferenceBadge({ difference }: { difference: number }) {
+function ShiftTypeBadge({ type }: { type: "day" | "night" }) {
   return (
-    <Badge variant={Math.abs(difference) < 0.01 ? "secondary" : "destructive"}>
-      {Math.abs(difference) < 0.01 ? "совпало" : formatMoney(difference)}
+    <Badge variant="outline">
+      {type === "night" ? (
+        <CalendarClockIcon data-icon="inline-start" />
+      ) : (
+        <SunIcon data-icon="inline-start" />
+      )}
+      {type === "night" ? "Ночная" : "Дневная"}
+    </Badge>
+  )
+}
+
+// Расхождение крупнее этого порога подсвечивается значком предупреждения.
+const DIFFERENCE_WARNING_THRESHOLD = 100
+
+function DifferenceBadge({
+  difference,
+  className,
+}: {
+  difference: number
+  className?: string
+}) {
+  const matched = Math.abs(difference) < 0.01
+
+  if (matched) {
+    return (
+      <Badge variant="secondary" className={className}>
+        <CheckIcon data-icon="inline-start" />
+        Совпало
+      </Badge>
+    )
+  }
+
+  const isShortage = difference < 0
+  const magnitude = Math.abs(difference)
+  const isLarge = magnitude >= DIFFERENCE_WARNING_THRESHOLD
+
+  if (isShortage) {
+    return (
+      <Badge variant="destructive" className={className}>
+        {isLarge ? <AlertTriangleIcon data-icon="inline-start" /> : <ArrowDownIcon data-icon="inline-start" />}
+        Недостача <span className="font-semibold">{formatMoney(magnitude)}</span>
+      </Badge>
+    )
+  }
+
+  return (
+    <Badge variant="outline" className={cn("border-amber-300 text-amber-700", className)}>
+      <ArrowUpIcon data-icon="inline-start" />
+      Излишек <span className="font-semibold">{formatMoney(magnitude)}</span>
     </Badge>
   )
 }
@@ -692,44 +797,74 @@ function getFormulaRows(detail: ShiftDetails) {
   ]
 }
 
+// Выручка по способам — net возвратов. Возврат отменённого заказа проводится тем же
+// способом, что и приход (refundOrderPayments), поэтому вычитаем его из того же метода,
+// иначе по безналу (mbank/card/перевод/…) выручка завышается на сумму возврата.
 function getRevenueByMethod(detail: ShiftDetails) {
   return {
     cash:
       detail.summary.cashSales +
       detail.summary.cashPrepayments +
       detail.summary.cashOrderPayments +
-      detail.summary.cashDealPayments,
+      detail.summary.cashDealPayments -
+      detail.breakdown.cashRefund,
     card:
       detail.breakdown.cardSales +
       detail.breakdown.cardPrepayments +
       detail.breakdown.cardOrderPayments +
-      detail.breakdown.cardDealPayments,
+      detail.breakdown.cardDealPayments -
+      detail.breakdown.cardRefund,
     terminal:
       detail.breakdown.terminalSales +
       detail.breakdown.terminalPrepayments +
       detail.breakdown.terminalOrderPayments +
-      detail.breakdown.terminalDealPayments,
+      detail.breakdown.terminalDealPayments -
+      detail.breakdown.terminalRefund,
     mbank:
       detail.breakdown.mbankSales +
       detail.breakdown.mbankPrepayments +
       detail.breakdown.mbankOrderPayments +
-      detail.breakdown.mbankDealPayments,
+      detail.breakdown.mbankDealPayments -
+      detail.breakdown.mbankRefund,
     optima:
       detail.breakdown.optimaSales +
       detail.breakdown.optimaPrepayments +
       detail.breakdown.optimaOrderPayments +
-      detail.breakdown.optimaDealPayments,
+      detail.breakdown.optimaDealPayments -
+      detail.breakdown.optimaRefund,
     elsom:
       detail.breakdown.elsomSales +
       detail.breakdown.elsomPrepayments +
       detail.breakdown.elsomOrderPayments +
-      detail.breakdown.elsomDealPayments,
+      detail.breakdown.elsomDealPayments -
+      detail.breakdown.elsomRefund,
+    bakai:
+      detail.breakdown.bakaiSales +
+      detail.breakdown.bakaiPrepayments +
+      detail.breakdown.bakaiOrderPayments +
+      detail.breakdown.bakaiDealPayments -
+      detail.breakdown.bakaiRefund,
     transfer:
       detail.breakdown.transferSales +
       detail.breakdown.transferPrepayments +
       detail.breakdown.transferOrderPayments +
-      detail.breakdown.transferDealPayments,
+      detail.breakdown.transferDealPayments -
+      detail.breakdown.transferRefund,
   }
+}
+
+// Сумма безналичных возвратов (для строки «Возвраты безналичными» в разбивке по способам).
+// Наличные возвраты показываются отдельно в «Формуле кассы» (getFormulaRows).
+function getNonCashRefunds(detail: ShiftDetails) {
+  return (
+    detail.breakdown.cardRefund +
+    detail.breakdown.terminalRefund +
+    detail.breakdown.mbankRefund +
+    detail.breakdown.optimaRefund +
+    detail.breakdown.elsomRefund +
+    detail.breakdown.bakaiRefund +
+    detail.breakdown.transferRefund
+  )
 }
 
 function getPrepayments(detail: ShiftDetails) {
@@ -740,6 +875,7 @@ function getPrepayments(detail: ShiftDetails) {
     detail.breakdown.mbankPrepayments +
     detail.breakdown.optimaPrepayments +
     detail.breakdown.elsomPrepayments +
+    detail.breakdown.bakaiPrepayments +
     detail.breakdown.transferPrepayments
   )
 }
@@ -752,6 +888,7 @@ function getOrderPayments(detail: ShiftDetails) {
     detail.breakdown.mbankOrderPayments +
     detail.breakdown.optimaOrderPayments +
     detail.breakdown.elsomOrderPayments +
+    detail.breakdown.bakaiOrderPayments +
     detail.breakdown.transferOrderPayments
   )
 }
@@ -764,6 +901,7 @@ function getDealPayments(detail: ShiftDetails) {
     detail.breakdown.mbankDealPayments +
     detail.breakdown.optimaDealPayments +
     detail.breakdown.elsomDealPayments +
+    detail.breakdown.bakaiDealPayments +
     detail.breakdown.transferDealPayments
   )
 }
@@ -776,16 +914,7 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value)
 }
 
+// Метки смены (opened_at/closed_at/created_at — UTC из БД, показываем в поясе магазина).
 function dateTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-
-  return new Intl.DateTimeFormat("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date)
+  return formatInstant(value)
 }

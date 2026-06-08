@@ -1,11 +1,12 @@
 "use client"
 
 import Link from "next/link"
-import { BanknoteIcon, MenuIcon } from "lucide-react"
+import { BanknoteIcon, MenuIcon, ReceiptTextIcon } from "lucide-react"
 import { formatMoney } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { SoundToggle } from "@/components/notifications/sound-toggle"
 
 type OpenShift = {
   id: number
@@ -16,8 +17,6 @@ type OpenShift = {
 type AppTopbarProps = {
   title: string
   context?: string
-  userName: string
-  roleLabel: string
   openShift?: OpenShift | null
   canManageShift?: boolean
   canViewShiftDetails?: boolean
@@ -27,8 +26,6 @@ type AppTopbarProps = {
 export function AppTopbar({
   title,
   context,
-  userName,
-  roleLabel,
   openShift,
   canManageShift = false,
   canViewShiftDetails = false,
@@ -41,7 +38,7 @@ export function AppTopbar({
           <MenuIcon />
         </SidebarTrigger>
         <div className="min-w-0">
-          <div className="truncate text-base font-semibold">{title}</div>
+          <div className="truncate font-heading text-base font-semibold tracking-tight">{title}</div>
           {context ? (
             <div className="hidden truncate text-xs text-muted-foreground sm:block">{context}</div>
           ) : null}
@@ -49,12 +46,15 @@ export function AppTopbar({
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
+        <SoundToggle />
         <div className="flex items-center gap-2">
           <Badge variant={openShift ? "secondary" : "outline"}>
-            {openShift ? "Смена открыта" : "Смена закрыта"}
+            <span className="sm:hidden">{openShift ? "Открыта" : "Закрыта"}</span>
+            <span className="hidden sm:inline">{openShift ? "Смена открыта" : "Смена закрыта"}</span>
           </Badge>
           {openShift ? (
-            <div className="hidden max-w-72 truncate text-xs text-muted-foreground xl:block">
+            <div className="hidden max-w-80 truncate text-xs text-muted-foreground lg:block">
+              <span className="text-muted-foreground/70">Касса: </span>
               {openShift.cashierName || "Ответственный не указан"}
               {typeof openShift.expectedCash === "number"
                 ? ` · Ожидается: ${formatMoney(openShift.expectedCash)}`
@@ -64,25 +64,29 @@ export function AppTopbar({
         </div>
 
         {openShift && canViewShiftDetails ? (
-          <Button variant="outline" size="sm" render={<Link href={`/shifts/${openShift.id}`} />}>
-            Детали смены
+          <Button
+            variant="outline"
+            size="sm"
+            title="Детали смены"
+            aria-label="Детали смены"
+            render={<Link href={`/shifts/${openShift.id}`} />}
+          >
+            <ReceiptTextIcon data-icon="inline-start" />
+            <span className="hidden lg:inline">Детали смены</span>
           </Button>
         ) : null}
         {canManageShift && onShiftAction ? (
           <Button
             variant={openShift ? "outline" : "default"}
             size="sm"
+            title={openShift ? "Закрыть смену" : "Открыть смену"}
+            aria-label={openShift ? "Закрыть смену" : "Открыть смену"}
             onClick={onShiftAction}
           >
             <BanknoteIcon data-icon="inline-start" />
-            {openShift ? "Закрыть смену" : "Открыть смену"}
+            <span className="hidden lg:inline">{openShift ? "Закрыть смену" : "Открыть смену"}</span>
           </Button>
         ) : null}
-
-        <div className="hidden min-w-0 text-right lg:block">
-          <div className="max-w-36 truncate text-sm font-medium">{userName}</div>
-          <div className="text-xs text-muted-foreground">{roleLabel}</div>
-        </div>
       </div>
     </header>
   )

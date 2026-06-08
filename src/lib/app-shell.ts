@@ -1,5 +1,6 @@
+import { cookies } from "next/headers"
 import { canCloseShift } from "@/lib/auth"
-import { getActiveFlorists, getDashboardData, type CurrentUser, type DashboardData } from "@/lib/db"
+import { getActiveFlorists, getShiftShellData, type CurrentUser, type DashboardData } from "@/lib/db"
 
 export type ShiftShellContext = {
   defaultOpeningCash: number
@@ -10,7 +11,15 @@ export type ShiftShellContext = {
 }
 
 export function getShiftShellContext(user: CurrentUser): ShiftShellContext {
-  return buildShiftShellContext(user, getDashboardData(), getActiveFlorists())
+  const { defaultOpeningCash, openShift, openShiftDetails } = getShiftShellData()
+
+  return {
+    defaultOpeningCash,
+    activeFlorists: getActiveFlorists(),
+    openShift,
+    openShiftDetails,
+    canManageShift: openShift ? canCloseShift(user, openShift.id) : user.role === "owner" || user.role === "manager",
+  }
 }
 
 export function buildShiftShellContext(
@@ -29,4 +38,8 @@ export function buildShiftShellContext(
       : null,
     canManageShift: openShift ? canCloseShift(user, openShift.id) : user.role === "owner" || user.role === "manager",
   }
+}
+
+export async function getSidebarDefaultOpen() {
+  return (await cookies()).get("sidebar_state")?.value !== "false"
 }

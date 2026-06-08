@@ -4,23 +4,14 @@ import { useEffect, useState, useTransition } from "react"
 import type React from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import {
-  BanknoteIcon,
-  BoxesIcon,
-  ClipboardListIcon,
-  Flower2Icon,
-  HistoryIcon,
-  LogOutIcon,
-  PackageCheckIcon,
-  SettingsIcon,
-  TagsIcon,
-  UserCheckIcon,
-} from "lucide-react"
+import { Flower2Icon, LogOutIcon } from "lucide-react"
 import { toast } from "sonner"
 import { closeShiftAction, openShiftAction } from "@/app/actions"
 import { logoutAction } from "@/app/auth-actions"
 import type { ShiftShellContext } from "@/lib/app-shell"
 import type { CurrentUser, UserRole } from "@/lib/db"
+import { getNavForRole, NAV_GROUPS, type NavSectionId } from "@/lib/nav"
+import { NAV_ICONS } from "@/lib/nav-icons"
 import { getPageContext, getPageTitle } from "@/lib/page-title"
 import { AppTopbar } from "@/components/app-topbar"
 import { ShiftSheet } from "@/components/shifts/shift-sheet"
@@ -41,25 +32,18 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar"
 
-type CrmSection =
-  | "clients"
-  | "deals"
-  | "bouquets"
-  | "sales"
-  | "orders"
-  | "ready-orders"
-  | "stock"
-  | "stock-acts"
-  | "history"
-  | "shifts"
-  | "settings"
-
 type CrmShellProps = {
   user: CurrentUser
-  active: CrmSection
+  active: NavSectionId
   title: string
   actions?: React.ReactNode
   shiftContext?: ShiftShellContext
+  defaultSidebarOpen?: boolean
+  // Florist с открытой ночной сменой видит «Касса» в сайдбаре. Owner/manager-страницы
+  // оставляют значение по умолчанию (false) — для них роль покрывает доступ к sales.
+  canAccessCash?: boolean
+  // Растягивает контент на всю ширину без max-w/центрирования (для канбана сделок).
+  fullBleed?: boolean
   children: React.ReactNode
 }
 
@@ -69,39 +53,26 @@ const roleLabels: Record<UserRole, string> = {
   florist: "Флорист",
 }
 
-const navItems: Array<{
-  id: CrmSection
-  label: string
-  icon: typeof BoxesIcon
-  href: string
-  roles: UserRole[]
-}> = [
-  { id: "deals", label: "Сделки", icon: TagsIcon, href: "/deals", roles: ["owner", "manager"] },
-  { id: "clients", label: "Клиенты", icon: UserCheckIcon, href: "/clients", roles: ["owner", "manager"] },
-  { id: "bouquets", label: "Букеты", icon: Flower2Icon, href: "/bouquets", roles: ["owner", "manager"] },
-  { id: "sales", label: "Касса", icon: BanknoteIcon, href: "/cash", roles: ["owner", "manager"] },
-  { id: "orders", label: "Стол заказов", icon: ClipboardListIcon, href: "/orders", roles: ["owner", "manager", "florist"] },
-  { id: "ready-orders", label: "Готовые заказы", icon: PackageCheckIcon, href: "/ready-orders", roles: ["owner", "manager"] },
-  { id: "stock", label: "Склад", icon: BoxesIcon, href: "/stock", roles: ["owner"] },
-  { id: "stock-acts", label: "Акты склада", icon: ClipboardListIcon, href: "/stock/acts", roles: ["owner"] },
-  { id: "history", label: "История", icon: HistoryIcon, href: "/history/stock", roles: ["owner"] },
-  { id: "shifts", label: "Смены", icon: BanknoteIcon, href: "/shifts", roles: ["owner"] },
-  { id: "settings", label: "Настройки", icon: SettingsIcon, href: "/settings", roles: ["owner"] },
-] as const
-
-const navGroups: Array<{ label: string; ids: CrmSection[] }> = [
-  { label: "CRM", ids: ["deals", "clients", "bouquets"] },
-  { label: "Работа", ids: ["sales", "orders", "ready-orders"] },
-  { label: "Склад", ids: ["stock", "stock-acts", "history"] },
-  { label: "Администрирование", ids: ["shifts", "settings"] },
-]
-
-export function CrmShell({ user, active, title, actions, shiftContext, children }: CrmShellProps) {
+export function CrmShell({
+  user,
+  active,
+  title,
+  actions,
+  shiftContext,
+  defaultSidebarOpen = true,
+  canAccessCash = false,
+  fullBleed = false,
+  children,
+}: CrmShellProps) {
   const router = useRouter()
   const pathname = usePathname()
   const [shiftSheet, setShiftSheet] = useState(false)
   const [isPending, startTransition] = useTransition()
-  const visibleItems = navItems.filter((item) => item.roles.includes(user.role))
+  // Большинство CrmShell-страниц — owner/manager (clients/deals/shifts/...), для них
+  // canAccessCash=false воспроизводит прежнее поведение (visibleItems по roles).
+  // Страница /orders доступна florist'у и пробрасывает canAccessCash, чтобы при
+  // открытой ночной смене florist дополнительно видел «Касса» (sales).
+  const visibleItems = getNavForRole(user.role, { canAccessCash })
   const topbarTitle = getPageTitle(pathname) || title
   const topbarContext = getPageContext(pathname)
 
@@ -121,32 +92,33 @@ export function CrmShell({ user, active, title, actions, shiftContext, children 
   }
 
   return (
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={defaultSidebarOpen}>
       <Sidebar collapsible="icon">
         <SidebarHeader>
-          <div className="flex h-10 items-center px-2">
-            <div className="min-w-0 group-data-[collapsible=icon]:hidden">
-              <div className="truncate text-sm font-semibold">Flower Buro</div>
+          <div className="flex h-12 items-center gap-2 px-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-white">
+              <Flower2Icon className="size-5" />
             </div>
-            <div className="hidden size-8 items-center justify-center text-sm font-semibold group-data-[collapsible=icon]:flex">
-              FB
+            <div className="min-w-0 leading-tight group-data-[collapsible=icon]:hidden">
+              <div className="truncate font-heading text-lg font-semibold">FlowerBuro</div>
+              <div className="truncate text-[11px] text-muted-foreground">sellz.cloud</div>
             </div>
           </div>
         </SidebarHeader>
         <SidebarContent>
-          {navGroups.map((group) => {
+          {NAV_GROUPS.map((group) => {
             const items = visibleItems.filter((item) => group.ids.includes(item.id))
             if (items.length === 0) {
               return null
             }
 
             return (
-              <SidebarGroup key={group.label}>
+              <SidebarGroup key={group.id}>
                 <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {items.map((item) => {
-                      const Icon = item.icon
+                      const Icon = NAV_ICONS[item.iconKey]
                       const isActive = item.id === active
 
                       return (
@@ -160,6 +132,7 @@ export function CrmShell({ user, active, title, actions, shiftContext, children 
                             <span>{item.label}</span>
                           </SidebarMenuButton>
                           {item.id === "deals" ? <IncomingDealsSidebarBadge /> : null}
+                          {item.id === "ready-orders" ? <ReadyOrdersSidebarBadge /> : null}
                         </SidebarMenuItem>
                       )
                     })}
@@ -175,14 +148,14 @@ export function CrmShell({ user, active, title, actions, shiftContext, children 
               <div className="truncate text-sm font-medium">{user.name}</div>
               <div className="truncate text-xs text-muted-foreground">{roleLabels[user.role]}</div>
             </div>
-            <form action={logoutAction} className="w-full group-data-[collapsible=icon]:w-8">
+            <form action={logoutAction} className="w-full group-data-[collapsible=icon]:w-10">
               <Button
                 type="submit"
                 variant="outline"
                 size="sm"
-                className="w-full justify-start group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!"
+                className="w-full justify-start group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!"
               >
-                <LogOutIcon data-icon="inline-start" />
+                <LogOutIcon data-icon="inline-start" className="size-4 group-data-[collapsible=icon]:size-5" />
                 <span className="group-data-[collapsible=icon]:hidden">Выйти</span>
               </Button>
             </form>
@@ -194,19 +167,17 @@ export function CrmShell({ user, active, title, actions, shiftContext, children 
         <AppTopbar
           title={topbarTitle}
           context={topbarContext}
-          userName={user.name}
-          roleLabel={roleLabels[user.role]}
           openShift={shiftContext?.openShift}
           canManageShift={shiftContext?.canManageShift}
           canViewShiftDetails={user.role === "owner"}
           onShiftAction={shiftContext ? () => setShiftSheet(true) : undefined}
         />
-        <main className="flex flex-1 flex-col p-4 md:p-5">
-          <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
+        <div className="flex flex-1 flex-col p-4 md:p-5">
+          <div className={`flex w-full flex-col gap-5 ${fullBleed ? "" : "mx-auto max-w-[1600px]"}`}>
             {actions ? <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div> : null}
             {children}
           </div>
-        </main>
+        </div>
       </SidebarInset>
       {shiftContext ? (
         <ShiftSheet
@@ -277,4 +248,58 @@ function IncomingDealsSidebarBadge() {
   }
 
   return <SidebarMenuBadge>{count > 99 ? "99+" : count}</SidebarMenuBadge>
+}
+
+// PERF-2: бейдж «Готовые заказы, ожидающие действия». Опрашивает /api/ready-orders/count
+// каждые 5 сек (доступ к подсчёту имеют только owner/manager — см. route).
+function ReadyOrdersSidebarBadge() {
+  const [count, setCount] = useState(0)
+
+  useEffect(() => {
+    let disposed = false
+    let controller: AbortController | null = null
+
+    async function loadCount() {
+      if (document.visibilityState !== "visible") {
+        return
+      }
+
+      controller?.abort()
+      controller = new AbortController()
+
+      try {
+        const response = await fetch("/api/ready-orders/count", {
+          cache: "no-store",
+          signal: controller.signal,
+        })
+        if (!response.ok) {
+          return
+        }
+
+        const data = (await response.json()) as { count?: unknown }
+        if (!disposed) {
+          setCount(Number(data.count ?? 0))
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return
+        }
+      }
+    }
+
+    void loadCount()
+    const intervalId = window.setInterval(loadCount, 5000)
+
+    return () => {
+      disposed = true
+      controller?.abort()
+      window.clearInterval(intervalId)
+    }
+  }, [])
+
+  if (count <= 0) {
+    return null
+  }
+
+  return <SidebarMenuBadge>{count}</SidebarMenuBadge>
 }

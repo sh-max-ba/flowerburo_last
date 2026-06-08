@@ -1,7 +1,10 @@
-import { BackofficeRoute } from "@/components/backoffice-route";
+import { redirect } from "next/navigation"
+import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 
-export const dynamic = "force-dynamic";
+export const dynamic = "force-dynamic"
 
 export default async function Home() {
-  return <BackofficeRoute />;
+  // Прежний дефолтный лендинг сохранён: florist → /orders, остальные → /cash.
+  const user = await requireUser()
+  redirect(getDefaultPathForRole(user.role))
 }

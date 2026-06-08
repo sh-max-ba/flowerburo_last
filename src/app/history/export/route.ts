@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs"
 import { requireRole } from "@/lib/auth"
 import { getHistoryReportData, type Movement } from "@/lib/db"
+import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
 
 export const dynamic = "force-dynamic"
 
@@ -8,7 +9,7 @@ export async function GET() {
   await requireRole(["owner"])
 
   const workbook = new ExcelJS.Workbook()
-  workbook.creator = "Flowerburo"
+  workbook.creator = "FlowerBuro | sellz"
   workbook.created = new Date()
   const report = getHistoryReportData()
 
@@ -128,10 +129,6 @@ function movementSource(movement: Movement) {
 }
 
 function formatDateTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-
-  return date.toLocaleString("ru-RU")
+  const date = parseDbInstant(value)
+  return date ? date.toLocaleString("ru-RU", { timeZone: SHOP_TIME_ZONE }) : value
 }

@@ -7,7 +7,18 @@ import { toast } from "sonner"
 import { createStockDocumentAction, saveStockDocumentDraftAction } from "@/app/actions"
 import type { Product, StockDocument, Supplier } from "@/lib/db"
 import { toDatetimeLocalValue } from "@/lib/datetime"
+import { formatMoney } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -23,7 +34,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -46,6 +65,7 @@ export function StockDocumentForm({
 }) {
   const router = useRouter()
   const [pending, setPending] = useState(false)
+  const [negativeConfirm, setNegativeConfirm] = useState<{ formData: FormData } | null>(null)
   const [supplierId, setSupplierId] = useState(document.supplierId ? String(document.supplierId) : "none")
   const [operationAt, setOperationAt] = useState(() => toDatetimeLocalValue(document.operationAt))
   const [items, setItems] = useState<Line[]>(
@@ -64,6 +84,7 @@ export function StockDocumentForm({
           expected: 0,
           costPrice: 0,
           salePrice: 0,
+          isActive: true,
           available: item.beforeStock ?? 0,
           updatedAt: "",
         } satisfies Product),
@@ -73,6 +94,26 @@ export function StockDocumentForm({
   )
   const isWriteOff = document.type === "stock_out"
   const operationAtLabel = isWriteOff ? "Дата и время списания" : "Дата и время приемки"
+
+  const resolvedItems = items.map((item) => {
+    const product = products.find((candidate) => candidate.code === item.product.code) ?? item.product
+    const qty = Number(item.qty || 0)
+    const afterStock = product.stock + (isWriteOff ? -qty : qty)
+    return { item, product, qty, afterStock }
+  })
+
+  const negativeLines = isWriteOff ? resolvedItems.filter((line) => line.afterStock < 0) : []
+
+  const totals = resolvedItems.reduce(
+    (acc, line) => {
+      if (Number.isFinite(line.qty) && line.qty > 0) {
+        acc.totalQty += line.qty
+        acc.totalValue += line.qty * (line.product.costPrice || 0)
+      }
+      return acc
+    },
+    { totalQty: 0, totalValue: 0 }
+  )
 
   function addProduct(product: Product) {
     const freshProduct = products.find((item) => item.code === product.code) ?? product
@@ -110,6 +151,23 @@ export function StockDocumentForm({
     setItems((current) => current.filter((item) => item.product.code !== productCode))
   }
 
+  async function runSubmit(formData: FormData, intent: string) {
+    setPending(true)
+    const result: Result =
+      intent === "draft"
+        ? await saveStockDocumentDraftAction(document.type, formData)
+        : await createStockDocumentAction(document.type, formData)
+    setPending(false)
+
+    if (result.ok) {
+      toast.success(result.message)
+      router.push(`/stock/acts/${document.id}`)
+      router.refresh()
+    } else {
+      toast.error(result.message)
+    }
+  }
+
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const submitter = (event.nativeEvent as SubmitEvent).submitter
@@ -129,20 +187,13 @@ export function StockDocumentForm({
     }
 
     const formData = new FormData(event.currentTarget)
-    setPending(true)
-    const result: Result =
-      intent === "draft"
-        ? await saveStockDocumentDraftAction(document.type, formData)
-        : await createStockDocumentAction(document.type, formData)
-    setPending(false)
 
-    if (result.ok) {
-      toast.success(result.message)
-      router.push(`/stock/acts/${document.id}`)
-      router.refresh()
-    } else {
-      toast.error(result.message)
+    if (intent === "post" && negativeLines.length > 0) {
+      setNegativeConfirm({ formData })
+      return
     }
+
+    await runSubmit(formData, intent)
   }
 
   return (
@@ -174,7 +225,7 @@ export function StockDocumentForm({
                 <input type="hidden" name="supplierId" value={supplierId === "none" ? "" : supplierId} />
                 <Select value={supplierId} onValueChange={(value) => setSupplierId(value ?? "none")}>
                   <SelectTrigger id="edit-stock-document-supplier" className="w-full" disabled={pending}>
-                    <SelectValue placeholder="Без поставщика" />
+                    <SelectValue placeholder="Без поставщика">{(value) => (!value || value === "none" ? "Без поставщика" : suppliers.find((s) => String(s.id) === String(value))?.name ?? "Без поставщика")}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
@@ -299,15 +350,31 @@ export function StockDocumentForm({
                       )
                     })}
                   </TableBody>
+                  <TableFooter>
+                    <TableRow>
+                      <TableCell className="font-medium">Позиций: {items.length}</TableCell>
+                      <TableCell />
+                      <TableCell className="font-semibold">{formatNumber(totals.totalQty)}</TableCell>
+                      <TableCell
+                        colSpan={3}
+                        className="text-right font-semibold"
+                        title="Оценочная стоимость по закупочной цене"
+                      >
+                        {isWriteOff ? "Стоимость списания" : "Стоимость прихода"}: {formatMoney(totals.totalValue)}
+                      </TableCell>
+                    </TableRow>
+                  </TableFooter>
                 </Table>
               </ScrollArea>
             </div>
           )}
-          {isWriteOff && items.some((item) => item.product.stock - Number(item.qty || 0) < 0) && (
+          {negativeLines.length > 0 && (
             <Alert className="mt-4 border-amber-200 bg-amber-50 text-amber-950">
               <AlertTriangleIcon />
-              <AlertTitle>После списания остаток уйдет в минус</AlertTitle>
-              <AlertDescription>Операция разрешена, но проверьте количество перед проведением.</AlertDescription>
+              <AlertTitle>После списания остаток уйдет в минус ({negativeLines.length})</AlertTitle>
+              <AlertDescription>
+                При проведении система запросит подтверждение. Проверьте количество перед проведением.
+              </AlertDescription>
             </Alert>
           )}
         </CardContent>
@@ -324,8 +391,68 @@ export function StockDocumentForm({
           Провести акт
         </Button>
       </div>
+
+      <AlertDialog
+        open={Boolean(negativeConfirm)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setNegativeConfirm(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Списать в минус?</AlertDialogTitle>
+            <AlertDialogDescription>
+              После проведения остаток уйдёт в минус по {negativeLines.length}{" "}
+              {pluralizePositions(negativeLines.length)}. Проведённый акт необратим — отменить его можно только обратным актом.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="max-h-48 overflow-y-auto rounded-lg border bg-muted/30 p-3 text-sm">
+            <ul className="flex flex-col gap-1">
+              {negativeLines.map((line) => (
+                <li key={line.product.code} className="flex items-center justify-between gap-3">
+                  <span className="min-w-0 truncate font-medium">{line.product.name}</span>
+                  <span className="shrink-0 text-destructive">
+                    {formatNumber(line.product.stock)} → {formatNumber(line.afterStock)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              render={<Button variant="destructive" disabled={pending} />}
+              onClick={() => {
+                if (!negativeConfirm) {
+                  return
+                }
+                const { formData } = negativeConfirm
+                setNegativeConfirm(null)
+                void runSubmit(formData, "post")
+              }}
+            >
+              Провести в минус
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </form>
   )
+}
+
+function pluralizePositions(count: number) {
+  const mod10 = count % 10
+  const mod100 = count % 100
+  if (mod10 === 1 && mod100 !== 11) {
+    return "позиции"
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
+    return "позициям"
+  }
+
+  return "позициям"
 }
 
 function Info({ label, value }: { label: string; value: string }) {

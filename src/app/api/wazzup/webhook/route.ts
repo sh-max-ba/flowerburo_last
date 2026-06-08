@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from "next/server"
+import { NextResponse, after, type NextRequest } from "next/server"
 import {
   createWazzupEventHash,
   detectWazzupEventType,
@@ -7,7 +7,12 @@ import {
   processWazzupWebhook,
   saveWazzupWebhookEvent,
 } from "@/lib/wazzup-webhook"
-import { getWazzupSettingsForServer, syncWazzupWebhookEntities } from "@/lib/wazzup"
+import {
+  buildWazzupContactEntity,
+  buildWazzupDealEntity,
+  getWazzupSettingsForServer,
+  syncWazzupWebhookEntities,
+} from "@/lib/wazzup"
 
 export const dynamic = "force-dynamic"
 
@@ -15,8 +20,35 @@ const noStoreHeaders = {
   "Cache-Control": "no-store",
 }
 
+const MAX_WEBHOOK_BODY_BYTES = 1_000_000
+
 export async function POST(request: NextRequest) {
+  // Авторизация ДО чтения и записи тела: неавторизованный запрос ничего не пишет в БД.
+  const auth = isWazzupWebhookAuthorized({
+    authorization: request.headers.get("authorization"),
+    queryKey: request.nextUrl.searchParams.get("key") ?? request.nextUrl.searchParams.get("crmKey"),
+  })
+
+  if (!auth.authorized) {
+    console.info("Wazzup webhook rejected", {
+      hasAuthorization: auth.hasAuthorization,
+      authMethod: auth.method,
+      error: auth.error,
+    })
+    return json({ ok: false }, 401)
+  }
+
+  // Раннее отсечение по Content-Length — чтобы не буферизировать огромное тело в память.
+  const declaredLength = Number(request.headers.get("content-length") ?? "")
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_WEBHOOK_BODY_BYTES) {
+    return json({ ok: false, error: "payload_too_large" }, 413)
+  }
+
   const rawPayload = await request.text()
+  if (rawPayload.length > MAX_WEBHOOK_BODY_BYTES) {
+    return json({ ok: false, error: "payload_too_large" }, 413)
+  }
+
   const payload = parseJson(rawPayload)
   if (!payload.ok) {
     return json({ ok: false, error: "invalid_json" }, 400)
@@ -25,17 +57,13 @@ export async function POST(request: NextRequest) {
   const eventType = detectWazzupEventType(payload.value)
   const eventHash = createWazzupEventHash(payload.value)
   const saved = saveWazzupWebhookEvent({ eventHash, eventType, rawPayload })
-  const auth = isWazzupWebhookAuthorized({
-    authorization: request.headers.get("authorization"),
-    queryKey: request.nextUrl.searchParams.get("key") ?? request.nextUrl.searchParams.get("crmKey"),
-  })
 
   logWebhookDecision({
     request,
     payload: payload.value,
     eventType,
     duplicate: saved.duplicate,
-    statusDecision: auth.authorized ? "accepted" : "unauthorized",
+    statusDecision: "accepted",
     auth,
   })
 
@@ -46,15 +74,11 @@ export async function POST(request: NextRequest) {
     return json({ ok: true })
   }
 
-  if (!auth.authorized) {
-    if (!saved.duplicate && saved.eventId) {
-      markWazzupWebhookEvent(saved.eventId, "failed", auth.error)
-    }
-    return json({ ok: false }, 401)
-  }
-
   const settings = getWazzupSettingsForServer()
-  if (saved.duplicate) {
+  // Настоящий дубль (прошлая попытка успешно обработана/проигнорирована) → 200.
+  // Если прошлая попытка осталась 'received'/'failed' (упала на временной ошибке) — НЕ
+  // отбрасываем, а даём переобработать ниже, чтобы входящее сообщение не потерялось.
+  if (saved.duplicate && (saved.status === "processed" || saved.status === "ignored")) {
     return json({ ok: true, duplicate: true })
   }
 
@@ -65,8 +89,26 @@ export async function POST(request: NextRequest) {
 
   try {
     const result = processWazzupWebhook(payload.value)
-    await syncWazzupWebhookEntities(result)
     markWazzupWebhookEvent(saved.eventId!, eventType === "unknown" ? "ignored" : "processed", auth.warning)
+    // Отвечаем 200 сразу (входящее уже сохранено в БД), а обратную синхронизацию контактов/
+    // сделок в Wazzup выполняем ПОСЛЕ ответа — чтобы медленный Wazzup не задерживал
+    // подтверждение вебхука (иначе Wazzup посчитает доставку неуспешной и будет ретраить).
+    after(() => syncWazzupWebhookEntities(result))
+    // createContact/createDeal — синхронный server-to-server handshake: Wazzup ждёт тело созданной
+    // сущности (в сигнатуре CRUD), а не {ok}, чтобы связать свою сторону с записью CRM. Повторный
+    // вебхук уже не придёт, поэтому ответить телом важно с первого раза.
+    if (eventType === "createContact" && result.contactId) {
+      const entity = buildWazzupContactEntity(result.contactId)
+      if (entity) {
+        return json(entity)
+      }
+    }
+    if (eventType === "createDeal" && result.dealId) {
+      const entity = buildWazzupDealEntity(result.dealId)
+      if (entity) {
+        return json(entity)
+      }
+    }
     return json({ ok: true, ...result })
   } catch (error) {
     markWazzupWebhookEvent(
@@ -74,7 +116,9 @@ export async function POST(request: NextRequest) {
       "failed",
       error instanceof Error ? error.message : "Webhook processing failed"
     )
-    return json({ ok: false, error: "processing_failed" })
+    // 500 (а не 200): Wazzup повторит доставку; событие осталось 'failed' и будет пущено на
+    // переобработку (см. дедуп выше) — временная ошибка БД не теряет входящее сообщение.
+    return json({ ok: false, error: "processing_failed" }, 500)
   }
 }
 

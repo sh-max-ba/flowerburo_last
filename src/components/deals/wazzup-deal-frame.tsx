@@ -8,6 +8,7 @@ import { toast } from "sonner"
 import { linkDealToWazzupByCustomerAction } from "@/app/actions"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
 import {
   Empty,
   EmptyContent,
@@ -227,12 +228,13 @@ function NoChatDiagnostics({ state }: { state: WazzupFrameDiagnostics & { messag
 }
 
 function dateTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
+  const date = parseDbInstant(value)
+  if (!date) {
     return value
   }
 
   return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: SHOP_TIME_ZONE,
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",

@@ -18,14 +18,18 @@ async function main() {
     process.chdir(tempDir)
 
     const [
-      { initDb, listUsers },
+      { initDb, listUsers, listWazzupChatMessages },
       { isWazzupWebhookAuthorized, processWazzupWebhook },
       { getDeal, listDeals, updateCustomer },
       {
+        buildWazzupContactEntity,
+        buildWazzupDealEntity,
         buildWazzupIframeRequestBodyForDeal,
         buildWazzupUserSyncBody,
+        getWazzupChatForDeal,
         getWazzupIframeUrlForDeal,
         resolveWazzupChatTargetForDeal,
+        sendTextToDealChat,
         syncWazzupAll,
         syncWazzupContacts,
         syncWazzupDeals,
@@ -266,6 +270,20 @@ async function main() {
     assert(syncBody[0].id === String(user.id), "Wazzup user sync id must be a stringified current user id")
     assert(syncBody[0].name === user.name, "Wazzup user sync name must be current user name")
 
+    // createContact/createDeal handshake: маршрут отвечает телом сущности в сигнатуре CRUD.
+    const contactEntity = buildWazzupContactEntity(customerId)
+    assert(
+      contactEntity != null &&
+        contactEntity.id === String(customerId) &&
+        contactEntity.contactData[0]?.chatId === "996995606909",
+      "buildWazzupContactEntity must return the CRUD contact entity (id + contactData.chatId)"
+    )
+    const dealEntity = buildWazzupDealEntity(dealId)
+    assert(
+      dealEntity != null && dealEntity.id === String(dealId) && dealEntity.contacts[0] === String(customerId),
+      "buildWazzupDealEntity must return the CRUD deal entity (id + contacts)"
+    )
+
     const closedStageResult = db
       .prepare(
         `INSERT INTO deal_stages (pipeline_id, name, position, color, is_closed, is_won)
@@ -307,17 +325,19 @@ async function main() {
       )
       .run()
 
-    const softAuth = isWazzupWebhookAuthorized({ authorization: null })
-    assert(softAuth.authorized, "Webhook without Authorization must be accepted when auth is not required")
-    assert(Boolean(softAuth.warning), "Soft webhook auth must return a warning")
-    db.prepare("UPDATE integration_settings SET webhook_auth_required = 1 WHERE provider = 'wazzup'").run()
-    const strictAuth = isWazzupWebhookAuthorized({ authorization: null })
-    assert(!strictAuth.authorized, "Webhook without Authorization must be rejected when auth is required")
+    // Webhook fail-closed: действительный CRM key обязателен ВСЕГДА (это требование безопасности —
+    // неаутентифицированный webhook мог бы создавать сделки/контакты). Проверяем оба способа: Bearer и query.
+    const noKeyAuth = isWazzupWebhookAuthorized({ authorization: null })
+    assert(!noKeyAuth.authorized, "Webhook without a valid CRM key must be rejected")
+    const wrongKeyAuth = isWazzupWebhookAuthorized({ authorization: "Bearer wrong-key" })
+    assert(!wrongKeyAuth.authorized, "Webhook with an invalid CRM key must be rejected")
     const queryAuth = isWazzupWebhookAuthorized({ authorization: null, queryKey: "test-crm-key" })
-    assert(queryAuth.authorized && queryAuth.method === "query", "Webhook query key must authorize the request")
-    db.prepare("UPDATE integration_settings SET webhook_auth_required = 0 WHERE provider = 'wazzup'").run()
+    assert(queryAuth.authorized && queryAuth.method === "query", "Valid query CRM key must authorize the request")
+    const bearerAuth = isWazzupWebhookAuthorized({ authorization: "Bearer test-crm-key" })
+    assert(bearerAuth.authorized && bearerAuth.method === "bearer", "Valid Bearer CRM key must authorize the request")
 
     const fetchCalls: Array<{ url: string; init: RequestInit }> = []
+    let outboundMessageSeq = 0
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -347,6 +367,11 @@ async function main() {
       }
       if (url.endsWith("/iframe")) {
         return Response.json({ url: "https://frame.test/wazzup" })
+      }
+      if (url.endsWith("/message")) {
+        // POST /v3/message → 201 { messageId, chatId } (см. references/messages.md). Уникальный id на вызов.
+        outboundMessageSeq += 1
+        return Response.json({ messageId: `wz-msg-${outboundMessageSeq}`, chatId: "996995606909" }, { status: 201 })
       }
 
       return Response.json({ error: "UNEXPECTED_URL" }, { status: 500 })
@@ -508,6 +533,147 @@ async function main() {
         .prepare("SELECT COUNT(*) as count FROM deals WHERE customer_id = ? AND status = 'open'")
         .get(closedOnlyCustomerId) as { count: number }
       assert(closedOnlyOpenDeals.count === 1, "Closed-only incoming message must create exactly one open deal")
+
+      // --- Собственный чат: исходящий текст пишется в wazzup_messages, эхо дедупится, статусы, лента ---
+      fetchCalls.length = 0
+      await sendTextToDealChat(dealId, "Привет из CRM", user)
+      const messageCall = fetchCalls.find((call) => call.url.endsWith("/message"))
+      assert(messageCall, "sendTextToDealChat must POST /v3/message")
+      const messageBody = JSON.parse(String(messageCall.init.body)) as {
+        channelId: string
+        chatType: string
+        chatId: string
+        crmMessageId: string
+        text: string
+      }
+      assert(messageBody.text === "Привет из CRM", "Send body must carry the text")
+      assert(messageBody.chatType === "whatsapp", "Send body chatType must match the channel transport")
+      assert(messageBody.chatId === "996995606909", "Send body chatId must be the resolved chat identity")
+      // Сделка уже привязана к каналу 'test-channel' предыдущим входящим вебхуком, поэтому отправка
+      // идёт с её сохранённым channelId (source 'deal'), а не с подобранным активным каналом.
+      assert(messageBody.channelId === "test-channel", "Send body must use the deal's resolved channel id")
+      assert(
+        messageBody.crmMessageId.startsWith(`deal-${dealId}-text-`),
+        "Free-form send must use a unique deal-scoped crmMessageId"
+      )
+
+      const sentRow = db.prepare("SELECT * FROM wazzup_messages WHERE message_id = 'wz-msg-1'").get() as
+        | Row
+        | undefined
+      assert(sentRow, "sendTextToDealChat must persist an outbound row in wazzup_messages")
+      assert(sentRow.direction === "outbound", "Outbound text row direction must be 'outbound'")
+      assert(sentRow.status === "sent", "Outbound text row status must be 'sent'")
+      assert(sentRow.text === "Привет из CRM", "Outbound text row must store the text")
+      assert(
+        String(sentRow.crm_message_id ?? "").startsWith(`deal-${dealId}-text-`),
+        "Outbound row must persist the free-form crm_message_id"
+      )
+      assert(
+        sentRow.chat_type === "whatsapp" && sentRow.chat_id === "996995606909",
+        "Outbound row must carry the chat identity"
+      )
+      assert(Number(sentRow.deal_id) === dealId, "Outbound row must link to the deal")
+
+      // Эхо того же сообщения (Wazzup присылает наш messageId с isEcho=true) НЕ должно дублироваться.
+      const echoResult = processWazzupWebhook({
+        messages: [
+          {
+            messageId: "wz-msg-1",
+            channelId: "active-channel",
+            chatType: "whatsapp",
+            chatId: "996995606909",
+            dateTime: "2026-05-16T10:05:00.000Z",
+            type: "text",
+            isEcho: true,
+            text: "Привет из CRM",
+            status: "sent",
+          },
+        ],
+      })
+      assert(echoResult.messagesSaved === 0, "Echo of our own send must be deduped by messageId")
+      const sentRowCount = db
+        .prepare("SELECT COUNT(*) as count FROM wazzup_messages WHERE message_id = 'wz-msg-1'")
+        .get() as { count: number }
+      assert(sentRowCount.count === 1, "There must be exactly one row for our outbound message after the echo")
+
+      // Статус-вебхук обновляет нашу исходящую строку по message_id.
+      const statusResult = processWazzupWebhook({
+        statuses: [{ messageId: "wz-msg-1", status: "delivered" }],
+      })
+      assert(statusResult.statusesUpdated === 1, "Status webhook must update our outbound row")
+      const deliveredRow = db
+        .prepare("SELECT status FROM wazzup_messages WHERE message_id = 'wz-msg-1'")
+        .get() as Row
+      assert(deliveredRow.status === "delivered", "Outbound row status must become 'delivered'")
+
+      // Лента по идентичности чата: входящее (до отправки) + наше исходящее, по возрастанию времени.
+      const feed = listWazzupChatMessages({ dealId, chatType: "whatsapp", chatId: "996995606909" })
+      const feedIds = feed.map((message) => message.messageId)
+      assert(feedIds.includes("test-message-unique"), "Feed must include the earlier inbound message by chat identity")
+      assert(feedIds.includes("wz-msg-1"), "Feed must include our outbound message")
+      const feedTimes = feed.map((message) => message.dateTime)
+      assert(
+        JSON.stringify(feedTimes) === JSON.stringify([...feedTimes].sort()),
+        "Chat feed must be ordered ascending by time"
+      )
+
+      const chat = getWazzupChatForDeal(dealId)
+      assert(chat.status === "ok", "getWazzupChatForDeal must return ok for an enabled, resolvable deal")
+      assert(
+        chat.status === "ok" && chat.messages.some((message) => message.messageId === "wz-msg-1"),
+        "getWazzupChatForDeal must include the outbound message"
+      )
+      assert(chat.status === "ok" && Boolean(chat.revision), "getWazzupChatForDeal must return a revision string")
+
+      // --- Ответ (цитирование): refMessageId + quoted_text сохраняются на исходящей строке ---
+      await sendTextToDealChat(dealId, "Это ответ", user, {
+        refMessageId: "wz-msg-1",
+        quotedText: "Привет из CRM",
+      })
+      const replyRow = db.prepare("SELECT * FROM wazzup_messages WHERE message_id = 'wz-msg-2'").get() as
+        | Row
+        | undefined
+      assert(replyRow, "Reply must persist an outbound row")
+      assert(replyRow.quoted_message_id === "wz-msg-1", "Reply row must store quoted_message_id (refMessageId)")
+      assert(replyRow.quoted_text === "Привет из CRM", "Reply row must store the quoted text snapshot")
+
+      // --- Голосовое/медиа: абсолютный contentUri уходит как audio, текст не пишется ---
+      await sendTextToDealChat(dealId, "", user, {
+        contentUri: "https://example.test/voice.ogg",
+        messageType: "audio",
+      })
+      const voiceRow = db.prepare("SELECT * FROM wazzup_messages WHERE message_id = 'wz-msg-3'").get() as
+        | Row
+        | undefined
+      assert(voiceRow, "Voice/media send must persist an outbound row")
+      assert(voiceRow.message_type === "audio", "Voice row message_type must be 'audio'")
+      assert(
+        voiceRow.content_uri === "https://example.test/voice.ogg",
+        "Voice row must store the content_uri"
+      )
+      assert(!voiceRow.text, "Voice row must not carry text")
+
+      // --- Вебхук с quotedMessage: входящая цитата парсится в quoted_* ---
+      const quoteWebhook = processWazzupWebhook({
+        messages: [
+          {
+            messageId: "in-quote-1",
+            channelId: "active-channel",
+            chatType: "whatsapp",
+            chatId: "996995606909",
+            dateTime: "2026-05-16T12:00:00.000Z",
+            type: "text",
+            isEcho: false,
+            text: "Да, как договаривались",
+            quotedMessage: { messageId: "wz-msg-1", text: "Привет из CRM", type: "text" },
+            status: "inbound",
+          },
+        ],
+      })
+      assert(quoteWebhook.messagesSaved === 1, "Inbound quoted message must be saved")
+      const inQuoteRow = db.prepare("SELECT * FROM wazzup_messages WHERE message_id = 'in-quote-1'").get() as Row
+      assert(inQuoteRow.quoted_message_id === "wz-msg-1", "Inbound quote must store quoted_message_id")
+      assert(inQuoteRow.quoted_text === "Привет из CRM", "Inbound quote must store quoted text")
 
       fetchCalls.length = 0
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

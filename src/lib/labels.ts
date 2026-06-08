@@ -7,6 +7,7 @@ export const paymentMethodOptions: Array<{ value: PaymentMethod; label: string }
   { value: "mbank", label: "Mbank" },
   { value: "optima", label: "Optima" },
   { value: "elsom", label: "ЭлСом" },
+  { value: "bakai", label: "Бакай" },
   { value: "transfer", label: "Перевод" },
 ]
 
@@ -18,13 +19,12 @@ export function getPaymentMethodLabel(method: PaymentMethod | string) {
     mbank: "Mbank",
     optima: "Optima",
     elsom: "ЭлСом",
+    bakai: "Бакай",
     transfer: "Перевод",
   }
 
   return labels[method as PaymentMethod] ?? method
 }
-
-export const paymentMethodLabel = getPaymentMethodLabel
 
 export function cashTransactionTypeLabel(type: CashTransactionType | string) {
   const labels: Record<CashTransactionType, string> = {
@@ -65,6 +65,24 @@ export function wazzupChatTypeLabel(value: string) {
   }
 
   return labels[value] ?? (value || "-")
+}
+
+// Тип медиа-сообщения Wazzup (см. references/messages.md, references/webhooks.md).
+export function wazzupMessageTypeLabel(value: string) {
+  const labels: Record<string, string> = {
+    image: "Фото",
+    audio: "Аудио",
+    video: "Видео",
+    document: "Документ",
+    vcard: "Контакт",
+    geo: "Геолокация",
+    missing_call: "Пропущенный звонок",
+    wapi_template: "Шаблон",
+    unsupported: "Не поддерживается",
+    unknown: "Сообщение",
+  }
+
+  return labels[value] ?? "Вложение"
 }
 
 export function stockDocumentTypeLabel(value: string) {

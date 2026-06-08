@@ -12,6 +12,10 @@
 
 # testing
 /coverage
+/test-results
+/playwright-report
+/blob-report
+/playwright/.cache
 
 # next.js
 /.next/
@@ -29,8 +33,19 @@ public/uploads/bouquets/*
 *.pem
 app.db
 app.db.backup*
+app.db.bak*
+app.db*.backup*
 app.db-shm
 app.db-wal
+/backups/
+*.disabled-launch
+
+# uploaded customer media (voice messages etc.) — never commit
+public/uploads/voice/*
+!public/uploads/voice/.gitkeep
+
+# runtime logs
+*.log
 
 # debug
 npm-debug.log*

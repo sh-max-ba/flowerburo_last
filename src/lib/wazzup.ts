@@ -2,12 +2,17 @@ import crypto from "node:crypto"
 import { getDeal, normalizePhone, type Deal } from "@/lib/crm"
 import {
   getBouquetTemplate,
+  getWazzupChatRevision,
   initDb,
   listUsers,
+  listWazzupChatMessages,
   recordDealBouquetMessage,
+  upsertOutboundWazzupMessage,
   type BouquetTemplate,
   type CurrentUser,
   type UserRole,
+  type WazzupChatIdentity,
+  type WazzupMessage,
 } from "@/lib/db"
 import { getSafeBouquetImagePath } from "@/lib/product-images"
 import { formatMoney } from "@/lib/utils"
@@ -114,6 +119,9 @@ export type WazzupChannelSummary = {
 
 export type WazzupChatTargetSource = "deal" | "customer" | "phone_fallback"
 
+// Режим чата сделки: встроенный Wazzup iframe (по умолчанию) или собственный UI чата.
+export type WazzupChatMode = "iframe" | "custom"
+
 export type WazzupChatTarget =
   | {
       status: "ok"
@@ -138,6 +146,7 @@ export type WazzupSettingsStatus = {
   webhookUrl: string
   secureWebhookUrlMasked: string
   appUrlConfigured: boolean
+  chatMode: WazzupChatMode
   lastCheckStatus: string
   lastCheckMessage: string
   lastCheckAt: string
@@ -152,6 +161,7 @@ type WazzupSettingsRow = {
   webhook_url: string | null
   webhook_auth_required: number | null
   is_enabled: number | null
+  chat_mode: string | null
   last_check_status: string | null
   last_check_message: string | null
   last_check_at: string | null
@@ -164,6 +174,7 @@ type WazzupServerSettings = {
   webhookAuthRequired: boolean
   isEnabled: boolean
   appUrlConfigured: boolean
+  chatMode: WazzupChatMode
 }
 
 type WazzupIframeResponse = {
@@ -208,21 +219,34 @@ const provider = "wazzup"
 const wazzupApiBaseUrl = "https://api.wazzup24.com/v3"
 const wazzupMessagePath = "/message"
 const wazzupSendUnavailableMessage = "Невозможно отправить: у сделки нет телефона клиента или Wazzup не настроен."
-export const wazzupWebhookTargetUrl = "http://91.99.4.32:3000/api/wazzup/webhook"
+// Подстраховочный URL вебхука, если NEXT_PUBLIC_APP_URL не задан в окружении.
+// Должен указывать на ТЕКУЩИЙ прод-домен — иначе Wazzup будет слать события в никуда.
+// Правильнее всегда задавать NEXT_PUBLIC_APP_URL явно; это значение — лишь fallback.
+export const wazzupWebhookTargetUrl = "https://flower-buro.sellz.cloud/api/wazzup/webhook"
 
 export function getWazzupSettingsForServer(): WazzupServerSettings {
   const row = getWazzupSettingsRow()
   const appUrl = clean(process.env.NEXT_PUBLIC_APP_URL)
-  const webhookUrl = stripWebhookSecret(clean(row?.webhook_url) || buildWebhookUrl(appUrl))
+  // NEXT_PUBLIC_APP_URL ВЫИГРЫВАЕТ у сохранённого в БД webhook_url. Иначе при миграции (старый
+  // IP остался в строке БД) переподключение webhook зарегистрировало бы мёртвый URL, пока
+  // настройки не пересохранили. С приоритетом env порядок действий оператора больше не критичен.
+  const webhookUrl = stripWebhookSecret(
+    appUrl ? buildWebhookUrl(appUrl) : clean(row?.webhook_url) || buildWebhookUrl(appUrl)
+  )
 
   return {
     apiKey: clean(row?.api_key) || clean(process.env.WAZZUP_API_KEY),
     crmKey: clean(row?.crm_key) || clean(process.env.WAZZUP_CRM_KEY),
     webhookUrl,
-    webhookAuthRequired: row ? row.webhook_auth_required === 1 : false,
+    webhookAuthRequired: row ? row.webhook_auth_required === 1 : true,
     isEnabled: row ? row.is_enabled === 1 : Boolean(clean(process.env.WAZZUP_API_KEY)),
     appUrlConfigured: Boolean(appUrl),
+    chatMode: normalizeChatMode(row?.chat_mode),
   }
+}
+
+function normalizeChatMode(value: unknown): WazzupChatMode {
+  return clean(value) === "custom" ? "custom" : "iframe"
 }
 
 export function getWazzupSettingsStatus(): WazzupSettingsStatus {
@@ -239,6 +263,7 @@ export function getWazzupSettingsStatus(): WazzupSettingsStatus {
     webhookUrl: settings.webhookUrl,
     secureWebhookUrlMasked: maskWebhookUrl(buildSecureWebhookUrl(settings.webhookUrl, settings.crmKey), settings.crmKey),
     appUrlConfigured: settings.appUrlConfigured,
+    chatMode: settings.chatMode,
     lastCheckStatus: clean(row?.last_check_status),
     lastCheckMessage: clean(row?.last_check_message),
     lastCheckAt: clean(row?.last_check_at),
@@ -248,7 +273,13 @@ export function getWazzupSettingsStatus(): WazzupSettingsStatus {
   }
 }
 
-export function saveWazzupSettings(input: { apiKey?: string; crmKey?: string; isEnabled: boolean; webhookAuthRequired?: boolean }) {
+export function saveWazzupSettings(input: {
+  apiKey?: string
+  crmKey?: string
+  isEnabled: boolean
+  webhookAuthRequired?: boolean
+  chatMode?: WazzupChatMode
+}) {
   const current = getWazzupSettingsRow()
   const nextApiKey = clean(input.apiKey) || clean(current?.api_key) || null
   const nextCrmKey = clean(input.crmKey) || clean(current?.crm_key) || null
@@ -257,6 +288,7 @@ export function saveWazzupSettings(input: { apiKey?: string; crmKey?: string; is
     crmKey: nextCrmKey,
     isEnabled: input.isEnabled,
     webhookAuthRequired: input.webhookAuthRequired ?? (current?.webhook_auth_required === 1),
+    chatMode: input.chatMode ?? normalizeChatMode(current?.chat_mode),
     lastCheckStatus: current?.last_check_status ?? null,
     lastCheckMessage: current?.last_check_message ?? null,
     lastCheckAt: current?.last_check_at ?? null,
@@ -271,6 +303,7 @@ export function clearWazzupApiKey() {
     crmKey: clean(current?.crm_key) || null,
     isEnabled: current ? current.is_enabled === 1 : settings.isEnabled,
     webhookAuthRequired: current ? current.webhook_auth_required === 1 : settings.webhookAuthRequired,
+    chatMode: settings.chatMode,
     lastCheckStatus: null,
     lastCheckMessage: "API key очищен",
     lastCheckAt: new Date().toISOString(),
@@ -290,6 +323,7 @@ export function generateAndSaveWazzupCrmKey() {
     crmKey,
     isEnabled: current ? current.is_enabled === 1 : settings.isEnabled,
     webhookAuthRequired: current ? current.webhook_auth_required === 1 : settings.webhookAuthRequired,
+    chatMode: settings.chatMode,
     lastCheckStatus: current?.last_check_status ?? null,
     lastCheckMessage: current?.last_check_message ?? null,
     lastCheckAt: current?.last_check_at ?? null,
@@ -304,7 +338,7 @@ export async function testWazzupApiKey() {
   }
 
   try {
-    const response = await fetch(`${wazzupApiBaseUrl}/channels`, {
+    const response = await wazzupFetch(`${wazzupApiBaseUrl}/channels`, {
       method: "GET",
       cache: "no-store",
       headers: {
@@ -630,15 +664,24 @@ export async function getWazzupIframeUrlForDeal(
     }
   }
 
-  const response = await fetch(`${wazzupApiBaseUrl}/iframe`, {
-    method: "POST",
-    cache: "no-store",
-    headers: {
-      Authorization: `Bearer ${settings.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  })
+  let response: Response
+  try {
+    response = await wazzupFetch(`${wazzupApiBaseUrl}/iframe`, {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    })
+  } catch (error) {
+    return {
+      status: "error",
+      message: error instanceof Error ? error.message : "Wazzup недоступен.",
+      ...diagnostics,
+    }
+  }
 
   if (!response.ok) {
     const safeMessage = await safeWazzupIframeErrorMessage(response)
@@ -713,18 +756,37 @@ export async function sendBouquetToDealChat(
       throw new Error("Фото букета недоступно.")
     }
 
+    const sentAtIso = new Date().toISOString()
+
     if (imagePath) {
-      await postWazzupMessage({
+      const imageUrl = getAbsoluteBouquetImageUrl(imagePath)
+      const imageCrmId = createCrmMessageId(deal.id, bouquet.id, "image")
+      const imageResult = await postWazzupMessage({
         ...basePayload,
-        contentUri: getAbsoluteBouquetImageUrl(imagePath),
-        crmMessageId: createCrmMessageId(deal.id, bouquet.id, "image"),
+        contentUri: imageUrl,
+        crmMessageId: imageCrmId,
+      })
+      recordOutboundForDeal(deal, targetWithChannel, currentUser, {
+        result: imageResult,
+        crmMessageId: imageCrmId,
+        messageType: "image",
+        contentUri: imageUrl,
+        dateTime: sentAtIso,
       })
     }
 
-    await postWazzupMessage({
+    const textCrmId = createCrmMessageId(deal.id, bouquet.id, "text")
+    const textResult = await postWazzupMessage({
       ...basePayload,
       text: messageText,
-      crmMessageId: createCrmMessageId(deal.id, bouquet.id, "text"),
+      crmMessageId: textCrmId,
+    })
+    recordOutboundForDeal(deal, targetWithChannel, currentUser, {
+      result: textResult,
+      crmMessageId: textCrmId,
+      messageType: "text",
+      text: messageText,
+      dateTime: sentAtIso,
     })
 
     persistWazzupTargetForDeal(deal.id, targetWithChannel)
@@ -760,6 +822,143 @@ export async function sendBouquetToDealChat(
   }
 }
 
+// Generic free-form отправка текста (или вложения) в чат сделки. Резолвит цель как
+// sendBouquetToDealChat, шлёт через postWazzupMessage с УНИКАЛЬНЫМ crmMessageId (стабилен при
+// сетевом ретрае внутри одного вызова) и пишет исходящее в единую ленту wazzup_messages.
+export async function sendTextToDealChat(
+  dealId: number,
+  text: string,
+  currentUser: CurrentUser,
+  options: { contentUri?: string; messageType?: string; refMessageId?: string; quotedText?: string } = {}
+): Promise<{ ok: true; messageId: string; repeated: boolean }> {
+  const deal = getDeal(dealId)
+  if (!deal) {
+    throw new Error("Сделка не найдена.")
+  }
+
+  const body = clean(text)
+  const rawContentUri = clean(options.contentUri ?? "")
+  if (!body && !rawContentUri) {
+    throw new Error("Введите текст сообщения.")
+  }
+  // В /v3/message text и contentUri взаимоисключающи — за один вызов отправляем что-то одно.
+  if (body && rawContentUri) {
+    throw new Error("Нельзя отправить текст и вложение одним сообщением.")
+  }
+
+  try {
+    const settings = getWazzupSettingsForServer()
+    const target = resolveWazzupChatTargetForDeal(deal)
+    if (target.status !== "ok" || !settings.isEnabled || !settings.apiKey) {
+      throw new Error(wazzupSendUnavailableMessage)
+    }
+
+    const targetWithChannel = await withActiveWhatsappChannel(target)
+    const channelId = clean(targetWithChannel.channelId)
+    if (!channelId) {
+      throw new Error(wazzupSendUnavailableMessage)
+    }
+
+    const contentUri = rawContentUri ? toAbsoluteAppUrl(rawContentUri) : ""
+    const messageType = contentUri ? clean(options.messageType) || "document" : "text"
+    const refMessageId = clean(options.refMessageId)
+    const crmMessageId = `deal-${deal.id}-text-${crypto.randomUUID()}`
+    const result = await postWazzupMessage({
+      channelId,
+      chatType: targetWithChannel.chatType,
+      chatId: targetWithChannel.chatId,
+      crmUserId: String(currentUser.id),
+      crmMessageId,
+      ...(contentUri ? { contentUri } : { text: body }),
+      ...(refMessageId ? { refMessageId } : {}),
+    })
+
+    recordOutboundForDeal(deal, targetWithChannel, currentUser, {
+      result,
+      crmMessageId,
+      messageType,
+      text: contentUri ? undefined : body,
+      contentUri: contentUri || undefined,
+      quotedMessageId: refMessageId || undefined,
+      quotedText: refMessageId ? clean(options.quotedText) : undefined,
+      dateTime: new Date().toISOString(),
+    })
+
+    persistWazzupTargetForDeal(deal.id, targetWithChannel)
+
+    return { ok: true, messageId: result.messageId, repeated: result.repeated }
+  } catch (error) {
+    throw new Error(safeWazzupBouquetSendErrorMessage(error))
+  }
+}
+
+export type WazzupChatResult =
+  | { status: "ok"; messages: WazzupMessage[]; revision: string }
+  | { status: "not_configured" | "disabled" | "no_chat"; message: string }
+  | { status: "error"; message: string }
+
+// Лёгкий ответ для поллинга: только статус + revision (без загрузки самой ленты).
+export type WazzupChatProbeResult =
+  | { status: "ok"; revision: string }
+  | { status: "not_configured" | "disabled" | "no_chat" | "error"; message: string }
+
+type DealChatResolution =
+  | { status: "ok"; identity: WazzupChatIdentity }
+  | { status: "not_configured" | "disabled" | "no_chat" | "error"; message: string }
+
+// Общая логика дискриминанта статуса собственного чата сделки. Статусы совпадают с iframe-фреймом,
+// чтобы UI мог переиспользовать те же пустые состояния (no_chat/disabled/not_configured). Wazzup API
+// здесь НЕ вызывается — собственный чат читает ленту из БД.
+function resolveDealChat(dealId: number): DealChatResolution {
+  const deal = getDeal(dealId)
+  if (!deal) {
+    return { status: "error", message: "Сделка не найдена." }
+  }
+
+  const settings = getWazzupSettingsForServer()
+  const target = resolveWazzupChatTargetForDeal(deal)
+
+  if (target.status === "no_chat") {
+    return {
+      status: "no_chat",
+      message:
+        "У сделки нет телефона клиента, поэтому чат открыть нельзя. Добавьте телефон клиента или дождитесь входящего сообщения.",
+    }
+  }
+  if (!settings.isEnabled) {
+    return { status: "disabled", message: "Интеграция Wazzup выключена." }
+  }
+  if (!settings.apiKey) {
+    return { status: "not_configured", message: "Wazzup API key не настроен на сервере." }
+  }
+
+  return { status: "ok", identity: { dealId: deal.id, chatType: target.chatType, chatId: target.chatId } }
+}
+
+// Полная лента собственного чата сделки (для первичной загрузки и обновления при смене revision).
+export function getWazzupChatForDeal(dealId: number): WazzupChatResult {
+  const resolution = resolveDealChat(dealId)
+  if (resolution.status !== "ok") {
+    return resolution
+  }
+
+  return {
+    status: "ok",
+    messages: listWazzupChatMessages(resolution.identity),
+    revision: getWazzupChatRevision(resolution.identity),
+  }
+}
+
+// Лёгкий probe для поллинга: статус + revision, без выгрузки сообщений.
+export function getWazzupChatProbeForDeal(dealId: number): WazzupChatProbeResult {
+  const resolution = resolveDealChat(dealId)
+  if (resolution.status !== "ok") {
+    return { status: resolution.status, message: resolution.message }
+  }
+
+  return { status: "ok", revision: getWazzupChatRevision(resolution.identity) }
+}
+
 type WazzupMessageRequest = {
   channelId: string
   chatType: string
@@ -768,6 +967,8 @@ type WazzupMessageRequest = {
   crmMessageId: string
   text?: string
   contentUri?: string
+  // id цитируемого сообщения Wazzup (ответ на сообщение). См. references/messages.md.
+  refMessageId?: string
 }
 
 function buildBouquetMessageText(bouquet: BouquetTemplate) {
@@ -792,11 +993,36 @@ function getAbsoluteBouquetImageUrl(imagePath: string) {
   return `${appUrl.replace(/\/+$/, "")}${imagePath}`
 }
 
-function createCrmMessageId(dealId: number, bouquetId: number, kind: "image" | "text") {
-  return `deal-${dealId}-bouquet-${bouquetId}-${kind}-${crypto.randomUUID()}`
+// Wazzup скачивает contentUri по ПУБЛИЧНОМУ URL — относительный путь (наш загруженный файл)
+// абсолютизируем через NEXT_PUBLIC_APP_URL. Уже абсолютные http(s)-ссылки оставляем как есть.
+function toAbsoluteAppUrl(uri: string) {
+  const value = clean(uri)
+  if (!value || /^https?:\/\//i.test(value)) {
+    return value
+  }
+  const appUrl = clean(process.env.NEXT_PUBLIC_APP_URL)
+  if (!appUrl) {
+    throw new Error("Для отправки вложения настройте NEXT_PUBLIC_APP_URL")
+  }
+  return `${appUrl.replace(/\/+$/, "")}${value.startsWith("/") ? "" : "/"}${value}`
 }
 
-async function postWazzupMessage(payload: WazzupMessageRequest) {
+function createCrmMessageId(dealId: number, bouquetId: number, kind: "image" | "text") {
+  // Детерминированный id (без случайного UUID): повторная отправка того же букета в ту же
+  // сделку идемпотентна — Wazzup дедуплицирует одинаковый crmMessageId в окне 60с, поэтому
+  // двойной клик/повтор не уйдёт клиенту дважды.
+  return `deal-${dealId}-bouquet-${bouquetId}-${kind}`
+}
+
+type PostWazzupMessageResult = {
+  // Wazzup messageId из ответа 201 { messageId, chatId }. Пустой при repeated (см. ниже).
+  messageId: string
+  chatId: string
+  repeated: boolean
+}
+
+// Переиспользуемая отправка одного сообщения. Возвращает messageId (ключ дедупликации с эхо).
+async function postWazzupMessage(payload: WazzupMessageRequest): Promise<PostWazzupMessageResult> {
   const response = await requestWazzup(wazzupMessagePath, {
     method: "POST",
     headers: {
@@ -807,8 +1033,61 @@ async function postWazzupMessage(payload: WazzupMessageRequest) {
   const raw = await response.text()
   const data = parseJson(raw)
   if (!response.ok) {
+    // Идемпотентность отправки: тот же crmMessageId в окне 60с Wazzup отклоняет как
+    // REPEATED_CRM_MESSAGE_ID (HTTP 400) — значит, сообщение УЖЕ доставлено (первый POST
+    // дошёл, а ответ потерялся и сработал ретрай). Считаем это успехом, а не ошибкой. messageId
+    // в этом ответе недоступен — оптимистичную строку не пишем, её допишет эхо-вебхук по messageId.
+    if (response.status === 400 && /repeated.?crm.?message.?id/i.test(wazzupErrorCode(data))) {
+      return { messageId: "", chatId: "", repeated: true }
+    }
     throw new Error(safeWazzupMessageErrorMessage(response.status, data))
   }
+
+  const record = asRecord(data)
+  return {
+    messageId: clean(record.messageId),
+    chatId: clean(record.chatId),
+    repeated: false,
+  }
+}
+
+// Записывает наше исходящее в единую ленту wazzup_messages (если есть messageId). При repeated
+// messageId недоступен — строку допишет эхо-вебхук, поэтому здесь ничего не пишем (без дублей).
+function recordOutboundForDeal(
+  deal: Pick<Deal, "id" | "customerId">,
+  target: Extract<WazzupChatTarget, { status: "ok" }>,
+  currentUser: Pick<CurrentUser, "name">,
+  message: {
+    result: PostWazzupMessageResult
+    crmMessageId: string
+    messageType: string
+    text?: string
+    contentUri?: string
+    quotedMessageId?: string
+    quotedText?: string
+    dateTime: string
+  }
+) {
+  if (message.result.repeated || !message.result.messageId) {
+    return
+  }
+
+  upsertOutboundWazzupMessage({
+    messageId: message.result.messageId,
+    crmMessageId: message.crmMessageId,
+    dealId: deal.id,
+    customerId: deal.customerId ?? null,
+    channelId: target.channelId,
+    chatType: target.chatType,
+    chatId: message.result.chatId || target.chatId,
+    messageType: message.messageType,
+    text: message.text ?? null,
+    contentUri: message.contentUri ?? null,
+    authorName: currentUser.name,
+    quotedMessageId: message.quotedMessageId ?? null,
+    quotedText: message.quotedText ?? null,
+    dateTime: message.dateTime,
+  })
 }
 
 function safeWazzupMessageErrorMessage(status: number, data: unknown) {
@@ -867,7 +1146,7 @@ export async function syncWazzupUsers(): Promise<WazzupUsersSyncResult> {
   for (let index = 0; index < body.length; index += 100) {
     const bodyChunk = body.slice(index, index + 100)
     const userChunk = users.slice(index, index + 100)
-    const response = await fetch(`${wazzupApiBaseUrl}/users`, {
+    const response = await wazzupFetch(`${wazzupApiBaseUrl}/users`, {
       method: "POST",
       cache: "no-store",
       headers: {
@@ -926,7 +1205,7 @@ export async function syncWazzupPipelines(): Promise<WazzupSyncResult> {
     return { ok: false, totalSent: 0, responseStatus: null, message, messages: [message] }
   }
 
-  const response = await fetch(`${wazzupApiBaseUrl}/pipelines`, {
+  const response = await wazzupFetch(`${wazzupApiBaseUrl}/pipelines`, {
     method: "POST",
     cache: "no-store",
     headers: {
@@ -1105,15 +1384,25 @@ export async function ensureWazzupUser(
     return { ok: false, code: "NOT_CONFIGURED", message: "Wazzup API key не настроен на сервере.", httpStatus: 0 }
   }
 
-  const response = await fetch(`${wazzupApiBaseUrl}/users`, {
-    method: "POST",
-    cache: "no-store",
-    headers: {
-      Authorization: `Bearer ${settings.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(buildWazzupUserSyncBody(currentUser)),
-  })
+  let response: Response
+  try {
+    response = await wazzupFetch(`${wazzupApiBaseUrl}/users`, {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(buildWazzupUserSyncBody(currentUser)),
+    })
+  } catch (error) {
+    return {
+      ok: false,
+      code: "NETWORK",
+      httpStatus: 0,
+      message: error instanceof Error ? error.message : "Wazzup недоступен.",
+    }
+  }
 
   if (response.ok) {
     return { ok: true }
@@ -1185,7 +1474,7 @@ function getWazzupSettingsRow() {
   return initDb()
     .prepare(
       `SELECT api_key, crm_key, webhook_url, is_enabled, last_check_status, last_check_message, last_check_at
-        , webhook_auth_required
+        , webhook_auth_required, chat_mode
        FROM integration_settings
        WHERE provider = ?`
     )
@@ -1364,6 +1653,7 @@ function upsertWazzupSettings(input: {
   crmKey: string | null
   isEnabled: boolean
   webhookAuthRequired?: boolean
+  chatMode: WazzupChatMode
   lastCheckStatus?: string | null
   lastCheckMessage?: string | null
   lastCheckAt?: string | null
@@ -1372,11 +1662,11 @@ function upsertWazzupSettings(input: {
   initDb()
     .prepare(
       `INSERT INTO integration_settings (
-        provider, api_key, crm_key, webhook_url, webhook_auth_required, is_enabled, last_check_status,
-        last_check_message, last_check_at, updated_at
+        provider, api_key, crm_key, webhook_url, webhook_auth_required, is_enabled, chat_mode,
+        last_check_status, last_check_message, last_check_at, updated_at
       ) VALUES (
-        @provider, @apiKey, @crmKey, @webhookUrl, @webhookAuthRequired, @isEnabled, @lastCheckStatus,
-        @lastCheckMessage, @lastCheckAt, CURRENT_TIMESTAMP
+        @provider, @apiKey, @crmKey, @webhookUrl, @webhookAuthRequired, @isEnabled, @chatMode,
+        @lastCheckStatus, @lastCheckMessage, @lastCheckAt, CURRENT_TIMESTAMP
       )
       ON CONFLICT(provider) DO UPDATE SET
         api_key = excluded.api_key,
@@ -1384,6 +1674,7 @@ function upsertWazzupSettings(input: {
         webhook_url = excluded.webhook_url,
         webhook_auth_required = excluded.webhook_auth_required,
         is_enabled = excluded.is_enabled,
+        chat_mode = excluded.chat_mode,
         last_check_status = excluded.last_check_status,
         last_check_message = excluded.last_check_message,
         last_check_at = excluded.last_check_at,
@@ -1396,6 +1687,7 @@ function upsertWazzupSettings(input: {
       webhookUrl,
       webhookAuthRequired: input.webhookAuthRequired ? 1 : 0,
       isEnabled: input.isEnabled ? 1 : 0,
+      chatMode: input.chatMode,
       lastCheckStatus: input.lastCheckStatus ?? null,
       lastCheckMessage: input.lastCheckMessage ?? null,
       lastCheckAt: input.lastCheckAt ?? null,
@@ -1410,6 +1702,7 @@ function saveWazzupLastCheck(status: "success" | "error", message: string) {
     crmKey: clean(current?.crm_key) || null,
     isEnabled: current ? current.is_enabled === 1 : settings.isEnabled,
     webhookAuthRequired: current ? current.webhook_auth_required === 1 : settings.webhookAuthRequired,
+    chatMode: settings.chatMode,
     lastCheckStatus: status,
     lastCheckMessage: message,
     lastCheckAt: new Date().toISOString(),
@@ -1494,6 +1787,88 @@ function safeWazzupEntitySyncErrorMessage(prefix: string, status: number, data: 
   return `${prefix}: Wazzup вернул HTTP ${status}${code ? `: ${code}` : ""}`
 }
 
+// --- Устойчивый клиент Wazzup: таймаут на каждый запрос + повторы на временных ошибках ---
+// Без этого медленный/недоступный Wazzup «подвешивал» бы экшен (открытие чата, синхронизацию,
+// и особенно webhook). Повторы безопасны: все наши POST идемпотентны (upsert по id, а отправка
+// сообщений — по детерминированному crmMessageId, который Wazzup дедуплицирует 60с).
+const WAZZUP_REQUEST_TIMEOUT_MS = 12_000
+const WAZZUP_MAX_RETRIES = 2
+const WAZZUP_RETRYABLE_STATUSES = new Set([429, 502, 503, 504])
+
+function wazzupRetryDelayMs(attempt: number, retryAfter: string | null) {
+  const value = (retryAfter ?? "").trim()
+  if (value) {
+    // Retry-After: либо число секунд, либо HTTP-дата (RFC 7231) — поддерживаем обе формы.
+    const seconds = Number(value)
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(seconds * 1000, 10_000)
+    }
+    const dateMs = Date.parse(value)
+    if (Number.isFinite(dateMs)) {
+      return Math.min(Math.max(0, dateMs - Date.now()), 10_000)
+    }
+  }
+  return Math.min(500 * 2 ** attempt, 4_000)
+}
+
+function isAbortLikeError(error: unknown) {
+  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")
+}
+
+function normalizeWazzupNetworkError(error: unknown): Error {
+  if (isAbortLikeError(error)) {
+    return new Error("Wazzup не ответил вовремя (таймаут). Попробуйте ещё раз.")
+  }
+  return new Error("Не удалось связаться с Wazzup. Проверьте подключение и попробуйте ещё раз.")
+}
+
+async function wazzupFetch(
+  url: string,
+  init: RequestInit,
+  options: { timeoutMs?: number; retries?: number } = {}
+): Promise<Response> {
+  const timeoutMs = options.timeoutMs ?? WAZZUP_REQUEST_TIMEOUT_MS
+  const maxRetries = options.retries ?? WAZZUP_MAX_RETRIES
+  let lastError: unknown = null
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal })
+      if (WAZZUP_RETRYABLE_STATUSES.has(response.status) && attempt < maxRetries) {
+        void response.body?.cancel().catch(() => {})
+        clearTimeout(timer)
+        await new Promise((resolve) =>
+          setTimeout(resolve, wazzupRetryDelayMs(attempt, response.headers.get("retry-after")))
+        )
+        continue
+      }
+      // Буферизуем тело под ТЕМ ЖЕ таймаутом: fetch() резолвится по приходу заголовков, а тело
+      // стримится лениво — иначе «зависшее» тело обошло бы 12с. Возвращаем уже прочитанный
+      // Response; у вызывающих .text()/.json() работают по памяти.
+      const bodyText = await response.text()
+      clearTimeout(timer)
+      const nullBody =
+        response.status === 101 || response.status === 204 || response.status === 205 || response.status === 304
+      return new Response(nullBody ? null : bodyText, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      })
+    } catch (error) {
+      clearTimeout(timer)
+      lastError = error
+      if (attempt < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, wazzupRetryDelayMs(attempt, null)))
+        continue
+      }
+    }
+  }
+
+  throw normalizeWazzupNetworkError(lastError)
+}
+
 async function requestWazzupJson(path: string, init: RequestInit) {
   const response = await requestWazzup(path, init)
   const raw = await response.text()
@@ -1511,7 +1886,7 @@ async function requestWazzup(path: string, init: RequestInit) {
     throw new Error("Wazzup API key не настроен")
   }
 
-  return fetch(`${wazzupApiBaseUrl}${path}`, {
+  return wazzupFetch(`${wazzupApiBaseUrl}${path}`, {
     ...init,
     cache: "no-store",
     headers: {
@@ -1664,7 +2039,7 @@ async function postWazzupEntityBatches(input: {
   let lastResponseStatus: number | null = null
   for (let index = 0; index < input.payloads.length; index += 100) {
     const chunk = input.payloads.slice(index, index + 100)
-    const response = await fetch(`${wazzupApiBaseUrl}${input.path}`, {
+    const response = await wazzupFetch(`${wazzupApiBaseUrl}${input.path}`, {
       method: "POST",
       cache: "no-store",
       headers: {
@@ -1845,6 +2220,16 @@ function getWazzupDealPayloads(dealIds?: number[]): WazzupDealPayload[] {
       },
     ]
   })
+}
+
+// Тело ответа на синхронный handshake createContact/createDeal — сущность в сигнатуре CRUD,
+// которую Wazzup ждёт (а не {ok}), чтобы связать свою сторону с только что созданной записью CRM.
+export function buildWazzupContactEntity(customerId: number) {
+  return getWazzupContactPayloads([customerId])[0]?.payload ?? null
+}
+
+export function buildWazzupDealEntity(dealId: number) {
+  return getWazzupDealPayloads([dealId])[0]?.payload ?? null
 }
 
 function resolveCustomerResponsibleUserId(client: ReturnType<typeof initDb>, customerId: number) {

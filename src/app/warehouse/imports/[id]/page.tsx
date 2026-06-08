@@ -1,10 +1,15 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
+import { AlertTriangleIcon } from "lucide-react"
 import { AccessDenied } from "@/components/access-denied"
+import { CrmShell } from "@/components/crm-shell"
+import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getWarehouseImport, type WarehouseImportAction } from "@/lib/db"
 
@@ -27,62 +32,94 @@ export default async function WarehouseImportDetailsPage({ params }: PageProps<"
     notFound()
   }
 
+  const errorItems = report.items.filter((item) => item.action === "error")
+
   return (
-    <main className="min-h-screen bg-zinc-50 p-4 md:p-6">
-      <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Импорт #{report.id}</h1>
-            <p className="text-sm text-muted-foreground">
-              {report.filename || "Файл не указан"} · {formatDateTime(report.createdAt)}
-            </p>
-          </div>
-          <Link href="/warehouse/imports" className={buttonVariants({ variant: "outline" })}>
-            Все импорты
-          </Link>
-        </div>
+    <CrmShell
+      user={user}
+      active="stock"
+      title={`Импорт #${report.id}`}
+      shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-muted-foreground">
+          {report.filename || "Файл не указан"} · {formatDateTime(report.createdAt)}
+        </p>
+        <Link href="/warehouse/imports" className={buttonVariants({ variant: "outline", size: "sm" })}>
+          Все импорты
+        </Link>
+      </div>
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <SummaryCard label="Создано" value={report.createdCount} />
-          <SummaryCard label="Обновлено" value={report.updatedCount} />
-          <SummaryCard label="Без изменений" value={report.unchangedCount} />
-          <SummaryCard label="Ошибок" value={report.errorCount} />
-        </div>
+      {errorItems.length > 0 && (
+        <Alert variant="destructive">
+          <AlertTriangleIcon />
+          <AlertTitle>
+            В импорте {errorItems.length} {pluralizeErrors(errorItems.length)} — импорт нельзя применить
+          </AlertTitle>
+          <AlertDescription>
+            <p>Исправьте перечисленные строки в XLSX и загрузите файл снова.</p>
+            <ul className="mt-2 flex w-full flex-col gap-1">
+              {errorItems.map((item) => (
+                <li key={item.id} className="flex flex-col gap-0.5 rounded-md bg-destructive/5 px-2 py-1 sm:flex-row sm:gap-2">
+                  <span className="shrink-0 font-medium">
+                    Строка {item.rowNumber ?? "—"}
+                    {item.code ? ` · ${item.code}` : ""}
+                  </span>
+                  <span className="min-w-0 break-words">{item.error || "Неизвестная ошибка"}</span>
+                </li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
 
-        <Card className="rounded-2xl border bg-white">
-          <CardHeader>
-            <CardTitle>Отчет изменений</CardTitle>
-            <CardDescription>
-              Статус: {report.status === "applied" ? "применен" : report.status === "failed" ? "ошибка" : "предпросмотр"}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Строка</TableHead>
-                    <TableHead>Код</TableHead>
-                    <TableHead>Название</TableHead>
-                    <TableHead>Категория</TableHead>
-                    <TableHead>Действие</TableHead>
-                    <TableHead>Было</TableHead>
-                    <TableHead>Будет</TableHead>
-                    <TableHead>Изменение</TableHead>
-                    <TableHead>Старая цена</TableHead>
-                    <TableHead>Новая цена</TableHead>
-                    <TableHead>Старая закупка</TableHead>
-                    <TableHead>Новая закупка</TableHead>
-                    <TableHead>Ошибка</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {report.items.map((item) => (
-                    <TableRow key={item.id}>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <SummaryCard label="Создано" value={report.createdCount} />
+        <SummaryCard label="Обновлено" value={report.updatedCount} />
+        <SummaryCard label="Без изменений" value={report.unchangedCount} />
+        <SummaryCard label="Ошибок" value={report.errorCount} highlight={report.errorCount > 0} />
+      </div>
+
+      <Card className="rounded-2xl border bg-white">
+        <CardHeader>
+          <CardTitle>Отчет изменений</CardTitle>
+          <CardDescription>
+            Статус: {report.status === "applied" ? "применен" : report.status === "failed" ? "ошибка" : "предпросмотр"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Строка</TableHead>
+                  <TableHead>Код</TableHead>
+                  <TableHead>Название</TableHead>
+                  <TableHead className="hidden lg:table-cell">Категория</TableHead>
+                  <TableHead>Действие</TableHead>
+                  <TableHead>Было</TableHead>
+                  <TableHead>Будет</TableHead>
+                  <TableHead>Изменение</TableHead>
+                  <TableHead className="hidden xl:table-cell">Старая цена</TableHead>
+                  <TableHead className="hidden xl:table-cell">Новая цена</TableHead>
+                  <TableHead className="hidden xl:table-cell">Старая закупка</TableHead>
+                  <TableHead className="hidden xl:table-cell">Новая закупка</TableHead>
+                  <TableHead>Ошибка</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {report.items.map((item) => {
+                  const isError = item.action === "error"
+                  return (
+                    <TableRow
+                      key={item.id}
+                      className={isError ? "border-l-2 border-l-destructive bg-destructive/5" : undefined}
+                    >
                       <TableCell>{item.rowNumber ?? "-"}</TableCell>
                       <TableCell className="font-medium">{item.code || "-"}</TableCell>
                       <TableCell>{item.name || "-"}</TableCell>
-                      <TableCell className="max-w-64 truncate" title={categoryLabel(item.categoryPath)}>
+                      <TableCell className="hidden max-w-64 truncate lg:table-cell" title={categoryLabel(item.categoryPath)}>
                         {categoryLabel(item.categoryPath)}
                       </TableCell>
                       <TableCell>
@@ -93,20 +130,20 @@ export default async function WarehouseImportDetailsPage({ params }: PageProps<"
                       <TableCell>
                         <Delta value={item.stockDelta} />
                       </TableCell>
-                      <TableCell>{formatNumber(item.oldSalePrice)}</TableCell>
-                      <TableCell>{formatNumber(item.newSalePrice)}</TableCell>
-                      <TableCell>{formatNumber(item.oldCostPrice)}</TableCell>
-                      <TableCell>{formatNumber(item.newCostPrice)}</TableCell>
-                      <TableCell className="min-w-48 text-destructive">{item.error || ""}</TableCell>
+                      <TableCell className="hidden xl:table-cell">{formatNumber(item.oldSalePrice)}</TableCell>
+                      <TableCell className="hidden xl:table-cell">{formatNumber(item.newSalePrice)}</TableCell>
+                      <TableCell className="hidden xl:table-cell">{formatNumber(item.oldCostPrice)}</TableCell>
+                      <TableCell className="hidden xl:table-cell">{formatNumber(item.newCostPrice)}</TableCell>
+                      <TableCell className="min-w-48 break-words font-medium text-destructive">{item.error || ""}</TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    </main>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </CrmShell>
   )
 }
 
@@ -118,12 +155,12 @@ function getImportOrNull(importId: number) {
   }
 }
 
-function SummaryCard({ label, value }: { label: string; value: number }) {
+function SummaryCard({ label, value, highlight = false }: { label: string; value: number; highlight?: boolean }) {
   return (
-    <Card className="rounded-2xl border bg-white">
+    <Card className={highlight ? "rounded-2xl border-red-300 bg-destructive/5" : "rounded-2xl border bg-white"}>
       <CardHeader>
         <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-2xl">{value}</CardTitle>
+        <CardTitle className={highlight ? "text-2xl text-destructive" : "text-2xl"}>{value}</CardTitle>
       </CardHeader>
     </Card>
   )
@@ -165,7 +202,20 @@ function categoryLabel(value: string) {
   return value.trim() || "Без категории"
 }
 
+function pluralizeErrors(count: number) {
+  const mod10 = count % 10
+  const mod100 = count % 100
+  if (mod10 === 1 && mod100 !== 11) {
+    return "ошибка"
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
+    return "ошибки"
+  }
+
+  return "ошибок"
+}
+
 function formatDateTime(value: string) {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("ru-RU")
+  const date = parseDbInstant(value)
+  return date ? date.toLocaleString("ru-RU", { timeZone: SHOP_TIME_ZONE }) : value
 }

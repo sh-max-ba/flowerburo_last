@@ -3,14 +3,14 @@
 import type React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { parseWallClock } from "@/lib/datetime"
 import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   ExternalLinkIcon,
-  PlusIcon,
   ReceiptTextIcon,
-  SendIcon,
   ShoppingBagIcon,
   Trash2Icon,
 } from "lucide-react"
@@ -20,19 +20,19 @@ import {
   addDealBouquetAction,
   acceptDealPaymentAction,
   createOrderFromDealAction,
+  updateOrderFromDealAction,
   removeDealItemAction,
   removeDealItemGroupAction,
-  sendBouquetToDealChatAction,
   updateDealFieldsAction,
   updateDealItemAction,
 } from "@/app/actions"
 import type { Customer, Deal, DealItem, DealSource, DealStage } from "@/lib/crm"
 import { getBouquetAvailability } from "@/lib/bouquet-availability"
 import { calculateCommercialTotals, calculateLineTotal, type DiscountType } from "@/lib/pricing"
-import type { BouquetTemplate, CurrentUser, DealBouquetMessage, Order, PaymentMethod, Product } from "@/lib/db"
-import { getPaymentMethodLabel, paymentMethodOptions, sourceLabel as getSourceLabel } from "@/lib/labels"
+import type { BouquetTemplate, CurrentUser, Order, PaymentMethod, Product } from "@/lib/db"
+import { deliveryTypeLabel, getPaymentMethodLabel, paymentMethodOptions, sourceLabel as getSourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
-import { BouquetThumbnail } from "@/components/bouquets/bouquet-thumbnail"
+import { WazzupCustomChat } from "@/components/deals/wazzup-custom-chat"
 import { WazzupDealFrame } from "@/components/deals/wazzup-deal-frame"
 import { ProductCombobox } from "@/components/products/product-combobox"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
@@ -58,12 +58,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 type SaveStatus = "saved" | "saving" | "error"
-type DealTab = "overview" | "composition" | "payment" | "bouquets"
+type DealTab = "overview" | "composition" | "payment"
+// Статус оплаты выводится из реальных сумм (итого/оплачено), не хардкодится. "none" — суммы ещё
+// нет (пустая сделка/нет заказа): бейдж «Оплачено» НЕ показываем (это была ложная отметка).
+type PaymentStatus = "none" | "unpaid" | "partial" | "paid"
+
+// Whether the Wazzup chat column should occupy its half of the deal layout.
+// "checking" — we don't yet know (keep the split so the frame can show its own skeleton);
+// "available" — integration is on (chat is open OR offers a link action) → show the chat column;
+// "unavailable" — integration is off / not configured → collapse the column and give the form full width.
+type ChatLayout = "checking" | "available" | "unavailable"
+
+// Per-deal iframe statuses. We only need the discriminant to decide the layout; the
+// WazzupDealFrame itself owns the full rendering of each state.
+type WazzupIframeStatus = "ok" | "not_configured" | "disabled" | "no_chat" | "error"
 
 type DealDraft = {
   customerId: string
@@ -89,6 +102,21 @@ type CreateOrderDraft = {
   comment: string
   deliveryPrice: string
   courierPayout: string
+}
+
+// Локальная строка корзины в модалке «Изменить заказ» (правится без автосохранения).
+type OrderLineDraft = {
+  key: string
+  productCode: string
+  name: string
+  imagePath: string
+  qty: string
+  price: string
+  discountType: DiscountType
+  discountValue: string
+  bouquetId: number | null
+  bouquetName: string
+  bouquetGroupId: string
 }
 
 type DealItemDraft = Omit<DealItem, "qty" | "price" | "discountValue"> & {
@@ -131,9 +159,9 @@ export function DealDetailPage({
   users,
   products,
   bouquets,
-  bouquetMessages,
   dealOrders,
   openShift,
+  chatMode,
 }: {
   deal: Deal
   stages: DealStage[]
@@ -141,9 +169,9 @@ export function DealDetailPage({
   users: CurrentUser[]
   products: Product[]
   bouquets: BouquetTemplate[]
-  bouquetMessages: DealBouquetMessage[]
   dealOrders: Order[]
   openShift: { id: number; status: "open" | "closed" } | null
+  chatMode: "iframe" | "custom"
 }) {
   const router = useRouter()
   const [draft, setDraft] = useState(() => createDealDraft(deal))
@@ -158,10 +186,15 @@ export function DealDetailPage({
   const [paymentComment, setPaymentComment] = useState("")
   const [createOrderDialogOpen, setCreateOrderDialogOpen] = useState(false)
   const [orderDraft, setOrderDraft] = useState<CreateOrderDraft>(() => createOrderDraftFromDealDraft(createDealDraft(deal)))
+  const [orderDialogMode, setOrderDialogMode] = useState<"create" | "edit">("create")
+  const [orderItems, setOrderItems] = useState<OrderLineDraft[]>([])
   const [showShiftWarning, setShowShiftWarning] = useState(false)
-  const [bouquetSearch, setBouquetSearch] = useState("")
-  const [sendingBouquetId, setSendingBouquetId] = useState<number | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(true)
   const [actionPending, startActionTransition] = useTransition()
+  // Drives the responsive layout: when the Wazzup integration is off/unconfigured we drop the
+  // empty chat column and let the deal form use the full width. The WazzupDealFrame still owns
+  // rendering its own states; this only governs whether its column is present.
+  const [chatLayout, setChatLayout] = useState<ChatLayout>("checking")
   const currentDealIdRef = useRef(deal.id)
   const fieldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fieldSaveChainRef = useRef<Promise<void>>(Promise.resolve())
@@ -213,23 +246,36 @@ export function DealDetailPage({
     }
   }, [])
 
+  // Resolve whether to keep the Wazzup chat column. We ask the same lightweight iframe endpoint the
+  // frame uses; only a globally disabled / not-configured integration collapses the column. A
+  // per-deal "no_chat" still shows the column (it offers a "link by customer" action), and transient
+  // errors keep the split so a retry stays visible.
+  // Сброс на "checking" при смене сделки — во время рендера (не в эффекте), чтобы не
+  // провоцировать каскадный ререндер; сам опрос статуса остаётся в эффекте.
+  const [chatLayoutDealId, setChatLayoutDealId] = useState(deal.id)
+  if (chatLayoutDealId !== deal.id) {
+    setChatLayoutDealId(deal.id)
+    setChatLayout("checking")
+  }
+  useEffect(() => {
+    let isActive = true
+
+    void resolveChatStatus(deal.id, chatMode).then((status) => {
+      if (!isActive) {
+        return
+      }
+      setChatLayout(status === "disabled" || status === "not_configured" ? "unavailable" : "available")
+    })
+
+    return () => {
+      isActive = false
+    }
+  }, [deal.id, chatMode])
+
   const customersById = useMemo(() => new Map(customers.map((customer) => [String(customer.id), customer])), [customers])
   const stagesById = useMemo(() => new Map(stages.map((stage) => [String(stage.id), stage])), [stages])
   const usersById = useMemo(() => new Map(users.map((user) => [String(user.id), user])), [users])
   const selectedCustomer = draft.customerId === noValue ? null : customersById.get(draft.customerId) ?? null
-  const suggestedBouquets = useMemo(() => {
-    const query = bouquetSearch.trim().toLowerCase()
-    if (!query) {
-      return bouquets
-    }
-
-    return bouquets.filter((bouquet) =>
-      [bouquet.name, bouquet.description, String(bouquet.price)]
-        .join(" ")
-        .toLowerCase()
-        .includes(query)
-    )
-  }, [bouquetSearch, bouquets])
 
   const pricedItems = useMemo(
     () =>
@@ -301,7 +347,6 @@ export function DealDetailPage({
     [draft.dealDiscountType, draft.dealDiscountValue, pricedItems]
   )
 
-  const balance = Math.max(0, totals.total - deal.paid)
   const hasPendingSaves = fieldSaveStatus === "saving" || itemSaveStatus === "saving"
   const hasItems = pricedItems.length > 0
   const activeDealOrder = useMemo(
@@ -309,19 +354,89 @@ export function DealDetailPage({
     [dealOrders]
   )
   const latestDealOrder = dealOrders[0] ?? null
+  // После создания заказа источник истины по составу и суммам — сам заказ. Карточка показывает
+  // суммы заказа, корзина сделки блокируется (заблокированное отражение до «Изменить заказ»).
+  const orderLocked = Boolean(activeDealOrder)
+  const orderEditable =
+    activeDealOrder !== null &&
+    activeDealOrder.isReserved &&
+    (activeDealOrder.status === "Новый" || activeDealOrder.status === "В работе")
+  const displayTotal = activeDealOrder ? activeDealOrder.total : totals.total
+  const displayPaid = activeDealOrder ? activeDealOrder.paid : deal.paid
+  const balance = Math.max(0, displayTotal - displayPaid)
+  const paymentStatus: PaymentStatus =
+    displayTotal <= 0 ? "none" : displayPaid <= 0 ? "unpaid" : balance <= 0 ? "paid" : "partial"
   const orderHref = activeDealOrder ? `/orders?orderId=${activeDealOrder.id}` : "/orders"
-  const orderDueAt = buildOrderDueAt(orderDraft)
+
+  // Локальный расчёт корзины модалки «Изменить заказ» (живой пересчёт, без автосохранения).
+  const isEditOrderMode = orderDialogMode === "edit"
+  const editPricedLines = useMemo(
+    () =>
+      orderItems.map((line) => {
+        const qtyNumber = normalizedQty(line.qty)
+        const priceNumber = normalizedPrice(line.price)
+        const discountValueNumber = normalizedPrice(line.discountValue)
+        const pricingQty = line.bouquetGroupId && priceNumber > 0 ? 1 : qtyNumber
+        const lineTotal = calculateLineTotal({
+          qty: pricingQty,
+          price: priceNumber,
+          discountType: line.discountType,
+          discountValue: discountValueNumber,
+        })
+        return { ...line, qtyNumber, priceNumber, discountValueNumber, pricingQty, line: lineTotal }
+      }),
+    [orderItems]
+  )
+  const editTotals = useMemo(
+    () =>
+      calculateCommercialTotals(
+        editPricedLines.map((line) => ({
+          qty: line.pricingQty,
+          price: line.priceNumber,
+          discountType: line.discountType,
+          discountValue: line.discountValueNumber,
+        })),
+        draft.dealDiscountType,
+        normalizedPrice(draft.dealDiscountValue)
+      ),
+    [draft.dealDiscountType, draft.dealDiscountValue, editPricedLines]
+  )
+
+  const dialogItemsBreakdown = isEditOrderMode ? editTotals : totals
+  const dialogItemsTotal = dialogItemsBreakdown.total
+  const dialogHasItems = isEditOrderMode ? editPricedLines.length > 0 : hasItems
   const orderDeliveryPrice = normalizedPrice(orderDraft.deliveryPrice)
   const orderCourierPayout = normalizedPrice(orderDraft.courierPayout)
-  const orderTotal = totals.total + orderDeliveryPrice
-  const orderBalance = Math.max(0, orderTotal - deal.paid)
-  const paidExceedsOrderTotal = deal.paid - orderTotal > 0.009
+  const orderTotal = dialogItemsTotal + orderDeliveryPrice
+  const orderBalance = Math.max(0, orderTotal - displayPaid)
+  const paidExceedsOrderTotal = displayPaid - orderTotal > 0.009
+  const orderDueAt = buildOrderDueAt(orderDraft)
   const missingOrderDueAt = !orderDueAt
   const missingDeliveryAddress = orderDraft.deliveryType === "delivery" && !orderDraft.address.trim()
   const hasAppliedCustomerDiscount =
     Boolean(selectedCustomer?.defaultDiscountPercent) &&
     draft.dealDiscountType === "percent" &&
     normalizedPrice(draft.dealDiscountValue) === selectedCustomer?.defaultDiscountPercent
+
+  // Reasons the primary actions are unavailable — surfaced as tooltips in the sticky header.
+  const paymentDisabledReason = !openShift
+    ? "Откройте смену в кассе, чтобы принять оплату"
+    : balance <= 0
+      ? "Сделка уже полностью оплачена"
+      : hasPendingSaves
+        ? "Дождитесь сохранения изменений"
+        : null
+  const createOrderDisabledReason = !hasItems
+    ? "Добавьте товары, чтобы создать заказ"
+    : hasPendingSaves
+      ? "Дождитесь сохранения изменений"
+      : null
+  const editOrderDisabledReason = !orderEditable
+    ? "Заказ уже собран — изменить состав нельзя"
+    : actionPending
+      ? "Дождитесь завершения операции"
+      : null
+  const orderButtonLabel = latestDealOrder && !activeDealOrder ? "Создать новый заказ" : "Создать заказ"
 
   function updateDraftField<K extends keyof DealDraft>(
     key: K,
@@ -548,27 +663,6 @@ export function DealDetailPage({
     }
   }
 
-  async function sendBouquet(bouquet: BouquetTemplate) {
-    if (!getBouquetAvailability(bouquet).available) {
-      toast.warning("На складе сейчас не хватает компонентов для этого букета.")
-    }
-
-    setSendingBouquetId(bouquet.id)
-    try {
-      const result = await sendBouquetToDealChatAction(deal.id, bouquet.id)
-      if (result.ok) {
-        toast.success("Букет отправлен в чат")
-        router.refresh()
-      } else {
-        toast.error(result.message)
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Букет не отправлен в чат.")
-    } finally {
-      setSendingBouquetId(null)
-    }
-  }
-
   async function removeItem(item: DealItemDraft) {
     setItems((current) => current.filter((currentItem) => currentItem.id !== item.id))
     if (item.isTemporary) {
@@ -665,7 +759,67 @@ export function DealDetailPage({
     }
 
     setOrderDraft(createOrderDraftFromDealDraft(draft))
+    setOrderItems([])
+    setOrderDialogMode("create")
     setCreateOrderDialogOpen(true)
+  }
+
+  function openEditOrderDialog() {
+    if (!activeDealOrder || !orderEditable) {
+      toast.error("Заказ уже собран — изменить состав нельзя")
+      return
+    }
+
+    const [dueDate, dueTime] = splitDatetimeLocal(activeDealOrder.dueAt)
+    setOrderDraft({
+      dueDate,
+      dueTime,
+      deliveryType: activeDealOrder.deliveryType === "delivery" ? "delivery" : "pickup",
+      address: activeDealOrder.address ?? "",
+      recipientPhone: activeDealOrder.recipientPhone ?? "",
+      comment: activeDealOrder.note ?? "",
+      deliveryPrice: String(activeDealOrder.deliveryPrice ?? 0),
+      courierPayout: String(activeDealOrder.courierPayout ?? 0),
+    })
+    setOrderItems(orderLinesFromItems(items))
+    setOrderDialogMode("edit")
+    setCreateOrderDialogOpen(true)
+  }
+
+  function updateOrderLine(key: string, patch: Partial<OrderLineDraft>) {
+    setOrderItems((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)))
+  }
+
+  function removeOrderLine(key: string) {
+    setOrderItems((current) => current.filter((line) => line.key !== key))
+  }
+
+  function addOrderProduct(product: Product) {
+    setOrderItems((current) => {
+      const existing = current.find((line) => line.productCode === product.code && !line.bouquetGroupId)
+      if (existing) {
+        return current.map((line) =>
+          line.key === existing.key ? { ...line, qty: String(normalizedQty(line.qty) + 1) } : line
+        )
+      }
+
+      return [
+        ...current,
+        {
+          key: `new-${product.code}-${temporaryItemIdRef.current--}`,
+          productCode: product.code,
+          name: product.name,
+          imagePath: product.imagePath,
+          qty: "1",
+          price: String(product.salePrice ?? 0),
+          discountType: "none",
+          discountValue: "0",
+          bouquetId: null,
+          bouquetName: "",
+          bouquetGroupId: "",
+        },
+      ]
+    })
   }
 
   function submitCreateOrder(event: React.FormEvent<HTMLFormElement>) {
@@ -688,6 +842,60 @@ export function DealDetailPage({
     startActionTransition(async () => {
       await flushPendingSaves()
       const result = await createOrderFromDealAction(createOrderFromDealFormData(deal.id, orderDraft))
+      if (result.ok) {
+        toast.success(result.message)
+        setCreateOrderDialogOpen(false)
+        router.refresh()
+      } else {
+        toast.error(result.message)
+      }
+    })
+  }
+
+  function submitEditOrder(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!activeDealOrder || !orderEditable) {
+      toast.error("Заказ уже собран — изменить состав нельзя")
+      return
+    }
+
+    if (editPricedLines.length === 0) {
+      toast.error("В заказе должна остаться хотя бы одна позиция")
+      return
+    }
+
+    if (paidExceedsOrderTotal) {
+      toast.error("Сумма заказа не может быть меньше уже принятой оплаты.")
+      return
+    }
+
+    const formData = new FormData()
+    formData.set("dealId", String(deal.id))
+    formData.set("orderId", String(activeDealOrder.id))
+    formData.set("dueAt", buildOrderDueAt(orderDraft))
+    formData.set("deliveryType", orderDraft.deliveryType)
+    formData.set("address", orderDraft.address.trim())
+    formData.set("recipientPhone", orderDraft.recipientPhone.trim())
+    formData.set("comment", orderDraft.comment.trim())
+    formData.set("deliveryPrice", String(normalizedPrice(orderDraft.deliveryPrice)))
+    formData.set("courierPayout", String(normalizedPrice(orderDraft.courierPayout)))
+    for (const line of orderItems) {
+      formData.append("itemProductCode", line.productCode)
+      formData.append("itemQty", String(normalizedQty(line.qty)))
+      formData.append("itemPrice", String(normalizedPrice(line.price)))
+      formData.append("itemDiscountType", line.discountType)
+      formData.append(
+        "itemDiscountValue",
+        String(line.discountType === "none" ? 0 : normalizedPrice(line.discountValue))
+      )
+      formData.append("itemBouquetId", line.bouquetId ? String(line.bouquetId) : "")
+      formData.append("itemBouquetName", line.bouquetName)
+      formData.append("itemBouquetGroupId", line.bouquetGroupId)
+    }
+
+    startActionTransition(async () => {
+      await flushPendingSaves()
+      const result = await updateOrderFromDealAction(formData)
       if (result.ok) {
         toast.success(result.message)
         setCreateOrderDialogOpen(false)
@@ -730,27 +938,77 @@ export function DealDetailPage({
     })
   }
 
-  return (
-    <div className="h-auto overflow-visible xl:h-[calc(100vh-10rem)] xl:overflow-hidden">
-      <div className="grid h-full grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)] 2xl:grid-cols-[minmax(640px,1fr)_minmax(560px,680px)]">
-        <section className="min-w-0 xl:min-h-0">
-          <div className="h-full min-h-[520px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
-            <WazzupDealFrame
-              key={`${deal.id}:${deal.wazzupChatType}:${deal.wazzupChatId}:${deal.wazzupChannelId}`}
-              dealId={deal.id}
-            />
-          </div>
-        </section>
+  const showChatColumn = chatLayout !== "unavailable"
 
-        <aside className="flex min-w-0 flex-col gap-4 overflow-visible xl:min-h-0 xl:overflow-hidden xl:pr-2">
-          <div className="overflow-visible rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
+  return (
+    <div className="h-auto overflow-visible xl:h-[calc(100vh-6rem)] xl:overflow-hidden">
+      <div
+        className={cn(
+          "grid h-full grid-cols-1 gap-5",
+          showChatColumn
+            ? "xl:grid-cols-[minmax(0,1fr)_minmax(420px,520px)] 2xl:grid-cols-[minmax(640px,1fr)_minmax(560px,680px)]"
+            : "xl:grid-cols-1"
+        )}
+      >
+        {showChatColumn && (
+          <section className="flex min-w-0 flex-col gap-3 xl:min-h-0">
+            <ClientHeader
+              name={selectedCustomer?.name || deal.customerName}
+              phone={selectedCustomer?.phone || deal.customerPhone}
+              customerId={draft.customerId === noValue ? null : draft.customerId}
+              discountPercent={selectedCustomer?.defaultDiscountPercent ?? 0}
+            />
+            <div className="min-h-[520px] flex-1 overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+              {chatMode === "custom" ? (
+                <WazzupCustomChat key={`custom:${deal.id}`} dealId={deal.id} bouquets={bouquets} />
+              ) : (
+                <WazzupDealFrame
+                  key={`${deal.id}:${deal.wazzupChatType}:${deal.wazzupChatId}:${deal.wazzupChannelId}`}
+                  dealId={deal.id}
+                />
+              )}
+            </div>
+          </section>
+        )}
+
+        <aside
+          className={cn(
+            "flex min-w-0 flex-col gap-4 overflow-visible xl:min-h-0 xl:overflow-hidden xl:pr-2",
+            // Full width without the chat column: keep the form readable with a centered max width.
+            !showChatColumn && "xl:mx-auto xl:w-full xl:max-w-4xl"
+          )}
+        >
+          {!showChatColumn && (
+            <ClientHeader
+              name={selectedCustomer?.name || deal.customerName}
+              phone={selectedCustomer?.phone || deal.customerPhone}
+              customerId={draft.customerId === noValue ? null : draft.customerId}
+              discountPercent={selectedCustomer?.defaultDiscountPercent ?? 0}
+            />
+          )}
+          <div className="sticky top-0 z-20 grid gap-3 overflow-visible rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
                 <div className="text-xs text-muted-foreground">{deal.number || `Сделка #${deal.id}`}</div>
                 <div className="truncate text-lg font-semibold text-zinc-950">
                   {draft.title || customerLabel(draft.customerId, customersById, deal) || "Без названия"}
                 </div>
               </div>
+              <Select
+                value={draft.stageId}
+                onValueChange={(value) => updateDraftField("stageId", value || draft.stageId, { immediate: true })}
+              >
+                <SelectTrigger className="h-9 w-auto min-w-[150px] bg-white">
+                  <SelectValue>{(value) => stageLabel(String(value ?? ""), stagesById, deal)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent align="end" className="z-[9999]">
+                  {stages.map((stage) => (
+                    <SelectItem key={stage.id} value={String(stage.id)}>
+                      {stage.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <SaveIndicator status={mergeStatus(fieldSaveStatus, itemSaveStatus)} error={saveError} />
             </div>
           </div>
@@ -761,7 +1019,7 @@ export function DealDetailPage({
             className="min-h-0 flex-1 gap-4 overflow-visible"
           >
             <div className="overflow-visible rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
-              <TabsList className="grid w-full grid-cols-4">
+              <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="overview" className="min-w-0 px-1">
                   Обзор
                 </TabsTrigger>
@@ -770,22 +1028,6 @@ export function DealDetailPage({
                   {pricedItems.length > 0 && (
                     <Badge variant="secondary" className="h-5 px-1.5 text-xs">
                       {pricedItems.length}
-                    </Badge>
-                  )}
-                </TabsTrigger>
-                <TabsTrigger value="payment" className="min-w-0 px-1">
-                  <span className="truncate">Оплата</span>
-                  {balance > 0 && (
-                    <Badge variant="secondary" className="hidden h-5 px-1.5 text-xs sm:inline-flex">
-                      Остаток
-                    </Badge>
-                  )}
-                </TabsTrigger>
-                <TabsTrigger value="bouquets" className="min-w-0 px-1">
-                  <span className="truncate">Букеты</span>
-                  {bouquetMessages.length > 0 && (
-                    <Badge variant="secondary" className="h-5 px-1.5 text-xs">
-                      {bouquetMessages.length}
                     </Badge>
                   )}
                 </TabsTrigger>
@@ -799,149 +1041,44 @@ export function DealDetailPage({
               activeTab !== "overview" && "hidden"
             )}
           >
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-semibold text-zinc-950">Клиент</CardTitle>
-              <CardDescription>Контакт и персональная скидка</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4 overflow-visible">
-              <Field>
-                <FieldLabel className="text-xs text-muted-foreground">Клиент</FieldLabel>
-                <FieldContent>
-                  <Select value={draft.customerId} onValueChange={handleCustomerChange}>
-                    <SelectTrigger className="h-10 w-full bg-white">
-                      <SelectValue>
-                        {(value) => customerLabel(String(value ?? noValue), customersById, deal)}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent align="start" className="z-[9999] min-w-[420px]">
-                      <SelectItem value={noValue}>Без клиента</SelectItem>
-                      {customers.map((customer) => (
-                        <SelectItem key={customer.id} value={String(customer.id)}>
-                          <span className="flex min-w-0 flex-col">
-                            <span className="truncate font-medium text-zinc-950">{customer.name || "Без имени"}</span>
-                            <span className="truncate text-xs text-muted-foreground">
-                              {customer.phone || "Телефон не указан"}
-                              {customer.defaultDiscountPercent > 0
-                                ? ` · скидка ${customer.defaultDiscountPercent}%`
-                                : ""}
-                            </span>
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </FieldContent>
-              </Field>
-              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-                <div>
-                  <div className="text-xs text-muted-foreground">Телефон</div>
-                  <div className="mt-1 min-h-8 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-950">
-                    {selectedCustomer?.phone || deal.customerPhone || "Не указан"}
-                  </div>
-                </div>
-                {draft.customerId !== noValue && (
-                  <Link
-                    href={`/clients/${draft.customerId}`}
-                    className={buttonVariants({ variant: "outline", size: "default", className: "justify-center" })}
-                  >
-                    <ExternalLinkIcon data-icon="inline-start" />
-                    Открыть клиента
-                  </Link>
-                )}
+            <button
+              type="button"
+              onClick={() => setDetailsOpen((open) => !open)}
+              aria-expanded={detailsOpen}
+              className="flex w-full items-center justify-between gap-2 px-6 py-4 text-left"
+            >
+              <div>
+                <div className="text-base font-semibold text-zinc-950">Детали сделки</div>
+                <div className="text-sm text-muted-foreground">Клиент, ответственный, комментарий</div>
               </div>
-              {selectedCustomer?.defaultDiscountPercent ? (
-                <Badge className="w-fit bg-emerald-50 text-emerald-900">
-                  Скидка клиента {selectedCustomer.defaultDiscountPercent}%
-                </Badge>
-              ) : null}
-            </CardContent>
-          </Card>
-
-          <Card
-            className={cn(
-              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
-              activeTab !== "overview" && "hidden"
-            )}
-          >
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-semibold text-zinc-950">Детали сделки</CardTitle>
-              <CardDescription>Основные поля сохраняются автоматически</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4 overflow-visible">
-              <Field>
-                <FieldLabel className="text-xs text-muted-foreground">Название</FieldLabel>
-                <FieldContent>
-                  <Input
-                    value={draft.title}
-                    onChange={(event) => updateDraftField("title", event.target.value)}
-                    onBlur={() => flushFieldSave()}
-                  />
-                </FieldContent>
-              </Field>
-              <div className="grid gap-4 md:grid-cols-2">
+              <ChevronDownIcon
+                className={cn("size-4 shrink-0 text-zinc-500 transition-transform", detailsOpen && "rotate-180")}
+              />
+            </button>
+            {detailsOpen && (
+              <CardContent className="grid gap-4 overflow-visible pt-0">
                 <Field>
-                  <FieldLabel className="text-xs text-muted-foreground">Этап</FieldLabel>
+                  <FieldLabel className="text-xs text-muted-foreground">Клиент</FieldLabel>
                   <FieldContent>
-                    <Select
-                      value={draft.stageId}
-                      onValueChange={(value) => updateDraftField("stageId", value || draft.stageId, { immediate: true })}
-                    >
-                      <SelectTrigger className="h-10 w-full bg-white">
-                        <SelectValue>{(value) => stageLabel(String(value ?? ""), stagesById, deal)}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent align="start" className="z-[9999]">
-                        {stages.map((stage) => (
-                          <SelectItem key={stage.id} value={String(stage.id)}>
-                            {stage.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </FieldContent>
-                </Field>
-                <Field>
-                  <FieldLabel className="text-xs text-muted-foreground">Источник</FieldLabel>
-                  <FieldContent>
-                    <Select
-                      value={draft.source}
-                      onValueChange={(value) =>
-                        updateDraftField("source", normalizeSourceValue(value), { immediate: true })
-                      }
-                    >
-                      <SelectTrigger className="h-10 w-full bg-white">
-                        <SelectValue>{(value) => getSourceLabel(String(value ?? "manual"))}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent align="start" className="z-[9999]">
-                        {sourceOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </FieldContent>
-                </Field>
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field>
-                  <FieldLabel className="text-xs text-muted-foreground">Ответственный</FieldLabel>
-                  <FieldContent>
-                    <Select
-                      value={draft.responsibleUserId}
-                      onValueChange={(value) =>
-                        updateDraftField("responsibleUserId", value || noValue, { immediate: true })
-                      }
-                    >
+                    <Select value={draft.customerId} onValueChange={handleCustomerChange}>
                       <SelectTrigger className="h-10 w-full bg-white">
                         <SelectValue>
-                          {(value) => responsibleLabel(String(value ?? noValue), usersById, deal)}
+                          {(value) => customerLabel(String(value ?? noValue), customersById, deal)}
                         </SelectValue>
                       </SelectTrigger>
-                      <SelectContent align="start" className="z-[9999]">
-                        <SelectItem value={noValue}>Не назначен</SelectItem>
-                        {users.map((user) => (
-                          <SelectItem key={user.id} value={String(user.id)}>
-                            {user.name}
+                      <SelectContent align="start" className="z-[9999] min-w-[280px]">
+                        <SelectItem value={noValue}>Без клиента</SelectItem>
+                        {customers.map((customer) => (
+                          <SelectItem key={customer.id} value={String(customer.id)}>
+                            <span className="flex min-w-0 flex-col">
+                              <span className="truncate font-medium text-zinc-950">{customer.name || "Без имени"}</span>
+                              <span className="truncate text-xs text-muted-foreground">
+                                {customer.phone || "Телефон не указан"}
+                                {customer.defaultDiscountPercent > 0
+                                  ? ` · скидка ${customer.defaultDiscountPercent}%`
+                                  : ""}
+                              </span>
+                            </span>
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -949,62 +1086,77 @@ export function DealDetailPage({
                   </FieldContent>
                 </Field>
                 <Field>
-                  <FieldLabel className="text-xs text-muted-foreground">Дата/время</FieldLabel>
+                  <FieldLabel className="text-xs text-muted-foreground">Название</FieldLabel>
                   <FieldContent>
                     <Input
-                      type="datetime-local"
-                      value={draft.dueAt}
-                      onChange={(event) => updateDraftField("dueAt", event.target.value)}
+                      value={draft.title}
+                      onChange={(event) => updateDraftField("title", event.target.value)}
                       onBlur={() => flushFieldSave()}
                     />
                   </FieldContent>
                 </Field>
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field>
+                    <FieldLabel className="text-xs text-muted-foreground">Источник</FieldLabel>
+                    <FieldContent>
+                      <Select
+                        value={draft.source}
+                        onValueChange={(value) =>
+                          updateDraftField("source", normalizeSourceValue(value), { immediate: true })
+                        }
+                      >
+                        <SelectTrigger className="h-10 w-full bg-white">
+                          <SelectValue>{(value) => getSourceLabel(String(value ?? "manual"))}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent align="start" className="z-[9999]">
+                          {sourceOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FieldContent>
+                  </Field>
+                  <Field>
+                    <FieldLabel className="text-xs text-muted-foreground">Ответственный</FieldLabel>
+                    <FieldContent>
+                      <Select
+                        value={draft.responsibleUserId}
+                        onValueChange={(value) =>
+                          updateDraftField("responsibleUserId", value || noValue, { immediate: true })
+                        }
+                      >
+                        <SelectTrigger className="h-10 w-full bg-white">
+                          <SelectValue>
+                            {(value) => responsibleLabel(String(value ?? noValue), usersById, deal)}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent align="start" className="z-[9999]">
+                          <SelectItem value={noValue}>Не назначен</SelectItem>
+                          {users.map((user) => (
+                            <SelectItem key={user.id} value={String(user.id)}>
+                              {user.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FieldContent>
+                  </Field>
+                </div>
                 <Field>
-                  <FieldLabel className="text-xs text-muted-foreground">Получение</FieldLabel>
+                  <FieldLabel className="text-xs text-muted-foreground">Комментарий</FieldLabel>
                   <FieldContent>
-                    <Input
-                      value={draft.deliveryType}
-                      onChange={(event) => updateDraftField("deliveryType", event.target.value)}
+                    <Textarea
+                      value={draft.comment}
+                      rows={3}
+                      onChange={(event) => updateDraftField("comment", event.target.value)}
                       onBlur={() => flushFieldSave()}
                     />
                   </FieldContent>
                 </Field>
-                <Field>
-                  <FieldLabel className="text-xs text-muted-foreground">Адрес</FieldLabel>
-                  <FieldContent>
-                    <Input
-                      value={draft.address}
-                      onChange={(event) => updateDraftField("address", event.target.value)}
-                      onBlur={() => flushFieldSave()}
-                    />
-                  </FieldContent>
-                </Field>
-              </div>
-              <Field>
-                <FieldLabel className="text-xs text-muted-foreground">Номер получателя</FieldLabel>
-                <FieldContent>
-                  <Input
-                    placeholder="Например, +996 ..."
-                    value={draft.recipientPhone}
-                    onChange={(event) => updateDraftField("recipientPhone", event.target.value)}
-                    onBlur={() => flushFieldSave()}
-                  />
-                </FieldContent>
-              </Field>
-              <Field>
-                <FieldLabel className="text-xs text-muted-foreground">Комментарий</FieldLabel>
-                <FieldContent>
-                  <Textarea
-                    value={draft.comment}
-                    rows={3}
-                    onChange={(event) => updateDraftField("comment", event.target.value)}
-                    onBlur={() => flushFieldSave()}
-                  />
-                </FieldContent>
-              </Field>
-            </CardContent>
+              </CardContent>
+            )}
           </Card>
 
           <Card
@@ -1018,79 +1170,50 @@ export function DealDetailPage({
               <CardDescription>Позиции и скидки сохраняются после изменения</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 overflow-visible">
-              <ProductCombobox
-                products={products}
-                bouquets={bouquets}
-                includeBouquets
-                portalDropdown
-                onSelect={addProduct}
-                onSelectBouquet={(bouquet) => void addBouquet(bouquet, { showWarning: false })}
-              />
-              <div className="overflow-x-auto rounded-lg border border-zinc-200">
-                <Table className="min-w-[620px]">
-                  <TableHeader>
-                    <TableRow className="bg-zinc-50">
-                      <TableHead className="min-w-[180px] max-w-[240px] text-xs font-semibold text-zinc-950">
-                        Товар
-                      </TableHead>
-                      <TableHead className="w-16 text-xs font-semibold text-zinc-950">Кол-во</TableHead>
-                      <TableHead className="w-24 text-xs font-semibold text-zinc-950">Цена</TableHead>
-                      <TableHead className="w-52 text-xs font-semibold text-zinc-950">Скидка</TableHead>
-                      <TableHead className="w-28 text-right text-xs font-semibold text-zinc-950">Итого</TableHead>
-                      <TableHead className="w-8" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pricedItems.length === 0 && (
-                      <TableRow>
-                        <TableCell colSpan={6} className="py-6 text-center text-sm text-muted-foreground">
-                          Состав пуст
-                        </TableCell>
-                      </TableRow>
-                    )}
-                    {itemGroups.map((group) => {
-                      if (group.type === "bouquet") {
-                        const groupPrice = group.items.reduce((sum, item) => sum + item.priceNumber, 0)
-                        const groupTotal = group.items.reduce((sum, item) => sum + item.line.total, 0)
+              {orderLocked ? (
+                <Alert className="border-sky-200 bg-sky-50 text-sky-950">
+                  <AlertTitle>Состав зафиксирован заказом</AlertTitle>
+                  <AlertDescription>
+                    По сделке создан заказ — он источник истины по составу и суммам. Нажмите «Изменить заказ»,
+                    чтобы внести правки.
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <ProductCombobox
+                  products={products}
+                  bouquets={bouquets}
+                  includeBouquets
+                  portalDropdown
+                  onSelect={addProduct}
+                  onSelectBouquet={(bouquet) => void addBouquet(bouquet, { showWarning: false })}
+                />
+              )}
+              <div className="grid gap-2">
+                {pricedItems.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-zinc-200 p-6 text-center text-sm text-muted-foreground">
+                    Состав пуст
+                  </div>
+                )}
+                {itemGroups.map((group) => {
+                  if (group.type === "bouquet") {
+                    const groupPrice = group.items.reduce((sum, item) => sum + item.priceNumber, 0)
+                    const groupTotal = group.items.reduce((sum, item) => sum + item.line.total, 0)
 
-                        return (
-                          <TableRow key={group.key}>
-                            <TableCell colSpan={5}>
-                              <div className="flex min-w-0 flex-col gap-2">
-                                <div className="flex flex-wrap items-center justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <div className="flex min-w-0 items-center gap-2">
-                                      <Badge variant="secondary">Букет</Badge>
-                                      <span className="truncate font-medium text-zinc-950">
-                                        {group.bouquetName || "Букет"}
-                                      </span>
-                                    </div>
-                                    <div className="mt-1 text-xs text-muted-foreground">
-                                      Цена букета {formatMoney(groupPrice)}
-                                    </div>
-                                  </div>
-                                  <div className="text-right font-semibold text-zinc-950">
-                                    {formatMoney(groupTotal)}
-                                  </div>
-                                </div>
-                                <div className="grid gap-1 rounded-lg bg-zinc-50 p-2 text-xs text-muted-foreground">
-                                  {group.items.map((item) => (
-                                    <div key={item.id} className="flex items-center justify-between gap-3">
-                                      <span className="flex min-w-0 items-center gap-2">
-                                        <ProductThumbnail
-                                          name={item.productName}
-                                          imagePath={item.imagePath}
-                                          size="xs"
-                                        />
-                                        <span className="truncate">{item.productName}</span>
-                                      </span>
-                                      <span className="shrink-0">{formatNumber(item.qtyNumber)} шт</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            </TableCell>
-                            <TableCell className="w-8 text-right align-top">
+                    return (
+                      <div key={group.key} className="rounded-lg border border-zinc-200 p-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <Badge variant="secondary">Букет</Badge>
+                              <span className="truncate font-medium text-zinc-950">{group.bouquetName || "Букет"}</span>
+                            </div>
+                            <div className="mt-0.5 text-xs text-muted-foreground">
+                              Цена букета {formatMoney(groupPrice)}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <span className="font-semibold text-zinc-950">{formatMoney(groupTotal)}</span>
+                            {!orderLocked && (
                               <Button
                                 type="button"
                                 size="icon-sm"
@@ -1099,102 +1222,40 @@ export function DealDetailPage({
                               >
                                 <Trash2Icon />
                               </Button>
-                            </TableCell>
-                          </TableRow>
-                        )
-                      }
+                            )}
+                          </div>
+                        </div>
+                        <div className="mt-2 grid gap-1 rounded-lg bg-zinc-50 p-2 text-xs text-muted-foreground">
+                          {group.items.map((item) => (
+                            <div key={item.id} className="flex items-center justify-between gap-2">
+                              <span className="flex min-w-0 items-center gap-2">
+                                <ProductThumbnail name={item.productName} imagePath={item.imagePath} size="xs" />
+                                <span className="truncate">{item.productName}</span>
+                              </span>
+                              <span className="shrink-0">{formatNumber(item.qtyNumber)} шт</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  }
 
-                      const item = group.item
-                      return (
-                        <TableRow key={item.id}>
-                          <TableCell className="min-w-[180px] max-w-[240px]">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <ProductThumbnail
-                                name={item.productName}
-                                imagePath={item.imagePath}
-                                size="sm"
-                              />
-                              <div className="min-w-0">
-                                <div className="truncate font-medium text-zinc-950" title={item.productName}>
-                                  {item.productName}
-                                </div>
-                                <div className="truncate text-xs text-muted-foreground">{item.productCode}</div>
-                              </div>
+                  const item = group.item
+                  return (
+                    <div key={item.id} className="rounded-lg border border-zinc-200 p-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <ProductThumbnail name={item.productName} imagePath={item.imagePath} size="sm" />
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-zinc-950" title={item.productName}>
+                              {item.productName}
                             </div>
-                          </TableCell>
-                          <TableCell className="w-16">
-                            <Input
-                              className="h-8 w-16"
-                              type="number"
-                              min="1"
-                              step="1"
-                              value={item.qty}
-                              disabled={item.isTemporary}
-                              onChange={(event) => updateItemField(item.id, { qty: event.target.value })}
-                              onBlur={() => {
-                                updateItemField(item.id, { qty: item.qty }, { immediate: true, normalize: true })
-                              }}
-                            />
-                          </TableCell>
-                          <TableCell className="w-24">
-                            <Input
-                              className="h-8 w-24"
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.price}
-                              disabled={item.isTemporary}
-                              onChange={(event) => updateItemField(item.id, { price: event.target.value })}
-                              onBlur={() => {
-                                updateItemField(item.id, { price: item.price }, { immediate: true, normalize: true })
-                              }}
-                            />
-                          </TableCell>
-                          <TableCell className="w-52">
-                            <div className="flex items-center gap-1">
-                              <Select
-                                value={item.discountType}
-                                onValueChange={(value) =>
-                                  updateItemField(
-                                    item.id,
-                                    { discountType: normalizeDiscountValue(value) },
-                                    { immediate: true }
-                                  )
-                                }
-                              >
-                                <SelectTrigger className="h-8 w-28 bg-white" disabled={item.isTemporary}>
-                                  <SelectValue>{(value) => discountLabel(String(value ?? "none"))}</SelectValue>
-                                </SelectTrigger>
-                                <SelectContent align="start" className="z-[9999]">
-                                  {discountOptions.map((option) => (
-                                    <SelectItem key={option.value} value={option.value}>
-                                      {option.label}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <Input
-                                className="h-8 w-20"
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={item.discountValue}
-                                disabled={item.isTemporary || item.discountType === "none"}
-                                onChange={(event) => updateItemField(item.id, { discountValue: event.target.value })}
-                                onBlur={() => {
-                                  updateItemField(
-                                    item.id,
-                                    { discountValue: item.discountValue },
-                                    { immediate: true, normalize: true }
-                                  )
-                                }}
-                              />
-                            </div>
-                          </TableCell>
-                          <TableCell className="w-28 text-right font-semibold text-zinc-950">
-                            {formatMoney(item.line.total)}
-                          </TableCell>
-                          <TableCell className="w-8 text-right">
+                            <div className="truncate text-xs text-muted-foreground">{item.productCode}</div>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <span className="font-semibold text-zinc-950">{formatMoney(item.line.total)}</span>
+                          {!orderLocked && (
                             <Button
                               type="button"
                               size="icon-sm"
@@ -1203,157 +1264,79 @@ export function DealDetailPage({
                             >
                               <Trash2Icon />
                             </Button>
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card
-            className={cn(
-              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
-              activeTab !== "bouquets" && "hidden"
-            )}
-          >
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-semibold text-zinc-950">Предложить букет</CardTitle>
-              <CardDescription>Отправка активного букета клиенту в Wazzup</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3 overflow-visible">
-              <Field>
-                <FieldLabel className="text-xs text-muted-foreground">Поиск букета</FieldLabel>
-                <FieldContent>
-                  <Input
-                    value={bouquetSearch}
-                    placeholder="Название, описание или цена"
-                    onChange={(event) => setBouquetSearch(event.target.value)}
-                  />
-                </FieldContent>
-              </Field>
-
-              {suggestedBouquets.length ? (
-                <div className="flex flex-col gap-2">
-                  {suggestedBouquets.map((bouquet) => {
-                    const availability = getBouquetAvailability(bouquet)
-
-                    return (
-                      <div key={bouquet.id} className="rounded-lg border border-zinc-200 p-3">
-                        <div className="flex min-w-0 gap-3">
-                          <BouquetThumbnail name={bouquet.name} imagePath={bouquet.imagePath} size="lg" />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-start justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="truncate font-medium text-zinc-950">{bouquet.name}</div>
-                                <div className="text-sm font-semibold text-zinc-950">{formatMoney(bouquet.price)}</div>
-                              </div>
-                              <div className="flex flex-wrap justify-end gap-1.5">
-                                <Badge variant="secondary">{bouquet.itemsCount} поз.</Badge>
-                                {!availability.available && (
-                                  <Badge className="border-amber-200 bg-amber-50 text-amber-800">
-                                    Не хватает компонентов
-                                  </Badge>
-                                )}
-                              </div>
-                            </div>
-                            <div className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                              {bouquet.description || "Описание букета пока не заполнено."}
-                            </div>
-                            {!availability.available && (
-                              <Alert className="mt-2 border-amber-200 bg-amber-50 text-amber-950">
-                                <AlertTriangleIcon />
-                                <AlertTitle>На складе не хватает компонентов</AlertTitle>
-                                <AlertDescription className="text-amber-900">
-                                  {availability.missingItems.map((item) => (
-                                    <div key={item.productCode}>
-                                      {item.productName}: нужно {formatNumber(item.requiredQty)}, остаток{" "}
-                                      {formatNumber(item.stock)}, не хватает {formatNumber(item.missingQty)}
-                                    </div>
-                                  ))}
-                                </AlertDescription>
-                              </Alert>
-                            )}
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <Button
-                                type="button"
-                                size="sm"
-                                disabled={sendingBouquetId !== null}
-                                onClick={() => void sendBouquet(bouquet)}
-                              >
-                                <SendIcon data-icon="inline-start" />
-                                {sendingBouquetId === bouquet.id ? "Отправляем..." : "Отправить в чат"}
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                disabled={itemSaveStatus === "saving" || hasPendingSaves}
-                                onClick={() => void addBouquet(bouquet)}
-                              >
-                                <PlusIcon data-icon="inline-start" />
-                                Добавить в сделку
-                              </Button>
-                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-end gap-2">
+                        <div>
+                          <div className="text-[11px] text-muted-foreground">Кол-во</div>
+                          <Input
+                            className="h-8 w-16"
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={item.qty}
+                            disabled={item.isTemporary || orderLocked}
+                            onChange={(event) => updateItemField(item.id, { qty: event.target.value })}
+                            onBlur={() => {
+                              updateItemField(item.id, { qty: item.qty }, { immediate: true, normalize: true })
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-muted-foreground">Цена</div>
+                          <Input
+                            className="h-8 w-24"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.price}
+                            disabled={item.isTemporary || orderLocked}
+                            onChange={(event) => updateItemField(item.id, { price: event.target.value })}
+                            onBlur={() => {
+                              updateItemField(item.id, { price: item.price }, { immediate: true, normalize: true })
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-muted-foreground">Скидка</div>
+                          <div className="flex items-center gap-1">
+                            <Select
+                              value={item.discountType}
+                              onValueChange={(value) =>
+                                updateItemField(item.id, { discountType: normalizeDiscountValue(value) }, { immediate: true })
+                              }
+                            >
+                              <SelectTrigger className="h-8 w-24 bg-white" disabled={item.isTemporary || orderLocked}>
+                                <SelectValue>{(value) => discountLabel(String(value ?? "none"))}</SelectValue>
+                              </SelectTrigger>
+                              <SelectContent align="start" className="z-[9999]">
+                                {discountOptions.map((option) => (
+                                  <SelectItem key={option.value} value={option.value}>
+                                    {option.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Input
+                              className="h-8 w-20"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={item.discountValue}
+                              disabled={item.isTemporary || item.discountType === "none" || orderLocked}
+                              onChange={(event) => updateItemField(item.id, { discountValue: event.target.value })}
+                              onBlur={() => {
+                                updateItemField(item.id, { discountValue: item.discountValue }, { immediate: true, normalize: true })
+                              }}
+                            />
                           </div>
                         </div>
                       </div>
-                    )
-                  })}
-                </div>
-              ) : (
-                <div className="rounded-lg border border-dashed border-zinc-200 p-4 text-sm text-muted-foreground">
-                  Активные букеты не найдены.
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card
-            className={cn(
-              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
-              activeTab !== "bouquets" && "hidden"
-            )}
-          >
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-semibold text-zinc-950">Отправленные букеты</CardTitle>
-              <CardDescription>История предложений клиенту</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2 overflow-visible">
-              {bouquetMessages.length ? (
-                bouquetMessages.map((message) => (
-                  <div key={message.id} className="flex gap-3 rounded-lg border border-zinc-200 p-3">
-                    <BouquetThumbnail
-                      name={message.bouquetName}
-                      imagePath={message.imagePath}
-                      size="sm"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="min-w-0 truncate font-medium text-zinc-950">
-                          {message.bouquetName || `Букет #${message.bouquetId}`}
-                        </div>
-                        <Badge variant={message.status === "sent" ? "secondary" : "destructive"}>
-                          {message.status === "sent" ? "Отправлен" : "Ошибка"}
-                        </Badge>
-                      </div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {formatDateTime(message.sentAt)}
-                        {message.sentByName ? ` · ${message.sentByName}` : ""}
-                      </div>
-                      {message.error && (
-                        <div className="mt-1 line-clamp-2 text-xs text-destructive">{message.error}</div>
-                      )}
                     </div>
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-lg border border-dashed border-zinc-200 p-4 text-sm text-muted-foreground">
-                  Букеты еще не отправлялись.
-                </div>
-              )}
+                  )
+                })}
+              </div>
             </CardContent>
           </Card>
 
@@ -1388,7 +1371,7 @@ export function DealDetailPage({
                         })
                       }
                     >
-                      <SelectTrigger className="h-10 w-full bg-white">
+                      <SelectTrigger className="h-10 w-full bg-white" disabled={orderLocked}>
                         <SelectValue>{(value) => discountLabel(String(value ?? "none"))}</SelectValue>
                       </SelectTrigger>
                       <SelectContent align="start" className="z-[9999]">
@@ -1410,7 +1393,7 @@ export function DealDetailPage({
                       min="0"
                       step="0.01"
                       value={draft.dealDiscountValue}
-                      disabled={draft.dealDiscountType === "none"}
+                      disabled={draft.dealDiscountType === "none" || orderLocked}
                       onChange={(event) =>
                         updateDraftField("dealDiscountValue", event.target.value, { markDiscountManual: true })
                       }
@@ -1429,83 +1412,45 @@ export function DealDetailPage({
           <Card
             className={cn(
               "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
-              activeTab !== "payment" && "hidden"
+              activeTab !== "overview" && "hidden"
             )}
           >
             <CardHeader className="pb-3">
-              <CardTitle className="text-base font-semibold text-zinc-950">Оплата</CardTitle>
-              <CardDescription>Оплаты проходят через открытую смену кассы</CardDescription>
+              <CardTitle className="text-base font-semibold text-zinc-950">Оплата и заказ</CardTitle>
+              <CardDescription>После создания заказа суммы берутся из него</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3 overflow-visible text-sm">
               <div className="grid grid-cols-3 gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
-                <SummaryBox label="Итого" value={formatMoney(totals.total)} />
-                <SummaryBox label="Оплачено" value={formatMoney(deal.paid)} />
+                <SummaryBox label="Итого" value={formatMoney(displayTotal)} />
+                <SummaryBox label="Оплачено" value={formatMoney(displayPaid)} />
                 <SummaryBox label="Остаток" value={formatMoney(balance)} strong={balance > 0} />
               </div>
-              {balance <= 0 ? (
-                <Badge className="w-fit bg-emerald-100 text-emerald-900">
-                  <CheckCircle2Icon data-icon="inline-start" />
-                  Оплачено
-                </Badge>
-              ) : (
-                <>
-                  <Badge variant="outline" className="w-fit border-amber-200 bg-amber-50 text-amber-900">
-                    Остаток {formatMoney(balance)}
-                  </Badge>
-                  <Button
-                    type="button"
-                    disabled={actionPending || hasPendingSaves}
-                    className="h-10 bg-zinc-950 text-white hover:bg-zinc-800"
-                    onClick={openPaymentDialog}
-                  >
-                    <ReceiptTextIcon data-icon="inline-start" />
-                    Принять оплату
-                  </Button>
-                </>
-              )}
+              <PaymentStatusBadge status={paymentStatus} balance={balance} />
               {(showShiftWarning || (!openShift && balance > 0)) && (
                 <Alert className="border-amber-200 bg-amber-50 text-amber-950">
                   <AlertTitle>Смена не открыта</AlertTitle>
                   <AlertDescription>Откройте смену в кассе, чтобы принять оплату по сделке.</AlertDescription>
                 </Alert>
               )}
-            </CardContent>
-          </Card>
 
-          <Card
-            className={cn(
-              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
-              activeTab !== "payment" && "hidden"
-            )}
-          >
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-semibold text-zinc-950">Заказ</CardTitle>
-              <CardDescription>Создание заказа из текущей сделки</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-3 overflow-visible text-sm">
               {activeDealOrder ? (
-                <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
-                  <div className="text-xs font-medium uppercase text-sky-900">Активный заказ</div>
-                  <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-sky-950">
-                        {activeDealOrder.number || `Заказ #${activeDealOrder.id}`}
-                      </div>
-                      <div className="text-xs text-sky-800">{activeDealOrder.status}</div>
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-200 bg-sky-50 p-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium uppercase text-sky-900">Активный заказ</div>
+                    <div className="font-semibold text-sky-950">
+                      {activeDealOrder.number || `Заказ #${activeDealOrder.id}`} · {activeDealOrder.status}
                     </div>
-                    <Button size="sm" variant="outline" render={<Link href={orderHref} />}>
-                      <ExternalLinkIcon data-icon="inline-start" />
-                      Открыть заказ
-                    </Button>
                   </div>
+                  <Button size="sm" variant="outline" render={<Link href={orderHref} />}>
+                    <ExternalLinkIcon data-icon="inline-start" />
+                    Открыть заказ
+                  </Button>
                 </div>
               ) : latestDealOrder ? (
                 <div
                   className={cn(
                     "rounded-lg border p-3",
-                    latestDealOrder.status === "Отменен"
-                      ? "border-red-200 bg-red-50"
-                      : "border-zinc-200 bg-zinc-50"
+                    latestDealOrder.status === "Отменен" ? "border-red-200 bg-red-50" : "border-zinc-200 bg-zinc-50"
                   )}
                 >
                   <div
@@ -1514,57 +1459,36 @@ export function DealDetailPage({
                       latestDealOrder.status === "Отменен" ? "text-red-900" : "text-zinc-700"
                     )}
                   >
-                    {latestDealOrder.status === "Отменен" ? "Заказ отменен" : "Последний заказ не активен"}
+                    {latestDealOrder.status === "Отменен" ? "Заказ отменён" : "Последний заказ не активен"}
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-zinc-950">
-                        {latestDealOrder.number || `Заказ #${latestDealOrder.id}`}
-                      </div>
-                      <div className="text-xs text-zinc-600">{latestDealOrder.status}</div>
-                    </div>
-                    <Badge variant="outline">Можно создать новый</Badge>
+                  <div className="font-semibold text-zinc-950">
+                    {latestDealOrder.number || `Заказ #${latestDealOrder.id}`} · {latestDealOrder.status}
                   </div>
                 </div>
               ) : (
-                <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-zinc-600">
-                  Заказ еще не создан
-                </div>
+                <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-zinc-600">Заказ ещё не создан</div>
               )}
-              <Button
-                type="button"
-                disabled={!hasItems || Boolean(activeDealOrder) || actionPending || hasPendingSaves}
-                className="h-10 bg-zinc-950 text-white hover:bg-zinc-800"
-                onClick={openCreateOrderDialog}
-              >
-                <ShoppingBagIcon data-icon="inline-start" />
-                {latestDealOrder && !activeDealOrder ? "Создать новый заказ" : "Создать заказ"}
-              </Button>
-              {activeDealOrder && (
-                <div className="text-xs text-zinc-500">Новый заказ можно создать после отмены или завершения активного.</div>
-              )}
-              <div className="text-xs text-zinc-500">Перед созданием откроется проверка данных заказа.</div>
-              {!hasItems && <div className="text-xs text-zinc-500">Добавьте товары, чтобы создать заказ</div>}
+
               {dealOrders.length > 0 && (
-                <div className="mt-2 grid gap-2">
-                  <div className="text-xs font-medium uppercase text-zinc-500">История заказов сделки</div>
-                  {dealOrders.map((order) => (
-                    <div
-                      key={order.id}
-                      className="grid gap-1 rounded-lg border border-zinc-200 bg-white p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-medium text-zinc-950">
-                          {order.number || `Заказ #${order.id}`}
+                <details className="mt-1 text-xs text-zinc-500">
+                  <summary className="cursor-pointer select-none">История заказов сделки ({dealOrders.length})</summary>
+                  <div className="mt-2 grid gap-2">
+                    {dealOrders.map((order) => (
+                      <div
+                        key={order.id}
+                        className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white p-2"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate font-medium text-zinc-950">{order.number || `Заказ #${order.id}`}</div>
+                          <div className="truncate">
+                            {order.dueAt ? formatDateTime(order.dueAt) : "Без срока"} · {formatMoney(order.total)}
+                          </div>
                         </div>
-                        <div className="text-xs text-zinc-500">
-                          {order.dueAt ? formatDateTime(order.dueAt) : "Без срока"} · {formatMoney(order.total)}
-                        </div>
+                        <Badge variant={order.status === "Отменен" ? "destructive" : "outline"}>{order.status}</Badge>
                       </div>
-                      <Badge variant={order.status === "Отменен" ? "destructive" : "outline"}>{order.status}</Badge>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                </details>
               )}
             </CardContent>
           </Card>
@@ -1588,6 +1512,44 @@ export function DealDetailPage({
           </Card>
             </div>
           </Tabs>
+
+          {!createOrderDialogOpen && !paymentDialogOpen && (
+          <div className="flex gap-2 rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm">
+            <div className="flex-1">
+              <ActionButton
+                grow
+                icon={<ReceiptTextIcon data-icon="inline-start" />}
+                label="Принять оплату"
+                disabledReason={paymentDisabledReason}
+                disabled={actionPending || hasPendingSaves || balance <= 0 || !openShift}
+                onClick={openPaymentDialog}
+              />
+            </div>
+            <div className="flex-1">
+              {orderLocked ? (
+                <ActionButton
+                  grow
+                  icon={<ShoppingBagIcon data-icon="inline-start" />}
+                  label="Изменить заказ"
+                  variant="outline"
+                  disabledReason={editOrderDisabledReason}
+                  disabled={actionPending || !orderEditable}
+                  onClick={openEditOrderDialog}
+                />
+              ) : (
+                <ActionButton
+                  grow
+                  icon={<ShoppingBagIcon data-icon="inline-start" />}
+                  label={orderButtonLabel}
+                  variant="outline"
+                  disabledReason={createOrderDisabledReason}
+                  disabled={actionPending || hasPendingSaves || !hasItems}
+                  onClick={openCreateOrderDialog}
+                />
+              )}
+            </div>
+          </div>
+          )}
         </aside>
       </div>
 
@@ -1600,8 +1562,8 @@ export function DealDetailPage({
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid grid-cols-3 gap-2 rounded-2xl border bg-muted/30 p-3 text-sm">
-                <SummaryBox label="Итого" value={formatMoney(totals.total)} />
-                <SummaryBox label="Оплачено" value={formatMoney(deal.paid)} />
+                <SummaryBox label="Итого" value={formatMoney(displayTotal)} />
+                <SummaryBox label="Оплачено" value={formatMoney(displayPaid)} />
                 <SummaryBox label="Остаток" value={formatMoney(balance)} strong />
               </div>
               <Field>
@@ -1655,7 +1617,7 @@ export function DealDetailPage({
               <Button type="button" variant="outline" onClick={() => setPaymentDialogOpen(false)}>
                 Отмена
               </Button>
-              <Button type="submit" disabled={actionPending}>
+              <Button type="submit" disabled={actionPending || !openShift || balance <= 0}>
                 Принять оплату
               </Button>
             </DialogFooter>
@@ -1665,14 +1627,14 @@ export function DealDetailPage({
 
       <Dialog open={createOrderDialogOpen} onOpenChange={setCreateOrderDialogOpen}>
         <DialogContent className="sm:max-w-3xl">
-          <form onSubmit={submitCreateOrder}>
+          <form onSubmit={isEditOrderMode ? submitEditOrder : submitCreateOrder}>
             <DialogHeader>
-              <DialogTitle>Создание заказа из сделки</DialogTitle>
+              <DialogTitle>{isEditOrderMode ? "Изменение заказа" : "Создание заказа из сделки"}</DialogTitle>
               <DialogDescription>{deal.number || `Сделка #${deal.id}`}</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm sm:grid-cols-5">
-                <SummaryBox label="Состав" value={formatMoney(totals.total)} />
+                <SummaryBox label="Состав" value={formatMoney(dialogItemsTotal)} />
                 <SummaryBox label="Доставка" value={formatMoney(orderDeliveryPrice)} />
                 <SummaryBox label="Курьеру" value={formatMoney(orderCourierPayout)} />
                 <SummaryBox label="Итого" value={formatMoney(orderTotal)} strong />
@@ -1811,8 +1773,97 @@ export function DealDetailPage({
               </FieldGroup>
 
               <div className="grid gap-2 rounded-xl border border-zinc-200 p-3 text-sm">
-                <div className="font-medium text-zinc-950">Состав заказа</div>
-                {pricedItems.length ? (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-medium text-zinc-950">Состав заказа</div>
+                  {isEditOrderMode && <span className="text-xs text-zinc-500">Можно править позиции</span>}
+                </div>
+                {isEditOrderMode ? (
+                  <div className="grid gap-2">
+                    <ProductCombobox products={products} bouquets={bouquets} portalDropdown onSelect={addOrderProduct} />
+                    {editPricedLines.length ? (
+                      editPricedLines.map((line) => (
+                        <div
+                          key={line.key}
+                          className="grid gap-2 rounded-lg border border-zinc-200 p-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                        >
+                          <div className="flex min-w-0 items-center gap-2">
+                            <ProductThumbnail name={line.name} imagePath={line.imagePath} size="sm" />
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-zinc-950" title={line.name}>
+                                {line.name}
+                              </div>
+                              <div className="truncate text-xs text-zinc-500">
+                                {line.bouquetGroupId ? `Букет · ${line.productCode}` : line.productCode}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <Input
+                              className="h-8 w-16"
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={line.qty}
+                              onChange={(event) => updateOrderLine(line.key, { qty: event.target.value })}
+                              onBlur={() => updateOrderLine(line.key, { qty: String(normalizedQty(line.qty)) })}
+                            />
+                            <Input
+                              className="h-8 w-24"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={line.price}
+                              onChange={(event) => updateOrderLine(line.key, { price: event.target.value })}
+                              onBlur={() => updateOrderLine(line.key, { price: String(normalizedPrice(line.price)) })}
+                            />
+                            <Select
+                              value={line.discountType}
+                              onValueChange={(value) =>
+                                updateOrderLine(line.key, { discountType: normalizeDiscountValue(value) })
+                              }
+                            >
+                              <SelectTrigger className="h-8 w-24 bg-white">
+                                <SelectValue>{(value) => discountLabel(String(value ?? "none"))}</SelectValue>
+                              </SelectTrigger>
+                              <SelectContent align="start" className="z-[9999]">
+                                {discountOptions.map((option) => (
+                                  <SelectItem key={option.value} value={option.value}>
+                                    {option.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Input
+                              className="h-8 w-20"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={line.discountValue}
+                              disabled={line.discountType === "none"}
+                              onChange={(event) => updateOrderLine(line.key, { discountValue: event.target.value })}
+                              onBlur={() =>
+                                updateOrderLine(line.key, { discountValue: String(normalizedPrice(line.discountValue)) })
+                              }
+                            />
+                            <span className="w-24 text-right font-semibold text-zinc-950">
+                              {formatMoney(line.line.total)}
+                            </span>
+                            <Button
+                              type="button"
+                              size="icon-sm"
+                              variant="destructive"
+                              onClick={() => removeOrderLine(line.key)}
+                            >
+                              <Trash2Icon />
+                            </Button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-zinc-500">Состав пуст</div>
+                    )}
+                  </div>
+                ) : pricedItems.length ? (
                   pricedItems.map((item) => (
                     <div key={item.id} className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -1831,17 +1882,17 @@ export function DealDetailPage({
               </div>
 
               <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm">
-                <SummaryRow label="Товары до скидки" value={formatMoney(totals.itemsTotalBeforeDiscount)} />
-                <SummaryRow label="Скидки по позициям" value={formatMoney(totals.itemsDiscountTotal)} />
-                <SummaryRow label="Скидка на чек" value={formatMoney(totals.dealDiscountAmount)} />
+                <SummaryRow label="Товары до скидки" value={formatMoney(dialogItemsBreakdown.itemsTotalBeforeDiscount)} />
+                <SummaryRow label="Скидки по позициям" value={formatMoney(dialogItemsBreakdown.itemsDiscountTotal)} />
+                <SummaryRow label="Скидка на чек" value={formatMoney(dialogItemsBreakdown.dealDiscountAmount)} />
                 <SummaryRow label="Доставка" value={formatMoney(orderDeliveryPrice)} />
                 <SummaryRow label="Курьеру из кассы" value={formatMoney(orderCourierPayout)} />
                 <SummaryRow label="Итого" value={formatMoney(orderTotal)} strong total />
-                <SummaryRow label="Оплачено" value={formatMoney(deal.paid)} />
+                <SummaryRow label="Оплачено" value={formatMoney(displayPaid)} />
                 <SummaryRow label="Остаток" value={formatMoney(orderBalance)} strong danger={orderBalance > 0} />
               </div>
 
-              {activeDealOrder && (
+              {!isEditOrderMode && activeDealOrder && (
                 <Alert className="border-amber-200 bg-amber-50 text-amber-950">
                   <AlertTriangleIcon />
                   <AlertTitle>У сделки уже есть активный заказ</AlertTitle>
@@ -1852,7 +1903,7 @@ export function DealDetailPage({
                 <Alert variant="destructive">
                   <AlertTriangleIcon />
                   <AlertTitle>Оплата выше итога заказа</AlertTitle>
-                  <AlertDescription>Увеличьте итог заказа или разберите оплату перед созданием.</AlertDescription>
+                  <AlertDescription>Итог заказа не может быть меньше уже принятой оплаты.</AlertDescription>
                 </Alert>
               )}
             </div>
@@ -1862,15 +1913,136 @@ export function DealDetailPage({
               </Button>
               <Button
                 type="submit"
-                disabled={!hasItems || Boolean(activeDealOrder) || paidExceedsOrderTotal || actionPending}
+                disabled={
+                  actionPending ||
+                  paidExceedsOrderTotal ||
+                  (isEditOrderMode ? !orderEditable || !dialogHasItems : !hasItems || Boolean(activeDealOrder))
+                }
               >
-                Создать заказ
+                {isEditOrderMode ? "Сохранить заказ" : "Создать заказ"}
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+// A primary action button that, when disabled, explains why via a tooltip on a wrapper.
+function ActionButton({
+  icon,
+  label,
+  disabled,
+  disabledReason,
+  variant = "default",
+  onClick,
+  grow = false,
+}: {
+  icon: React.ReactNode
+  label: string
+  disabled: boolean
+  disabledReason: string | null
+  variant?: "default" | "outline"
+  onClick: () => void
+  grow?: boolean
+}) {
+  const button = (
+    <Button
+      type="button"
+      variant={variant}
+      className={cn(grow ? "h-12 w-full text-base" : "h-10")}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {icon}
+      {label}
+    </Button>
+  )
+
+  if (disabled && disabledReason) {
+    // base-ui tooltips don't fire on a disabled button, so anchor on a focusable wrapper.
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={<span tabIndex={0} className={cn("cursor-help rounded-lg", grow ? "flex w-full" : "inline-flex")} />}
+        >
+          {button}
+        </TooltipTrigger>
+        <TooltipContent>{disabledReason}</TooltipContent>
+      </Tooltip>
+    )
+  }
+
+  return button
+}
+
+// Компактная шапка чата сделки: имя клиента, телефон, ссылка «Открыть клиента». Работает для
+// обоих режимов чата (custom/iframe); при выключенном чате рендерится над карточкой справа.
+function ClientHeader({
+  name,
+  phone,
+  customerId,
+  discountPercent,
+}: {
+  name: string
+  phone: string
+  customerId: string | null
+  discountPercent: number
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-zinc-200 bg-white px-4 py-2.5 shadow-sm">
+      <div className="min-w-0">
+        <div className="truncate text-sm font-semibold text-zinc-950">
+          {name || "Без клиента"}
+          {discountPercent > 0 ? (
+            <span className="ml-2 text-xs font-normal text-emerald-700">скидка {discountPercent}%</span>
+          ) : null}
+        </div>
+        <div className="truncate text-xs text-muted-foreground">{phone || "Телефон не указан"}</div>
+      </div>
+      {customerId ? (
+        <Link href={`/clients/${customerId}`} className={buttonVariants({ variant: "outline", size: "sm" })}>
+          <ExternalLinkIcon data-icon="inline-start" />
+          Открыть клиента
+        </Link>
+      ) : null}
+    </div>
+  )
+}
+
+// Единый бейдж статуса оплаты. "none" → ничего не рисуем (нет суммы — нет ложного «Оплачено»).
+function PaymentStatusBadge({
+  status,
+  balance,
+  className,
+}: {
+  status: PaymentStatus
+  balance: number
+  className?: string
+}) {
+  if (status === "none") {
+    return null
+  }
+  if (status === "paid") {
+    return (
+      <Badge variant="secondary" className={cn("bg-emerald-100 text-emerald-900", className)}>
+        <CheckCircle2Icon data-icon="inline-start" />
+        Оплачено
+      </Badge>
+    )
+  }
+  if (status === "unpaid") {
+    return (
+      <Badge variant="outline" className={cn("border-amber-200 bg-amber-50 text-amber-900", className)}>
+        Не оплачено
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="outline" className={cn("border-amber-200 bg-amber-50 text-amber-900", className)}>
+      Остаток {formatMoney(balance)}
+    </Badge>
   )
 }
 
@@ -1966,6 +2138,22 @@ function createOrderDraftFromDealDraft(draft: DealDraft): CreateOrderDraft {
     deliveryPrice: "0",
     courierPayout: "0",
   }
+}
+
+function orderLinesFromItems(items: DealItemDraft[]): OrderLineDraft[] {
+  return items.map((item, index) => ({
+    key: `line-${item.id}-${index}`,
+    productCode: item.productCode,
+    name: item.productName,
+    imagePath: item.imagePath,
+    qty: item.qty,
+    price: item.price,
+    discountType: item.discountType,
+    discountValue: item.discountValue,
+    bouquetId: item.bouquetId,
+    bouquetName: item.bouquetName,
+    bouquetGroupId: item.bouquetGroupId,
+  }))
 }
 
 function createItemDrafts(items: DealItem[]): DealItemDraft[] {
@@ -2084,10 +2272,6 @@ function discountLabel(value: string) {
   return discountOptions.find((option) => option.value === value)?.label ?? "Без скидки"
 }
 
-function deliveryTypeLabel(value: string) {
-  return deliveryOptions.find((option) => option.value === value)?.label ?? "Самовывоз"
-}
-
 function normalizeDeliveryTypeValue(value: string | null | undefined): CreateOrderDraft["deliveryType"] {
   const normalized = String(value ?? "").trim().toLowerCase()
   return normalized === "delivery" || normalized === "доставка" ? "delivery" : "pickup"
@@ -2124,12 +2308,14 @@ function formatDateTime(value: string) {
     return "-"
   }
 
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
+  // Срок заказа (due_at) — наивное локальное время, показываем без сдвига пояса.
+  const date = parseWallClock(value)
+  if (!date) {
     return value
   }
 
   return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "UTC",
     day: "2-digit",
     month: "2-digit",
     year: "2-digit",
@@ -2172,4 +2358,27 @@ function toDatetimeLocal(value: string) {
   }
 
   return date.toISOString().slice(0, 16)
+}
+
+// Asks the chat/iframe endpoint only for its status discriminant so the page can decide the layout.
+// Custom mode probes the lightweight DB-backed chat endpoint (no Wazzup API call); iframe mode asks
+// the iframe endpoint. On any failure we fall back to "error" → the chat column stays (with a retry).
+async function resolveChatStatus(dealId: number, mode: "iframe" | "custom"): Promise<WazzupIframeStatus> {
+  try {
+    const endpoint =
+      mode === "custom" ? `/api/wazzup/chat?dealId=${dealId}&probe=1` : `/api/wazzup/iframe?dealId=${dealId}`
+    const response = await fetch(endpoint, { cache: "no-store" })
+    const data = (await response.json()) as { status?: string }
+    switch (data.status) {
+      case "ok":
+      case "disabled":
+      case "not_configured":
+      case "no_chat":
+        return data.status
+      default:
+        return "error"
+    }
+  } catch {
+    return "error"
+  }
 }

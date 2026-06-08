@@ -1,10 +1,12 @@
 import Link from "next/link"
+import { BanIcon, CheckCircle2Icon, FileEditIcon, MinusCircleIcon, PlusCircleIcon } from "lucide-react"
 import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
+import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -15,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { getShiftShellContext } from "@/lib/app-shell"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { listStockDocuments, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
 import { stockDocumentStatusLabel, stockDocumentTypeLabel } from "@/lib/labels"
@@ -34,8 +36,43 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
   const query = String(params.query ?? "")
   const documents = listStockDocuments({ type, status, query })
 
+  function buildHref(overrides: { status?: string; type?: string }) {
+    const next = new URLSearchParams()
+    if (query) {
+      next.set("query", query)
+    }
+    const nextStatus = overrides.status ?? status
+    const nextType = overrides.type ?? type
+    if (nextStatus && nextStatus !== "all") {
+      next.set("status", nextStatus)
+    }
+    if (nextType && nextType !== "all") {
+      next.set("type", nextType)
+    }
+    const queryString = next.toString()
+    return queryString ? `/stock/acts?${queryString}` : "/stock/acts"
+  }
+
+  const statusChips = [
+    { value: "all", label: "Все статусы" },
+    { value: "draft", label: "Черновики" },
+    { value: "posted", label: "Проведенные" },
+    { value: "cancelled", label: "Отмененные" },
+  ]
+  const typeChips = [
+    { value: "all", label: "Все типы" },
+    { value: "stock_in", label: "Пополнение" },
+    { value: "stock_out", label: "Списание" },
+  ]
+
   return (
-    <CrmShell user={user} active="stock-acts" title="Акты склада" shiftContext={getShiftShellContext(user)}>
+    <CrmShell
+      user={user}
+      active="stock-acts"
+      title="Акты склада"
+      shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
+    >
       <div className="flex justify-end">
         <Link href="/stock" className={buttonVariants({ variant: "outline", size: "sm" })}>
           Вернуться на склад
@@ -46,7 +83,15 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
           <CardContent className="flex flex-col gap-4">
             <form className="grid gap-2 md:grid-cols-[1fr_220px_220px_auto]">
               <Input name="query" defaultValue={query} placeholder="Номер или комментарий" />
-              <Select name="type" defaultValue={type}>
+              <Select
+                name="type"
+                defaultValue={type}
+                items={[
+                  { label: "Все типы", value: "all" },
+                  { label: "Пополнение", value: "stock_in" },
+                  { label: "Списание", value: "stock_out" },
+                ]}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Тип" />
                 </SelectTrigger>
@@ -58,7 +103,16 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              <Select name="status" defaultValue={status}>
+              <Select
+                name="status"
+                defaultValue={status}
+                items={[
+                  { label: "Все статусы", value: "all" },
+                  { label: "Черновик", value: "draft" },
+                  { label: "Проведен", value: "posted" },
+                  { label: "Отменен", value: "cancelled" },
+                ]}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Статус" />
                 </SelectTrigger>
@@ -75,25 +129,37 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
                 Применить
               </button>
             </form>
-            <div className="flex flex-wrap gap-2">
-              <Link href="/stock/acts" className={buttonVariants({ variant: "outline", size: "sm" })}>
-                Все
-              </Link>
-              <Link href="/stock/acts?status=draft" className={buttonVariants({ variant: "outline", size: "sm" })}>
-                Черновики
-              </Link>
-              <Link href="/stock/acts?status=posted" className={buttonVariants({ variant: "outline", size: "sm" })}>
-                Проведенные
-              </Link>
-              <Link href="/stock/acts?status=cancelled" className={buttonVariants({ variant: "outline", size: "sm" })}>
-                Отмененные
-              </Link>
-              <Link href="/stock/acts?type=stock_in" className={buttonVariants({ variant: "outline", size: "sm" })}>
-                Пополнение
-              </Link>
-              <Link href="/stock/acts?type=stock_out" className={buttonVariants({ variant: "outline", size: "sm" })}>
-                Списание
-              </Link>
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Статус:</span>
+                {statusChips.map((chip) => {
+                  const isActive = status === chip.value
+                  return (
+                    <Link
+                      key={chip.value}
+                      href={buildHref({ status: chip.value })}
+                      className={buttonVariants({ variant: isActive ? "default" : "outline", size: "sm" })}
+                    >
+                      {chip.label}
+                    </Link>
+                  )
+                })}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Тип:</span>
+                {typeChips.map((chip) => {
+                  const isActive = type === chip.value
+                  return (
+                    <Link
+                      key={chip.value}
+                      href={buildHref({ type: chip.value })}
+                      className={buttonVariants({ variant: isActive ? "default" : "outline", size: "sm" })}
+                    >
+                      {chip.label}
+                    </Link>
+                  )
+                })}
+              </div>
             </div>
 
             {documents.length === 0 ? (
@@ -164,6 +230,11 @@ function StockDocumentTypeBadge({ type }: { type: StockDocumentType }) {
 
   return (
     <Badge variant="outline" className={className}>
+      {type === "stock_in" ? (
+        <PlusCircleIcon data-icon="inline-start" />
+      ) : (
+        <MinusCircleIcon data-icon="inline-start" />
+      )}
       {stockDocumentTypeLabel(type)}
     </Badge>
   )
@@ -179,12 +250,19 @@ function StockDocumentStatusBadge({ status }: { status: StockDocumentStatus }) {
 
   return (
     <Badge variant={status === "cancelled" ? "destructive" : "outline"} className={className}>
+      {status === "posted" ? (
+        <CheckCircle2Icon data-icon="inline-start" />
+      ) : status === "draft" ? (
+        <FileEditIcon data-icon="inline-start" />
+      ) : (
+        <BanIcon data-icon="inline-start" />
+      )}
       {stockDocumentStatusLabel(status)}
     </Badge>
   )
 }
 
 function formatDateTime(value: string) {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("ru-RU")
+  const date = parseDbInstant(value)
+  return date ? date.toLocaleString("ru-RU", { timeZone: SHOP_TIME_ZONE }) : value
 }

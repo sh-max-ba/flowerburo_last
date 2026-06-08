@@ -1,12 +1,12 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { SearchIcon } from "lucide-react"
 import { toast } from "sonner"
 import type { BouquetTemplate, Product } from "@/lib/db"
 import { getBouquetAvailability } from "@/lib/bouquet-availability"
-import { formatMoney } from "@/lib/utils"
+import { cn, formatMoney } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
@@ -21,6 +21,10 @@ type ProductComboboxProps = {
   placeholder?: string
   portalDropdown?: boolean
   maxResults?: number
+  /** Фокусирует поле при монтировании — для экрана быстрой продажи (ищут руками). */
+  autoFocus?: boolean
+  /** Доп. классы для самого поля ввода (например, увеличенная высота на кассе). */
+  inputClassName?: string
   onSelect: (product: Product) => void
   onSelectBouquet?: (bouquet: BouquetTemplate) => void
 }
@@ -38,6 +42,8 @@ export function ProductCombobox({
   placeholder = "Найти товар по названию, коду или артикулу",
   portalDropdown = false,
   maxResults = defaultMaxResults,
+  autoFocus = false,
+  inputClassName,
   onSelect,
   onSelectBouquet,
 }: ProductComboboxProps) {
@@ -45,6 +51,7 @@ export function ProductCombobox({
   const blurTimeoutRef = useRef<number | null>(null)
   const [query, setQuery] = useState("")
   const [open, setOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
   const [dropdownRect, setDropdownRect] = useState<DOMRect | null>(null)
 
   const normalizedQuery = query.trim().toLowerCase()
@@ -54,6 +61,7 @@ export function ProductCombobox({
     }
 
     const productResults: ProductComboboxResult[] = products
+      .filter((product) => product.isActive)
       .filter((product) =>
         [product.name, product.code, product.article, product.categoryPath]
           .join(" ")
@@ -77,7 +85,17 @@ export function ProductCombobox({
     return [...productResults, ...bouquetResults].slice(0, maxResults)
   }, [bouquets, includeBouquets, maxResults, normalizedQuery, onSelectBouquet, products])
 
+  const listboxId = useId()
+  const optionId = useCallback((index: number) => `${listboxId}-option-${index}`, [listboxId])
+
   const dropdownOpen = open && normalizedQuery.length > 0
+
+  // Keep the active option within bounds whenever the result set changes (render-time
+  // clamp instead of an effect — avoids an extra render pass).
+  const maxActiveIndex = results.length > 0 ? results.length - 1 : 0
+  if (activeIndex > maxActiveIndex) {
+    setActiveIndex(maxActiveIndex)
+  }
 
   const updateDropdownRect = useCallback(() => {
     const rect = inputRef.current?.getBoundingClientRect()
@@ -106,6 +124,13 @@ export function ProductCombobox({
       clearBlurTimeout()
     }
   }, [clearBlurTimeout])
+
+  // Автофокус на поле поиска при входе на экран продажи — позиции набивают руками.
+  useEffect(() => {
+    if (autoFocus) {
+      inputRef.current?.focus({ preventScroll: true })
+    }
+  }, [autoFocus])
 
   useEffect(() => {
     if (!portalDropdown || !dropdownOpen) {
@@ -159,36 +184,73 @@ export function ProductCombobox({
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Escape") {
-      event.preventDefault()
-      setOpen(false)
+      if (dropdownOpen) {
+        event.preventDefault()
+        setOpen(false)
+      }
       return
     }
 
-    if (event.key !== "Enter" || !dropdownOpen) {
+    if (!dropdownOpen || results.length === 0) {
       return
     }
 
-    event.preventDefault()
-    const firstResult = results[0]
-    if (firstResult) {
-      selectResult(firstResult)
+    switch (event.key) {
+      case "ArrowDown": {
+        event.preventDefault()
+        setActiveIndex((current) => (current + 1) % results.length)
+        break
+      }
+      case "ArrowUp": {
+        event.preventDefault()
+        setActiveIndex((current) => (current - 1 + results.length) % results.length)
+        break
+      }
+      case "Home": {
+        event.preventDefault()
+        setActiveIndex(0)
+        break
+      }
+      case "End": {
+        event.preventDefault()
+        setActiveIndex(results.length - 1)
+        break
+      }
+      case "Enter": {
+        event.preventDefault()
+        const result = results[activeIndex] ?? results[0]
+        if (result) {
+          selectResult(result)
+        }
+        break
+      }
+      default:
+        break
     }
   }
 
   return (
     <div className="relative min-w-0">
-      <SearchIcon className="pointer-events-none absolute left-3 top-3 size-4 text-muted-foreground" />
+      <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         ref={inputRef}
-        className="h-10 pl-9"
+        className={cn("h-10 pl-9", inputClassName)}
         placeholder={placeholder}
         value={query ?? ""}
         disabled={disabled}
+        role="combobox"
+        aria-expanded={dropdownOpen}
+        aria-controls={dropdownOpen ? listboxId : undefined}
+        aria-autocomplete="list"
+        aria-activedescendant={
+          dropdownOpen && results.length > 0 ? optionId(activeIndex) : undefined
+        }
         onBlur={closeDropdownSoon}
         onChange={(event) => {
           const nextQuery = event.target.value
           setQuery(nextQuery)
           setOpen(nextQuery.trim().length > 0)
+          setActiveIndex(0)
           updateDropdownRect()
         }}
         onFocus={() => {
@@ -205,6 +267,10 @@ export function ProductCombobox({
               <ProductComboboxDropdown
                 results={results}
                 showTypeBadge={includeBouquets && Boolean(onSelectBouquet)}
+                listboxId={listboxId}
+                optionId={optionId}
+                activeIndex={activeIndex}
+                onActivate={setActiveIndex}
                 onSelect={selectResult}
                 className="fixed z-[9999]"
                 style={{
@@ -219,6 +285,10 @@ export function ProductCombobox({
             <ProductComboboxDropdown
               results={results}
               showTypeBadge={includeBouquets && Boolean(onSelectBouquet)}
+              listboxId={listboxId}
+              optionId={optionId}
+              activeIndex={activeIndex}
+              onActivate={setActiveIndex}
               onSelect={selectResult}
               className="absolute left-0 right-0 top-11 z-50"
             />
@@ -230,40 +300,55 @@ export function ProductCombobox({
 function ProductComboboxDropdown({
   results,
   showTypeBadge,
+  listboxId,
+  optionId,
+  activeIndex,
+  onActivate,
   onSelect,
   className,
   style,
 }: {
   results: ProductComboboxResult[]
   showTypeBadge: boolean
+  listboxId: string
+  optionId: (index: number) => string
+  activeIndex: number
+  onActivate: (index: number) => void
   onSelect: (result: ProductComboboxResult) => void
   className?: string
   style?: React.CSSProperties
 }) {
   return (
     <div
-      className={`rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 ${className ?? ""}`}
+      className={`rounded-lg bg-white p-1 text-popover-foreground shadow-xl ring-1 ring-zinc-300 ${className ?? ""}`}
       style={style}
     >
       {results.length > 0 ? (
         <ScrollArea style={{ height: Math.min(results.length * 72, 336) }}>
-          <div className="flex flex-col gap-1">
-            {results.map((result) => (
-              result.type === "product" ? (
+          <div className="flex flex-col gap-1" role="listbox" id={listboxId}>
+            {results.map((result, index) => {
+              const active = index === activeIndex
+              return result.type === "product" ? (
                 <ProductComboboxRow
                   key={`product-${result.product.code}`}
+                  id={optionId(index)}
+                  active={active}
                   product={result.product}
                   showTypeBadge={showTypeBadge}
+                  onActivate={() => onActivate(index)}
                   onSelect={() => onSelect(result)}
                 />
               ) : (
                 <BouquetComboboxRow
                   key={`bouquet-${result.bouquet.id}`}
+                  id={optionId(index)}
+                  active={active}
                   bouquet={result.bouquet}
+                  onActivate={() => onActivate(index)}
                   onSelect={() => onSelect(result)}
                 />
               )
-            ))}
+            })}
           </div>
         </ScrollArea>
       ) : (
@@ -279,20 +364,32 @@ function ProductComboboxDropdown({
 }
 
 function ProductComboboxRow({
+  id,
+  active,
   product,
   showTypeBadge,
+  onActivate,
   onSelect,
 }: {
+  id: string
+  active: boolean
   product: Product
   showTypeBadge: boolean
+  onActivate: () => void
   onSelect: () => void
 }) {
+  const ref = useScrollIntoViewWhenActive(active)
   const hasStockProblem = product.stock < 0
 
   return (
     <button
+      ref={ref}
+      id={id}
+      role="option"
+      aria-selected={active}
       type="button"
-      className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-2 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      className={`grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-2 py-2 text-left text-sm focus-visible:outline-none ${active ? "bg-accent" : "hover:bg-accent"}`}
+      onMouseMove={onActivate}
       onMouseDown={(event) => {
         event.preventDefault()
       }}
@@ -326,18 +423,30 @@ function ProductComboboxRow({
 }
 
 function BouquetComboboxRow({
+  id,
+  active,
   bouquet,
+  onActivate,
   onSelect,
 }: {
+  id: string
+  active: boolean
   bouquet: BouquetTemplate
+  onActivate: () => void
   onSelect: () => void
 }) {
+  const ref = useScrollIntoViewWhenActive(active)
   const availability = getBouquetAvailability(bouquet)
 
   return (
     <button
+      ref={ref}
+      id={id}
+      role="option"
+      aria-selected={active}
       type="button"
-      className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 rounded-md px-2 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 rounded-md px-2 py-2 text-left text-sm focus-visible:outline-none ${active ? "bg-accent" : "hover:bg-accent"}`}
+      onMouseMove={onActivate}
       onMouseDown={(event) => {
         event.preventDefault()
       }}
@@ -365,6 +474,18 @@ function BouquetComboboxRow({
       <span className="shrink-0 text-xs font-medium">{formatMoney(bouquet.price)}</span>
     </button>
   )
+}
+
+function useScrollIntoViewWhenActive(active: boolean) {
+  const ref = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (active) {
+      ref.current?.scrollIntoView({ block: "nearest" })
+    }
+  }, [active])
+
+  return ref
 }
 
 function formatNumber(value: number) {

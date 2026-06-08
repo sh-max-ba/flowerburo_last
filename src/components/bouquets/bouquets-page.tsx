@@ -4,6 +4,8 @@ import { useMemo, useState, useTransition } from "react"
 import { AlertTriangleIcon, PencilIcon, PlusIcon, PowerIcon, Trash2Icon, UploadIcon } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
+import { uploadImageFile } from "@/lib/image-upload"
+import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
 import {
   createBouquetTemplateAction,
   toggleBouquetTemplateActiveAction,
@@ -104,21 +106,12 @@ export function BouquetsPage({
       return
     }
 
-    const formData = new FormData()
-    formData.set("file", imageFile)
     setUploadingImage(true)
 
     try {
-      const response = await fetch(`/api/bouquets/${editing.id}/image`, {
-        method: "POST",
-        body: formData,
-      })
-      const payload = (await response.json()) as { ok?: boolean; message?: string; imagePath?: string }
-      if (!response.ok || !payload.ok || !payload.imagePath) {
-        throw new Error(payload.message || "Фото букета не загружено.")
-      }
+      const imagePath = await uploadImageFile(`/api/bouquets/${editing.id}/image`, imageFile)
 
-      setImagePath(payload.imagePath)
+      setImagePath(imagePath)
       setImageFile(null)
       setImageVersion(Date.now())
       toast.success("Фото букета обновлено")
@@ -221,11 +214,7 @@ export function BouquetsPage({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-zinc-950">Букеты</h1>
-          <p className="text-sm text-muted-foreground">Шаблоны сборки из товаров склада</p>
-        </div>
+      <div className="flex justify-end">
         <Button type="button" onClick={openCreate}>
           <PlusIcon data-icon="inline-start" />
           Новый букет
@@ -239,18 +228,18 @@ export function BouquetsPage({
         </CardHeader>
         <CardContent className="pt-0">
           <Tabs defaultValue="active" className="gap-3">
-            <TabsList className="h-10 w-full justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit">
+            <TabsList className="h-10 w-full justify-start rounded-xl bg-muted p-1 sm:w-fit">
               <TabsTrigger value="active">
                 Активные
-                <Badge variant="secondary" className="h-5 px-1.5 text-xs">
+                <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-200/80 px-1 text-[11px] font-medium tabular-nums text-zinc-700">
                   {activeBouquets.length}
-                </Badge>
+                </span>
               </TabsTrigger>
               <TabsTrigger value="inactive">
                 Неактивные
-                <Badge variant="secondary" className="h-5 px-1.5 text-xs">
+                <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-200/80 px-1 text-[11px] font-medium tabular-nums text-zinc-700">
                   {inactiveBouquets.length}
-                </Badge>
+                </span>
               </TabsTrigger>
             </TabsList>
             <TabsContent value="active">
@@ -591,12 +580,13 @@ function formatDateTime(value: string) {
     return "-"
   }
 
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
+  const date = parseDbInstant(value)
+  if (!date) {
     return value
   }
 
   return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: SHOP_TIME_ZONE,
     day: "2-digit",
     month: "2-digit",
     year: "2-digit",

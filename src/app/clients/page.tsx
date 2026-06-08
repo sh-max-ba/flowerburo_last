@@ -2,7 +2,7 @@ import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { CustomersPage } from "@/components/clients/customers-page"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
-import { getShiftShellContext } from "@/lib/app-shell"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { listCustomers } from "@/lib/crm"
 
 export const dynamic = "force-dynamic"
@@ -21,7 +21,13 @@ export default async function ClientsPage({
   const customers = listCustomers({ search })
 
   return (
-    <CrmShell user={user} active="clients" title="Клиенты" shiftContext={getShiftShellContext(user)}>
+    <CrmShell
+      user={user}
+      active="clients"
+      title="Клиенты"
+      shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
+    >
       <CustomersPage customers={customers} search={search} />
     </CrmShell>
   )

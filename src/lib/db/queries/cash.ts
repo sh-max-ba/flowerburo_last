@@ -1,0 +1,428 @@
+import { numberFromRow } from "@/lib/db-row"
+import type { CurrentUser, PaymentMethod } from "../types"
+import { paymentMethods } from "../types"
+import { db } from "../connection"
+import { addMovement, applyProductDelta, recordCashTransaction } from "../ledger"
+import { clean, parsePaymentMethod, toNumber } from "../form-parsers"
+import { parseForm } from "@/lib/forms/parse"
+import { ManualCashInputSchema } from "@/lib/forms/schemas"
+import {
+  calculateShiftSummary,
+  getDefaultOpeningCash,
+  getOpenShift,
+  getShiftAccessInfo,
+  requireOpenShift,
+} from "./shifts"
+import { getActiveFloristById } from "./users"
+
+export function openShift(formData: FormData, currentUser: CurrentUser) {
+  const client = db()
+
+  const startShift = client.transaction(() => {
+    const opened = getOpenShift(client)
+
+    if (opened) {
+      throw new Error("Открытая смена уже есть.")
+    }
+
+    const rawOpeningCash = clean(formData.get("openingCash"))
+    const cash = rawOpeningCash ? toNumber(rawOpeningCash) : getDefaultOpeningCash(client)
+    const defaultOpeningCash = getDefaultOpeningCash(client)
+    const cashierName = currentUser.name
+    const note = clean(formData.get("note"))
+
+    if (Math.abs(cash - defaultOpeningCash) >= 0.01 && !note) {
+      throw new Error("Укажите комментарий, если начальная наличка отличается от прошлой закрытой смены.")
+    }
+
+    const shift = client
+      .prepare(
+        `INSERT INTO shifts (opening_cash, cashier_name, note, user_id, opened_by_user_id, type)
+         VALUES (?, ?, ?, ?, ?, 'day')`
+      )
+      .run(cash, cashierName, note, currentUser.id, currentUser.id)
+
+    addMovement(client, {
+      userId: currentUser.id,
+      type: "shift_open",
+      total: cash,
+      note: `Открыта смена #${shift.lastInsertRowid}: ${cashierName}`,
+    })
+  })
+
+  startShift()
+}
+
+export function closeShift(formData: FormData, currentUser: CurrentUser) {
+  const client = db()
+  const shiftId = Number(clean(formData.get("shiftId")))
+  const rawClosingCash = clean(formData.get("closingCash"))
+  const cash = toNumber(rawClosingCash)
+  const note = clean(formData.get("note"))
+  const openNightShift = clean(formData.get("openNightShift")) === "1"
+  const nightFloristId = Number(clean(formData.get("nightFloristId")))
+
+  if (!shiftId) {
+    throw new Error("Смена не выбрана.")
+  }
+
+  // Серверная защита: фактическую наличку нужно ввести при ЛЮБОМ закрытии смены
+  // (UI делает поле обязательным, но прямой POST экшена мог бы записать closing_cash=0).
+  if (!rawClosingCash) {
+    throw new Error("Введите фактическую наличку.")
+  }
+
+  const finishShift = client.transaction(() => {
+    if (openNightShift) {
+      if (currentUser.role !== "manager") {
+        throw new Error("Ночную смену может открыть только менеджер при закрытии своей смены.")
+      }
+
+      if (!rawClosingCash) {
+        throw new Error("Введите фактическую наличку для открытия ночной смены.")
+      }
+
+      if (!nightFloristId) {
+        throw new Error("Выберите флориста для ночной смены.")
+      }
+
+      const closingShift = getShiftAccessInfo(shiftId)
+      if (!closingShift || closingShift.status !== "open") {
+        throw new Error("Открытая смена не найдена.")
+      }
+
+      if (closingShift.type !== "day" || closingShift.userId !== currentUser.id) {
+        throw new Error("Ночную смену можно открыть только при закрытии своей дневной смены.")
+      }
+
+      const otherOpenShift = client
+        .prepare("SELECT id FROM shifts WHERE status = 'open' AND id <> ? LIMIT 1")
+        .get(shiftId) as { id: number } | undefined
+
+      if (otherOpenShift) {
+        throw new Error("Открытая смена уже есть.")
+      }
+    }
+
+    const summary = calculateShiftSummary(shiftId, client)
+    if (Math.abs(cash - summary.expectedCash) >= 0.01 && !note) {
+      throw new Error("Укажите комментарий, если фактическая наличка отличается от ожидаемой.")
+    }
+
+    const result = client
+      .prepare(
+        `UPDATE shifts
+         SET status = 'closed', closed_at = CURRENT_TIMESTAMP, closing_cash = ?, note = ?,
+          closed_by_user_id = ?
+         WHERE id = ? AND status = 'open'`
+      )
+      .run(cash, note, currentUser.id, shiftId)
+
+    if (result.changes === 0) {
+      throw new Error("Открытая смена не найдена.")
+    }
+
+    addMovement(client, {
+      userId: currentUser.id,
+      type: "shift_close",
+      total: cash,
+      note: `Закрыта смена #${shiftId}`,
+    })
+
+    if (openNightShift) {
+      const florist = getActiveFloristById(nightFloristId, client)
+      if (!florist) {
+        throw new Error("Флорист не найден или неактивен.")
+      }
+
+      const opened = getOpenShift(client)
+      if (opened) {
+        throw new Error("Открытая смена уже есть.")
+      }
+
+      const nightShift = client
+        .prepare(
+          `INSERT INTO shifts (
+            opening_cash, cashier_name, note, user_id, opened_by_user_id, type
+          ) VALUES (
+            ?, ?, ?, ?, ?, 'night'
+          )`
+        )
+        .run(cash, florist.name, "Ночная смена", florist.id, currentUser.id)
+
+      addMovement(client, {
+        userId: currentUser.id,
+        type: "shift_open",
+        total: cash,
+        note: `Открыта ночная смена #${nightShift.lastInsertRowid}: ${florist.name}`,
+      })
+    }
+  })
+
+  finishShift()
+}
+
+function recordManualCash(formData: FormData, type: "cash_in" | "cash_out", currentUser: CurrentUser) {
+  const client = db()
+  // Скалярные правила amount>0 ("Сумма должна быть больше нуля.") / comment кодирует
+  // ManualCashInputSchema; requireOpenShift остаётся в транзакции.
+  const { amount, comment } = parseForm(ManualCashInputSchema, formData)
+
+  const record = client.transaction(() => {
+    const shift = requireOpenShift(client)
+    recordCashTransaction(client, {
+      shiftId: shift.id,
+      userId: currentUser.id,
+      type,
+      paymentMethod: "cash",
+      amount,
+      comment,
+    })
+  })
+
+  record()
+}
+
+export function cashIn(formData: FormData, currentUser: CurrentUser) {
+  recordManualCash(formData, "cash_in", currentUser)
+}
+
+export function cashOut(formData: FormData, currentUser: CurrentUser) {
+  recordManualCash(formData, "cash_out", currentUser)
+}
+
+// Исправление способа оплаты уже проведённой операции прямо из «Кассы за смену».
+// Менеджеры, не привыкшие к новой логике, иногда выбирают не тот способ — эта правка
+// только ПЕРЕКЛАССИФИЦИРУЕТ платёж по методу, не двигая сумму:
+//  • суммы продаж/заказов и признанная выручка от метода не зависят (остаются прежними);
+//  • «Ожидается в кассе» считается по наличке на лету — после правки оно сходится с фактом;
+//  • правка разрешена ТОЛЬКО в текущей открытой смене (у закрытой фактическая наличка
+//    уже зафиксирована, перекладывать деньги между методами задним числом нельзя).
+// ВАЖНО (касса РЕАЛЬНО ломается в одном случае): приход по заказу, у которого уже есть
+// возврат. refundOrderPayments повторяет способ прихода на момент возврата, образуя
+// сбалансированную пару «приход+возврат». Если сдвинуть метод только у прихода, его возврат
+// (cash_refund) остаётся в старом методе и пара разъезжается → «Ожидается в кассе» уходит в
+// минус/плюс (так смена ушла в −6870 04.06.2026). Поэтому такой приход править ЗАПРЕЩАЕМ
+// (guard ниже): отменённый заказ — терминальное состояние, метод исходного платежа уже не
+// важен для кассы (пара netто = 0). Каждое изменение пишем в movements как аудит-след.
+// target = "sale" (правим продажу + её проводку) | "transaction" (платёж по заказу/сделке).
+export function updatePaymentMethod(formData: FormData, currentUser: CurrentUser) {
+  const client = db()
+  const target = clean(formData.get("target"))
+  const id = Number(clean(formData.get("id")))
+  const paymentMethod = parsePaymentMethod(formData.get("paymentMethod"))
+
+  if (!paymentMethods.has(paymentMethod)) {
+    throw new Error("Некорректный способ оплаты.")
+  }
+
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Операция не найдена.")
+  }
+
+  const apply = client.transaction(() => {
+    const shift = requireOpenShift(client)
+
+    if (target === "sale") {
+      const sale = client
+        .prepare("SELECT shift_id as shiftId, payment_method as paymentMethod, total FROM sales WHERE id = ?")
+        .get(id) as { shiftId: number | null; paymentMethod: PaymentMethod; total: number } | undefined
+      if (!sale) {
+        throw new Error("Продажа не найдена.")
+      }
+      if (numberFromRow(sale.shiftId) !== shift.id) {
+        throw new Error("Способ оплаты можно менять только в текущей смене.")
+      }
+      if (sale.paymentMethod === paymentMethod) {
+        return
+      }
+
+      client.prepare("UPDATE sales SET payment_method = ? WHERE id = ?").run(paymentMethod, id)
+      // Денежная проводка продажи хранит способ оплаты отдельно от строки sales —
+      // держим в синхроне, чтобы разбор кассы по методам остался верным.
+      client
+        .prepare("UPDATE cash_transactions SET payment_method = ? WHERE sale_id = ? AND type = 'sale'")
+        .run(paymentMethod, id)
+      addMovement(client, {
+        userId: currentUser.id,
+        type: "payment_method_change",
+        total: numberFromRow(sale.total),
+        note: `Способ оплаты продажи #${id}: ${sale.paymentMethod} → ${paymentMethod}`,
+      })
+      return
+    }
+
+    if (target === "transaction") {
+      const transaction = client
+        .prepare(
+          "SELECT shift_id as shiftId, type, order_id as orderId, payment_method as paymentMethod, amount FROM cash_transactions WHERE id = ?"
+        )
+        .get(id) as
+        | { shiftId: number | null; type: string; orderId: number | null; paymentMethod: PaymentMethod; amount: number }
+        | undefined
+      if (!transaction) {
+        throw new Error("Операция не найдена.")
+      }
+      if (numberFromRow(transaction.shiftId) !== shift.id) {
+        throw new Error("Способ оплаты можно менять только в текущей смене.")
+      }
+      // Только платежи по заказам/сделкам. Служебные операции (внесение/изъятие/возврат)
+      // и продажи (правятся через target="sale") здесь трогать нельзя.
+      if (
+        transaction.type !== "prepayment" &&
+        transaction.type !== "order_payment" &&
+        transaction.type !== "deal_payment"
+      ) {
+        throw new Error("У этой операции нельзя изменить способ оплаты.")
+      }
+      if (transaction.paymentMethod === paymentMethod) {
+        return
+      }
+      // Guard: приход по заказу, у которого есть возврат (cash_refund), править нельзя —
+      // возврат повторяет старый метод и этой правкой не двигается, так что пара
+      // «приход+возврат» разбалансируется и касса разъезжается. Если метод правда был другим,
+      // правьте до отмены заказа (тогда возврат повторит уже исправленный метод).
+      const orderId = numberFromRow(transaction.orderId)
+      if (orderId) {
+        const refunded = client
+          .prepare("SELECT 1 FROM cash_transactions WHERE order_id = ? AND type = 'cash_refund' LIMIT 1")
+          .get(orderId)
+        if (refunded) {
+          throw new Error(
+            "По этому заказу оформлен возврат — менять способ оплаты прихода нельзя, иначе касса разойдётся."
+          )
+        }
+      }
+
+      client.prepare("UPDATE cash_transactions SET payment_method = ? WHERE id = ?").run(paymentMethod, id)
+      addMovement(client, {
+        userId: currentUser.id,
+        type: "payment_method_change",
+        total: numberFromRow(transaction.amount),
+        note:
+          `Способ оплаты операции #${id}` +
+          (orderId ? ` (заказ #${orderId})` : "") +
+          `: ${transaction.paymentMethod} → ${paymentMethod}`,
+      })
+      return
+    }
+
+    throw new Error("Некорректная операция.")
+  })
+
+  apply()
+}
+
+// Отмена служебной кассовой операции (внесение/изъятие) встречной операцией в ТЕКУЩЕЙ
+// открытой смене. Оригинал помечается через reverses_id у встречной проводки — это защищает
+// от двойной отмены и помечает строку «Отменено» в истории. Деньги физически двигаются
+// сейчас → влияет на expectedCash текущей смены; выручки не касается (cash_in/out не выручка).
+export function reverseCashTransaction(formData: FormData, currentUser: CurrentUser) {
+  const client = db()
+  const id = Number(clean(formData.get("id")))
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Операция не найдена.")
+  }
+
+  const apply = client.transaction(() => {
+    const shift = requireOpenShift(client)
+    const original = client
+      .prepare(
+        "SELECT shift_id as shiftId, type, sale_id as saleId, payment_method as paymentMethod, amount, reverses_id as reversesId FROM cash_transactions WHERE id = ?"
+      )
+      .get(id) as
+      | {
+          shiftId: number | null
+          type: string
+          saleId: number | null
+          paymentMethod: PaymentMethod
+          amount: number
+          reversesId: number | null
+        }
+      | undefined
+    if (!original) {
+      throw new Error("Операция не найдена.")
+    }
+    if (numberFromRow(original.reversesId)) {
+      throw new Error("Это операция отмены — её отменять нельзя.")
+    }
+    const already = client.prepare("SELECT 1 FROM cash_transactions WHERE reverses_id = ? LIMIT 1").get(id)
+    if (already) {
+      throw new Error("Операция уже отменена.")
+    }
+
+    const amount = numberFromRow(original.amount)
+    const originalShiftId = numberFromRow(original.shiftId) || null
+    const crossShiftNote = originalShiftId && originalShiftId !== shift.id ? ` (за смену #${originalShiftId})` : ""
+
+    // Ручные внесения/изъятия — встречной операцией (выручки/склада не касается).
+    if (original.type === "cash_in" || original.type === "cash_out") {
+      const counterType = original.type === "cash_in" ? "cash_out" : "cash_in"
+      recordCashTransaction(client, {
+        shiftId: shift.id,
+        userId: currentUser.id,
+        reversesId: id,
+        type: counterType,
+        paymentMethod: original.paymentMethod,
+        amount,
+        comment: `Отмена операции #${id}${crossShiftNote}`,
+      })
+      addMovement(client, {
+        userId: currentUser.id,
+        type: "cash_reversal",
+        total: amount,
+        note: `Отмена операции #${id}: ${original.type} → ${counterType}`,
+      })
+      return
+    }
+
+    // Сторно быстрой продажи: возврат денег тем же способом (для expectedCash и выручки по
+    // методам — cash_refund с source_shift_id = смена продажи), исключение продажи из выручки
+    // (reversed_at) и возврат товара на склад.
+    if (original.type === "sale") {
+      const saleId = numberFromRow(original.saleId)
+      if (!saleId) {
+        throw new Error("Продажа не найдена.")
+      }
+      recordCashTransaction(client, {
+        shiftId: shift.id,
+        saleId,
+        sourceShiftId: originalShiftId,
+        userId: currentUser.id,
+        reversesId: id,
+        type: "cash_refund",
+        paymentMethod: original.paymentMethod,
+        amount,
+        comment: `Сторно продажи #${saleId}${crossShiftNote}`,
+      })
+      client.prepare("UPDATE sales SET reversed_at = CURRENT_TIMESTAMP WHERE id = ?").run(saleId)
+      const saleItems = client
+        .prepare("SELECT product_code as productCode, qty FROM sale_items WHERE sale_id = ?")
+        .all(saleId) as Array<{ productCode: string; qty: number }>
+      for (const item of saleItems) {
+        applyProductDelta(client, {
+          productCode: item.productCode,
+          stockDelta: numberFromRow(item.qty),
+          type: "adjustment",
+          qty: numberFromRow(item.qty),
+          saleId,
+          shiftId: shift.id,
+          userId: currentUser.id,
+          comment: `Сторно продажи #${saleId}`,
+        })
+      }
+      addMovement(client, {
+        userId: currentUser.id,
+        type: "cash_reversal",
+        total: amount,
+        note: `Сторно продажи #${saleId}`,
+      })
+      return
+    }
+
+    // Оплаты по заказам — через отмену заказа (№7); возврат — через откат возврата (этап C).
+    throw new Error("Эту операцию здесь отменить нельзя.")
+  })
+
+  apply()
+}

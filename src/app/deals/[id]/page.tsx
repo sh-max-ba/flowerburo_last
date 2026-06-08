@@ -3,9 +3,10 @@ import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { DealDetailPage } from "@/components/deals/deal-detail-page"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
-import { getShiftShellContext } from "@/lib/app-shell"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDeal, listCustomers, listDealOrders, listDealStages, listProducts } from "@/lib/crm"
-import { getOpenShift, listBouquetTemplates, listDealBouquetMessages, listUsers } from "@/lib/db"
+import { getOpenShift, listBouquetTemplates, listUsers } from "@/lib/db"
+import { getWazzupSettingsForServer } from "@/lib/wazzup"
 
 export const dynamic = "force-dynamic"
 
@@ -32,6 +33,7 @@ export default async function DealDetailRoute({ params }: { params: Promise<{ id
       active="deals"
       title={`Сделка ${deal.number || `#${deal.id}`}`}
       shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
     >
       <DealDetailPage
         deal={deal}
@@ -40,9 +42,9 @@ export default async function DealDetailRoute({ params }: { params: Promise<{ id
         users={listUsers().filter((item) => item.isActive)}
         products={listProducts()}
         bouquets={listBouquetTemplates({ activeOnly: true })}
-        bouquetMessages={listDealBouquetMessages(deal.id)}
         dealOrders={listDealOrders(deal.id)}
         openShift={getOpenShift() ?? null}
+        chatMode={getWazzupSettingsForServer().chatMode}
       />
     </CrmShell>
   )

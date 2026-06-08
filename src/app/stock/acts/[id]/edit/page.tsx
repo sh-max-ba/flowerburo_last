@@ -1,8 +1,10 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { AccessDenied } from "@/components/access-denied"
+import { CrmShell } from "@/components/crm-shell"
 import { StockDocumentForm } from "@/components/stock/stock-document-form"
 import { buttonVariants } from "@/components/ui/button"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getDashboardData, getStockDocument } from "@/lib/db"
 
@@ -31,20 +33,22 @@ export default async function EditStockActPage({ params }: PageProps<"/stock/act
   )
 
   return (
-    <main className="min-h-screen bg-zinc-50 p-4 md:p-6">
-      <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Редактировать акт {document.number}</h1>
-            <p className="text-sm text-muted-foreground">Черновик можно сохранить или провести.</p>
-          </div>
+    <CrmShell
+      user={user}
+      active="stock-acts"
+      title={`Редактировать акт ${document.number}`}
+      shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
+    >
+      <div className="flex w-full flex-col gap-4">
+        <div className="flex justify-end">
           <Link href={`/stock/acts/${document.id}`} className={buttonVariants({ variant: "outline" })}>
             К акту
           </Link>
         </div>
         <StockDocumentForm document={document} products={data.products} suppliers={suppliers} />
       </div>
-    </main>
+    </CrmShell>
   )
 }
 

@@ -6,8 +6,9 @@ import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { getShiftShellContext } from "@/lib/app-shell"
+import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
+import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
 import { getHistoryReportData, type Movement } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
@@ -21,7 +22,13 @@ export default async function StockMovementsPage() {
   const report = getHistoryReportData()
 
   return (
-    <CrmShell user={user} active="history" title="История склада" shiftContext={getShiftShellContext(user)}>
+    <CrmShell
+      user={user}
+      active="history"
+      title="История склада"
+      shiftContext={getShiftShellContext(user)}
+      defaultSidebarOpen={await getSidebarDefaultOpen()}
+    >
       <div className="flex justify-end">
         <Link href="/stock" className={buttonVariants({ variant: "outline", size: "sm" })}>
           Вернуться на склад
@@ -149,10 +156,6 @@ function formatNumber(value: number) {
 }
 
 function formatDateTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-
-  return date.toLocaleString("ru-RU")
+  const date = parseDbInstant(value)
+  return date ? date.toLocaleString("ru-RU", { timeZone: SHOP_TIME_ZONE }) : value
 }
