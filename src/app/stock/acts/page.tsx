@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { BanIcon, CheckCircle2Icon, FileEditIcon, MinusCircleIcon, PlusCircleIcon } from "lucide-react"
+import { BanIcon, CheckCircle2Icon, FileEditIcon, MinusCircleIcon, PlusCircleIcon, RotateCcwIcon } from "lucide-react"
 import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { Badge } from "@/components/ui/badge"
@@ -56,6 +56,7 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
     { value: "all", label: "Все статусы" },
     { value: "draft", label: "Черновики" },
     { value: "posted", label: "Проведенные" },
+    { value: "corrected", label: "Скорректированные" },
     { value: "cancelled", label: "Отмененные" },
   ]
   const typeChips = [
@@ -234,7 +235,9 @@ function StockDocumentStatusBadge({ status }: { status: StockDocumentStatus }) {
       ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-50"
       : status === "draft"
         ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-50"
-        : ""
+        : status === "corrected"
+          ? "border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-50"
+          : ""
 
   return (
     <Badge variant={status === "cancelled" ? "destructive" : "outline"} className={className}>
@@ -242,6 +245,8 @@ function StockDocumentStatusBadge({ status }: { status: StockDocumentStatus }) {
         <CheckCircle2Icon data-icon="inline-start" />
       ) : status === "draft" ? (
         <FileEditIcon data-icon="inline-start" />
+      ) : status === "corrected" ? (
+        <RotateCcwIcon data-icon="inline-start" />
       ) : (
         <BanIcon data-icon="inline-start" />
       )}

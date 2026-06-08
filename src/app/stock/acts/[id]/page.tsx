@@ -3,6 +3,7 @@ import { notFound } from "next/navigation"
 import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { StockDocumentActions } from "@/components/stock/stock-document-actions"
+import { CreateStockCorrectionButton } from "@/components/stock/create-stock-correction-button"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -79,10 +80,53 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
           </CardContent>
         </Card>
 
-        {document.status === "posted" && (
+        {document.correctsDocumentId != null && (
+          <Card className="rounded-2xl border border-indigo-200 bg-indigo-50/40">
+            <CardContent className="pt-6 text-sm">
+              Корректировка{" "}
+              <Link href={`/stock/acts/${document.correctsDocumentId}`} className="font-medium underline">
+                исходного акта
+              </Link>
+              . Проведение откатит исходный приход и применит исправленные позиции.
+            </CardContent>
+          </Card>
+        )}
+
+        {document.status === "posted" && isStockIn && document.correctedByDocumentId == null && (
+          <Card className="rounded-2xl border bg-white">
+            <CardContent className="flex flex-col items-start gap-3 pt-6">
+              <p className="text-sm text-muted-foreground">
+                Проведённый акт нельзя редактировать. Создайте корректировку — она откатит этот приход и
+                применит исправленные позиции. Себестоимость при корректировке не пересчитывается автоматически.
+              </p>
+              <CreateStockCorrectionButton documentId={document.id} />
+            </CardContent>
+          </Card>
+        )}
+
+        {document.status === "posted" && !isStockIn && (
           <Card className="rounded-2xl border bg-white">
             <CardContent className="pt-6 text-sm text-muted-foreground">
               Проведенный акт нельзя редактировать. Для исправления создайте обратный акт.
+            </CardContent>
+          </Card>
+        )}
+
+        {document.status === "corrected" && (
+          <Card className="rounded-2xl border bg-white">
+            <CardContent className="pt-6 text-sm text-muted-foreground">
+              Акт скорректирован.
+              {document.correctedByDocumentId != null && (
+                <>
+                  {" "}
+                  <Link
+                    href={`/stock/acts/${document.correctedByDocumentId}`}
+                    className="font-medium text-foreground underline"
+                  >
+                    Открыть корректировку
+                  </Link>
+                </>
+              )}
             </CardContent>
           </Card>
         )}
@@ -284,7 +328,9 @@ function StockDocumentStatusBadge({ status }: { status: StockDocumentStatus }) {
       ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-50"
       : status === "draft"
         ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-50"
-        : ""
+        : status === "corrected"
+          ? "border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-50"
+          : ""
 
   return (
     <Badge variant={status === "cancelled" ? "destructive" : "outline"} className={className}>

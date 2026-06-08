@@ -210,6 +210,16 @@ export function StockDocumentForm({
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
       <input type="hidden" name="documentId" value={document.id} />
+      {document.correctsDocumentId != null && (
+        <Alert className="border-indigo-200 bg-indigo-50 text-indigo-950">
+          <AlertTriangleIcon />
+          <AlertTitle>Корректировка приходного акта</AlertTitle>
+          <AlertDescription>
+            При проведении исходный приход будет откатан, а эти позиции — применены. Себестоимость при
+            корректировке не пересчитывается автоматически.
+          </AlertDescription>
+        </Alert>
+      )}
       <Card className="rounded-2xl border bg-white">
         <CardHeader>
           <CardTitle>Редактирование черновика</CardTitle>
