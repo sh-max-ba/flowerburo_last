@@ -5,10 +5,10 @@ import {
   createSessionRecord,
   deleteSessionRecord,
   getCurrentUserById,
+  getOpenShift,
   getShiftAccessInfo,
   getUserByLogin,
   getUserBySessionToken,
-  userHasOpenNightShift,
   type CurrentUser,
   type UserRole,
 } from "@/lib/db"
@@ -186,7 +186,10 @@ export async function canUseCash(user: CurrentUser) {
     return true
   }
 
-  return user.role === "florist" && userHasOpenNightShift(user.id)
+  // Флорист работает на кассе при ЛЮБОЙ открытой смене (день/ночь, кем бы ни открыта). Операция
+  // всё равно атрибутируется на user_id флориста. Касса завязана на единственную открытую смену
+  // (getOpenShift LIMIT 1), поэтому проверки её наличия достаточно.
+  return user.role === "florist" && Boolean(getOpenShift())
 }
 
 export function canCloseShift(user: CurrentUser, shiftId: number) {
@@ -203,5 +206,7 @@ export function canCloseShift(user: CurrentUser, shiftId: number) {
     return shift.type === "night" || (shift.type === "day" && shift.userId === user.id)
   }
 
-  return shift.type === "night" && shift.userId === user.id
+  // Флорист закрывает СВОЮ смену (которую сам открыл — type='day' — или назначенную ночную).
+  // Привязка к shift.userId не даёт закрыть чужую смену.
+  return shift.userId === user.id
 }

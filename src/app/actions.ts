@@ -922,7 +922,9 @@ export async function createSaleAction(formData: FormData) {
 
 export async function openShiftAction(formData: FormData) {
   return runAction(async () => {
-    const user = await requireActionRole(["owner", "manager"])
+    // Все роли могут открыть смену (флорист — свою дневную). Бизнес-правила (единственная открытая
+    // смена, type='day', user_id=self) обеспечивает openShift в db-слое.
+    const user = await requireActionUser()
     openShift(formData, user)
   }, "Смена открыта.")
 }

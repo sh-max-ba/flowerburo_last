@@ -15,6 +15,15 @@ import {
 } from "./shifts"
 import { getActiveFloristById } from "./users"
 
+// Флорист может изменять только СВОИ кассовые операции (сторно / смена способа оплаты) — чтобы при
+// общей кассе (несколько операторов в одной открытой смене) флорист не правил чужие операции.
+// owner/manager — без ограничений. Атрибуция остаётся в отчёте (свод по операторам).
+function assertFloristEditsOwn(currentUser: CurrentUser, operationUserId: unknown) {
+  if (currentUser.role === "florist" && numberFromRow(operationUserId) !== currentUser.id) {
+    throw new Error("Флорист может изменять только свои операции.")
+  }
+}
+
 export function openShift(formData: FormData, currentUser: CurrentUser) {
   const client = db()
 
@@ -225,14 +234,19 @@ export function updatePaymentMethod(formData: FormData, currentUser: CurrentUser
 
     if (target === "sale") {
       const sale = client
-        .prepare("SELECT shift_id as shiftId, payment_method as paymentMethod, total FROM sales WHERE id = ?")
-        .get(id) as { shiftId: number | null; paymentMethod: PaymentMethod; total: number } | undefined
+        .prepare(
+          "SELECT shift_id as shiftId, user_id as userId, payment_method as paymentMethod, total FROM sales WHERE id = ?"
+        )
+        .get(id) as
+        | { shiftId: number | null; userId: number | null; paymentMethod: PaymentMethod; total: number }
+        | undefined
       if (!sale) {
         throw new Error("Продажа не найдена.")
       }
       if (numberFromRow(sale.shiftId) !== shift.id) {
         throw new Error("Способ оплаты можно менять только в текущей смене.")
       }
+      assertFloristEditsOwn(currentUser, sale.userId)
       if (sale.paymentMethod === paymentMethod) {
         return
       }
@@ -255,10 +269,17 @@ export function updatePaymentMethod(formData: FormData, currentUser: CurrentUser
     if (target === "transaction") {
       const transaction = client
         .prepare(
-          "SELECT shift_id as shiftId, type, order_id as orderId, payment_method as paymentMethod, amount FROM cash_transactions WHERE id = ?"
+          "SELECT shift_id as shiftId, user_id as userId, type, order_id as orderId, payment_method as paymentMethod, amount FROM cash_transactions WHERE id = ?"
         )
         .get(id) as
-        | { shiftId: number | null; type: string; orderId: number | null; paymentMethod: PaymentMethod; amount: number }
+        | {
+            shiftId: number | null
+            userId: number | null
+            type: string
+            orderId: number | null
+            paymentMethod: PaymentMethod
+            amount: number
+          }
         | undefined
       if (!transaction) {
         throw new Error("Операция не найдена.")
@@ -266,6 +287,7 @@ export function updatePaymentMethod(formData: FormData, currentUser: CurrentUser
       if (numberFromRow(transaction.shiftId) !== shift.id) {
         throw new Error("Способ оплаты можно менять только в текущей смене.")
       }
+      assertFloristEditsOwn(currentUser, transaction.userId)
       // Только платежи по заказам/сделкам. Служебные операции (внесение/изъятие/возврат)
       // и продажи (правятся через target="sale") здесь трогать нельзя.
       if (
@@ -328,11 +350,12 @@ export function reverseCashTransaction(formData: FormData, currentUser: CurrentU
     const shift = requireOpenShift(client)
     const original = client
       .prepare(
-        "SELECT shift_id as shiftId, type, sale_id as saleId, payment_method as paymentMethod, amount, reverses_id as reversesId FROM cash_transactions WHERE id = ?"
+        "SELECT shift_id as shiftId, user_id as userId, type, sale_id as saleId, payment_method as paymentMethod, amount, reverses_id as reversesId FROM cash_transactions WHERE id = ?"
       )
       .get(id) as
       | {
           shiftId: number | null
+          userId: number | null
           type: string
           saleId: number | null
           paymentMethod: PaymentMethod
@@ -343,6 +366,7 @@ export function reverseCashTransaction(formData: FormData, currentUser: CurrentU
     if (!original) {
       throw new Error("Операция не найдена.")
     }
+    assertFloristEditsOwn(currentUser, original.userId)
     if (numberFromRow(original.reversesId)) {
       throw new Error("Это операция отмены — её отменять нельзя.")
     }

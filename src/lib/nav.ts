@@ -39,7 +39,7 @@ export type NavGroup = {
 // (backoffice.tsx roleSectionIds + florist/cash override, crm-shell navItems,
 // backoffice-route canAccessSection). НЕ расширять и НЕ сужать без отдельной задачи.
 // florist получает только "orders"; доступ к "sales" (Касса) — особый случай,
-// разрешён лишь при открытой ночной смене (canAccessCash) — см. getNavForRole.
+// разрешён при ЛЮБОЙ открытой смене (canAccessCash = canUseCash) — см. getNavForRole.
 export const NAV: NavItem[] = [
   { id: "dashboard", label: "Дашборд", href: "/dashboard", iconKey: "dashboard", roles: ["owner"] },
   { id: "deals", label: "Сделки", href: "/deals", iconKey: "deals", roles: ["owner", "manager"] },
@@ -86,7 +86,7 @@ export const NAV_BY_HREF: Record<string, NavItem> = NAV.reduce(
 
 // Доступ к конкретному разделу. Воспроизводит ОБЪЕДИНЕНИЕ текущих правил:
 // owner — всё; manager — все его разделы из NAV; florist — только "orders",
-// плюс "sales" при открытой ночной смене (canAccessCash).
+// плюс "sales" при любой открытой смене (canAccessCash).
 export function canAccessSection(
   section: NavSectionId,
   role: UserRole,

@@ -18,7 +18,12 @@ export function getShiftShellContext(user: CurrentUser): ShiftShellContext {
     activeFlorists: getActiveFlorists(),
     openShift,
     openShiftDetails,
-    canManageShift: openShift ? canCloseShift(user, openShift.id) : user.role === "owner" || user.role === "manager",
+    // Нет открытой смены → показываем кнопку «Открыть смену» всем, кто работает на кассе
+    // (owner/manager/florist). Открытие защищено единственной-открытой-сменой; флорист открывает
+    // свою дневную. Закрытие чужой смены отсекает server-side canCloseShift.
+    canManageShift: openShift
+      ? canCloseShift(user, openShift.id)
+      : user.role === "owner" || user.role === "manager" || user.role === "florist",
   }
 }
 
@@ -36,7 +41,12 @@ export function buildShiftShellContext(
     openShiftDetails: openShift
       ? data.shiftDetails.find((detail) => detail.shift.id === openShift.id) ?? null
       : null,
-    canManageShift: openShift ? canCloseShift(user, openShift.id) : user.role === "owner" || user.role === "manager",
+    // Нет открытой смены → показываем кнопку «Открыть смену» всем, кто работает на кассе
+    // (owner/manager/florist). Открытие защищено единственной-открытой-сменой; флорист открывает
+    // свою дневную. Закрытие чужой смены отсекает server-side canCloseShift.
+    canManageShift: openShift
+      ? canCloseShift(user, openShift.id)
+      : user.role === "owner" || user.role === "manager" || user.role === "florist",
   }
 }
 

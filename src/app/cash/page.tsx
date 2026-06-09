@@ -10,13 +10,17 @@ export const dynamic = "force-dynamic"
 
 export default async function Page() {
   const user = await requireUser()
-  // Доступ к кассе: owner/manager — всегда; florist — только при открытой ночной смене.
+  // Доступ к кассе: owner/manager — всегда; florist — при ЛЮБОЙ открытой смене.
   const canAccessCash = await canUseCash(user)
-  if (!canAccessSection("sales", user.role, canAccessCash)) {
+  const data = getDashboardData()
+  // Chicken-and-egg: без открытой смены canAccessCash=false, но флористу нужно попасть на страницу,
+  // чтобы ОТКРЫТЬ смену. Пускаем florist'а, когда открытой смены нет; кассовые операции при этом
+  // всё равно заблокированы requireCashAccess (canUseCash=false без смены).
+  const floristCanOpenShift = user.role === "florist" && !data.stats.openShift
+  if (!canAccessSection("sales", user.role, canAccessCash) && !floristCanOpenShift) {
     return <AccessDenied homeHref={getDefaultPathForRole(user.role)} />
   }
 
-  const data = getDashboardData()
   const activeFlorists = getActiveFlorists()
 
   return (
