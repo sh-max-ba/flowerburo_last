@@ -41,7 +41,8 @@ export default async function Page({ params }: PageProps<"/shifts/[id]">) {
 
 function getShiftDetailsOrNull(shiftId: number) {
   try {
-    return getShiftDetails(shiftId)
+    // Страница отчёта по смене (owner) — включаем свод по операторам.
+    return getShiftDetails(shiftId, undefined, { includeOperators: true })
   } catch {
     return null
   }

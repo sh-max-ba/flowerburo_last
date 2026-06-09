@@ -5,6 +5,7 @@ import { normalizeDiscountType } from "@/lib/pricing"
 import type {
   CashTransaction,
   CashTransactionType,
+  OperatorSummary,
   OrderItem,
   PaymentMethod,
   SaleItem,
@@ -257,7 +258,102 @@ export function calculateShiftSummary(shiftId: number, client: Database.Database
   return summary
 }
 
-export function getShiftDetails(shiftId: number, client: Database.Database = db()): ShiftDetails {
+// Итоги по операторам за смену (атрибуция «кто сколько провёл»). Группировка по user_id операций.
+// Продажи — из sales (без сторнированных). Кассовые проводки — по типу; курьерские выплаты (cash_out
+// с order_id) отделены от ручных изъятий. Возвращаем только операторов с ненулевой активностью.
+export function calculateOperatorSummaries(shiftId: number, client: Database.Database = db()): OperatorSummary[] {
+  const map = new Map<string, OperatorSummary>()
+  const keyOf = (userId: number | null) => (userId == null ? "null" : String(userId))
+  const ensure = (userId: number | null, userName: string): OperatorSummary => {
+    const key = keyOf(userId)
+    let entry = map.get(key)
+    if (!entry) {
+      entry = {
+        userId,
+        userName: userName.trim() || "не зафиксирован",
+        salesCount: 0,
+        salesTotal: 0,
+        orderPaymentsTotal: 0,
+        cashInTotal: 0,
+        cashOutTotal: 0,
+        courierPayoutTotal: 0,
+        refundTotal: 0,
+      }
+      map.set(key, entry)
+    } else if (entry.userName === "не зафиксирован" && userName.trim()) {
+      entry.userName = userName.trim()
+    }
+    return entry
+  }
+
+  const salesRows = client
+    .prepare(
+      `SELECT sales.user_id as userId, COALESCE(users.name, '') as userName,
+        COUNT(*) as cnt, COALESCE(SUM(sales.total), 0) as total
+       FROM sales LEFT JOIN users ON users.id = sales.user_id
+       WHERE sales.shift_id = ? AND sales.reversed_at IS NULL
+       GROUP BY sales.user_id`
+    )
+    .all(shiftId) as Array<{ userId: number | null; userName: string; cnt: number; total: number }>
+  for (const row of salesRows) {
+    const userId = row.userId == null ? null : numberFromRow(row.userId)
+    const entry = ensure(userId, String(row.userName ?? ""))
+    entry.salesCount += numberFromRow(row.cnt)
+    entry.salesTotal += numberFromRow(row.total)
+  }
+
+  const cashRows = client
+    .prepare(
+      `SELECT cash_transactions.user_id as userId, COALESCE(users.name, '') as userName,
+        cash_transactions.type as type, (cash_transactions.order_id IS NOT NULL) as hasOrder,
+        COALESCE(SUM(cash_transactions.amount), 0) as total
+       FROM cash_transactions LEFT JOIN users ON users.id = cash_transactions.user_id
+       WHERE cash_transactions.shift_id = ?
+       GROUP BY cash_transactions.user_id, cash_transactions.type, hasOrder`
+    )
+    .all(shiftId) as Array<{
+    userId: number | null
+    userName: string
+    type: string
+    hasOrder: number
+    total: number
+  }>
+  for (const row of cashRows) {
+    const userId = row.userId == null ? null : numberFromRow(row.userId)
+    const entry = ensure(userId, String(row.userName ?? ""))
+    const total = numberFromRow(row.total)
+    if (row.type === "prepayment" || row.type === "order_payment" || row.type === "deal_payment") {
+      entry.orderPaymentsTotal += total
+    } else if (row.type === "cash_in") {
+      entry.cashInTotal += total
+    } else if (row.type === "cash_out") {
+      if (numberFromRow(row.hasOrder) === 1) {
+        entry.courierPayoutTotal += total
+      } else {
+        entry.cashOutTotal += total
+      }
+    } else if (row.type === "cash_refund") {
+      entry.refundTotal += total
+    }
+    // type === 'sale' учтён через таблицу sales (salesTotal), здесь не дублируем.
+  }
+
+  return Array.from(map.values()).filter(
+    (operator) =>
+      operator.salesCount > 0 ||
+      operator.orderPaymentsTotal !== 0 ||
+      operator.cashInTotal !== 0 ||
+      operator.cashOutTotal !== 0 ||
+      operator.courierPayoutTotal !== 0 ||
+      operator.refundTotal !== 0
+  )
+}
+
+export function getShiftDetails(
+  shiftId: number,
+  client: Database.Database = db(),
+  options: { includeOperators?: boolean } = {}
+): ShiftDetails {
   const shiftRow = client
     .prepare(
       `SELECT id, opened_at as openedAt, closed_at as closedAt, opening_cash as openingCash,
@@ -557,6 +653,9 @@ export function getShiftDetails(shiftId: number, client: Database.Database = db(
     relatedOrders: relatedOrderRows.map((order) =>
       rowToShiftRelatedOrder(order, orderItemsByOrderId.get(numberFromRow(order.orderId)) ?? [])
     ),
+    // Свод по операторам считаем только по требованию (опция) — getShiftDetails вызывается для каждой
+    // смены в дашборде, поэтому по умолчанию пропускаем (perf). Включаем на странице отчёта /shifts/[id].
+    operatorSummaries: options.includeOperators ? calculateOperatorSummaries(shiftId, client) : [],
   }
 }
 

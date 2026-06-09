@@ -596,6 +596,21 @@ export type ShiftRelatedOrder = {
   items: OrderItem[]
 }
 
+// Итоги по оператору в смене (атрибуция «кто сколько провёл»). Суммы — положительные величины
+// (как хранятся в cash_transactions). netToCash намеренно НЕ считаем: касса сходится только на
+// уровне смены (expectedCash), а по-оператору это разбило бы кросс-сменные возвраты.
+export type OperatorSummary = {
+  userId: number | null
+  userName: string
+  salesCount: number
+  salesTotal: number
+  orderPaymentsTotal: number
+  cashInTotal: number
+  cashOutTotal: number
+  courierPayoutTotal: number
+  refundTotal: number
+}
+
 export type ShiftDetails = {
   shift: Shift
   cashier: string
@@ -604,6 +619,7 @@ export type ShiftDetails = {
   cashTransactions: CashTransaction[]
   sales: ShiftSale[]
   relatedOrders: ShiftRelatedOrder[]
+  operatorSummaries: OperatorSummary[]
 }
 
 export type DashboardData = {

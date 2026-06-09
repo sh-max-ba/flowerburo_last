@@ -266,6 +266,10 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
           </CardContent>
         </Card>
 
+        {detail.operatorSummaries.length > 0 && (
+          <OperatorSummaryCard operators={detail.operatorSummaries} />
+        )}
+
         <ShiftSalesCard sales={detail.sales} />
 
         <ShiftOrderPaymentsCard orders={detail.relatedOrders} />
@@ -390,6 +394,49 @@ function FormulaCard({ detail, compact }: { detail: ShiftDetails; compact?: bool
                 <TableCell className="font-semibold">Ожидается в кассе</TableCell>
                 <TableCell className="text-right font-semibold">{formatMoney(detail.summary.expectedCash)}</TableCell>
               </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function OperatorSummaryCard({ operators }: { operators: ShiftDetails["operatorSummaries"] }) {
+  return (
+    <Card className="rounded-2xl border bg-white">
+      <CardHeader>
+        <CardTitle>Итоги по операторам</CardTitle>
+        <CardDescription>Кто сколько провёл за смену (атрибуция по операциям)</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="min-w-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Оператор</TableHead>
+                <TableHead className="text-right">Продажи (шт)</TableHead>
+                <TableHead className="text-right">Продажи (сумма)</TableHead>
+                <TableHead className="text-right">Оплаты заказов</TableHead>
+                <TableHead className="text-right">Внесения</TableHead>
+                <TableHead className="text-right">Изъятия</TableHead>
+                <TableHead className="text-right">Курьерам</TableHead>
+                <TableHead className="text-right">Возвраты</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {operators.map((operator) => (
+                <TableRow key={operator.userId ?? "null"}>
+                  <TableCell className="font-medium">{operationUser(operator.userName)}</TableCell>
+                  <TableCell className="text-right">{operator.salesCount}</TableCell>
+                  <TableCell className="text-right">{formatMoney(operator.salesTotal)}</TableCell>
+                  <TableCell className="text-right">{formatMoney(operator.orderPaymentsTotal)}</TableCell>
+                  <TableCell className="text-right">{formatMoney(operator.cashInTotal)}</TableCell>
+                  <TableCell className="text-right">{formatMoney(operator.cashOutTotal)}</TableCell>
+                  <TableCell className="text-right">{formatMoney(operator.courierPayoutTotal)}</TableCell>
+                  <TableCell className="text-right">{formatMoney(operator.refundTotal)}</TableCell>
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
         </div>
