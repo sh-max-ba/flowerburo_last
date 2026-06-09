@@ -368,7 +368,7 @@ export async function recalcInventoryExpectedAction(documentId: number) {
       recalcInventoryExpected(documentId)
       revalidateInventory(documentId)
     },
-    "Расчётный остаток пересчитан."
+    "Учётные остатки обновлены."
   )
 }
 

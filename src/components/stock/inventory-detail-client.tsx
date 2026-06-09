@@ -227,8 +227,15 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
                 Показано {visibleItems.length} из {doc.items.length}
               </span>
               {isDraft && (
-                <Button type="button" variant="outline" size="sm" onClick={bulkFillExpected} disabled={pending}>
-                  Принять расчётный для несосчитанных
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={bulkFillExpected}
+                  disabled={pending}
+                  title="Незаполненным позициям из показанных проставить факт = учётному остатку (они совпали с системой)"
+                >
+                  Остальные совпадают
                 </Button>
               )}
             </div>
@@ -237,7 +244,7 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
             <TableHeader>
               <TableRow>
                 <TableHead>Товар</TableHead>
-                <TableHead className="text-right">Расчётный</TableHead>
+                <TableHead className="text-right">Учётный</TableHead>
                 {isDraft ? (
                   <>
                     <TableHead className="text-right">Текущий</TableHead>
@@ -293,9 +300,9 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
                             className="h-8 px-2 text-xs"
                             onClick={() => quickFill(item)}
                             disabled={pending}
-                            title="Факт = расчётному"
+                            title="Поставить факт = учётному остатку (позиция совпала)"
                           >
-                            =расч.
+                            совпало
                           </Button>
                         </div>
                       </TableCell>
@@ -356,8 +363,9 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
             variant="outline"
             onClick={() => runAction(() => recalcInventoryExpectedAction(doc.id))}
             disabled={pending}
+            title="Подтянуть текущие остатки из системы в колонку «Учётный» (если остатки меняли после старта инвентаризации)"
           >
-            Пересчитать расчётный
+            Обновить учётные остатки
           </Button>
           <Button
             type="button"
