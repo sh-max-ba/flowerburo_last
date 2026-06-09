@@ -25,6 +25,7 @@ import {
   cashOutAction,
   createCashCustomerAction,
   createOrderAction,
+  createOrderDraftAction,
   createSaleAction,
   updatePaymentMethodAction,
 } from "@/app/actions"
@@ -217,12 +218,14 @@ export function CashPage({ data }: { data: DashboardData }) {
         shiftOpen={Boolean(openShift)}
         items={items}
         setItems={setItems}
-        onSubmit={(event, after) =>
-          submitForm(event, createOrderAction, () => {
+        onSubmit={(event, after) => {
+          const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLElement | null
+          const action = submitter?.getAttribute("data-intent") === "draft" ? createOrderDraftAction : createOrderAction
+          submitForm(event, action, () => {
             after?.()
             setOrderOpen(false)
           })
-        }
+        }}
       />
 
       <ShiftDetailsSheet
@@ -1149,6 +1152,14 @@ function NewOrderForm({
   }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    // Черновик (data-intent="draft"): минимум — имя клиента; позиции/смена/предоплата необязательны,
+    // полная валидация — при отправке в работу. Пропускаем строгие проверки и отдаём наверх.
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLElement | null
+    if (submitter?.getAttribute("data-intent") === "draft") {
+      onSubmit(event, resetForm)
+      return
+    }
+
     const validationError = validateProductLineItems(items)
     if (validationError) {
       event.preventDefault()
@@ -1542,6 +1553,7 @@ function NewOrderForm({
                   <Button
                     className="h-11 w-full border-brand bg-brand text-white shadow-sm hover:border-brand-strong hover:bg-brand-strong"
                     type="submit"
+                    data-intent="create"
                     disabled={orderDisabled}
                   >
                     {pending ? (
@@ -1559,6 +1571,17 @@ function NewOrderForm({
                 )}
               </Tooltip>
             </TooltipProvider>
+            {/* Черновик: недоформленный заказ (минимум — имя клиента), без резерва склада. Доступен
+                даже без позиций/смены, поэтому НЕ гейтится orderDisabled. */}
+            <Button
+              type="submit"
+              data-intent="draft"
+              variant="outline"
+              className="h-10 w-full"
+              disabled={pending}
+            >
+              Сохранить черновик
+            </Button>
           </div>
         </div>
       </form>

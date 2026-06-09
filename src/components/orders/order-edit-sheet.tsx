@@ -4,7 +4,7 @@ import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { CalendarIcon, ClockIcon, Loader2Icon } from "lucide-react"
 import { toast } from "sonner"
-import { updateOrderAction } from "@/app/actions"
+import { updateOrderAction, updateOrderDraftAction } from "@/app/actions"
 import type { BouquetTemplate, Order, OrderItem, Product } from "@/lib/db"
 import { deliveryTypeLabel } from "@/lib/labels"
 import { calculateCommercialTotals } from "@/lib/pricing"
@@ -114,25 +114,30 @@ export function OrderEditSheet({
     setItems((current) => addBouquetToLineItems(current, bouquet))
   }
 
+  const isDraft = order.status === "Черновик"
+
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const validationError = validateProductLineItems(items)
-    if (validationError) {
-      toast.error(validationError)
-      return
-    }
-    if (deliveryPrice < 0 || courierPayout < 0) {
-      toast.error("Суммы не могут быть отрицательными.")
-      return
-    }
-    if (paidExceeds) {
-      toast.error("Сумма заказа не может быть меньше уже принятой оплаты.")
-      return
+    // Черновик: состав необязателен (валидация — при отправке в работу). Прочие проверки тоже мягче.
+    if (!isDraft) {
+      const validationError = validateProductLineItems(items)
+      if (validationError) {
+        toast.error(validationError)
+        return
+      }
+      if (deliveryPrice < 0 || courierPayout < 0) {
+        toast.error("Суммы не могут быть отрицательными.")
+        return
+      }
+      if (paidExceeds) {
+        toast.error("Сумма заказа не может быть меньше уже принятой оплаты.")
+        return
+      }
     }
 
     const formData = new FormData(event.currentTarget)
     startTransition(async () => {
-      const result = await updateOrderAction(formData)
+      const result = await (isDraft ? updateOrderDraftAction(formData) : updateOrderAction(formData))
       if (result.ok) {
         toast.success(result.message)
         onOpenChange(false)

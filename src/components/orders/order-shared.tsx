@@ -11,6 +11,7 @@ import {
   CheckCircle2Icon,
   ClockIcon,
   ExternalLinkIcon,
+  FileEditIcon,
   HourglassIcon,
   ListIcon,
   Loader2Icon,
@@ -643,6 +644,13 @@ function groupOrderItems(items: OrderItem[]) {
 // несёт иконку, поэтому читается и без опоры на цвет (тема в основном монохромна).
 export function OrderStatusBadge({ status, className }: { status: OrderStatus; className?: string }) {
   switch (status) {
+    case "Черновик":
+      return (
+        <Badge variant="outline" className={cn("gap-1 border-dashed text-muted-foreground", className)}>
+          <FileEditIcon data-icon="inline-start" />
+          Черновик
+        </Badge>
+      )
     case "Новый":
       return (
         <Badge variant="outline" className={cn("gap-1", className)}>
