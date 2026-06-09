@@ -212,6 +212,409 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
   saveOrder()
 }
 
+// Мягкий разбор позиций черновика: пропускаем пустые строки и несуществующие товары / qty<=0,
+// НЕ бросаем (валидация состава — при отправке в работу). Цена по умолчанию = sale_price товара.
+function buildDraftOrderItems(client: Database.Database, formData: FormData) {
+  const productCodes = formData.getAll("itemProductCode").map((value) => clean(value))
+  const qtyValues = formData.getAll("itemQty")
+  const priceValues = formData.getAll("itemPrice")
+  const discountTypes = formData.getAll("itemDiscountType")
+  const discountValues = formData.getAll("itemDiscountValue")
+  const bouquetIds = formData.getAll("itemBouquetId")
+  const bouquetNames = formData.getAll("itemBouquetName")
+  const bouquetGroupIds = formData.getAll("itemBouquetGroupId")
+
+  const items: ReturnType<typeof buildOrderItems> = []
+  productCodes.forEach((productCode, index) => {
+    if (!productCode) return
+    const product = getProduct(client, productCode)
+    if (!product) return
+    const qty = toNumber(qtyValues[index]) || 0
+    if (qty <= 0) return
+    const explicitPrice = toOptionalNumber(priceValues[index])
+    const price = explicitPrice !== null && explicitPrice >= 0 ? explicitPrice : numberFromRow(product.sale_price)
+    const discountType = normalizeDiscountType(clean(discountTypes[index] ?? null))
+    const discountValue = discountType === "none" ? 0 : Math.max(0, toNumber(discountValues[index]))
+    const bouquetId = toOptionalNumber(bouquetIds[index] ?? null)
+    const bouquetGroupId = clean(bouquetGroupIds[index] ?? null)
+    const bouquetName = clean(bouquetNames[index] ?? null)
+    const totals = calculateComponentLineTotal({ qty, price, bouquetGroupId, discountType, discountValue })
+    items.push({
+      productCode,
+      name: String(product.name),
+      qty,
+      price,
+      bouquetId: bouquetId && bouquetId > 0 ? bouquetId : null,
+      bouquetName: bouquetGroupId ? bouquetName : "",
+      bouquetGroupId,
+      discountType,
+      discountValue,
+      discountAmount: totals.discountAmount,
+      totalBeforeDiscount: totals.totalBeforeDiscount,
+      total: totals.total,
+    })
+  })
+  return items
+}
+
+// Общие необязательные поля черновика (всё мягко, без OrderInputSchema/инварианта prepaid<=total).
+function parseDraftFields(formData: FormData) {
+  const deliveryType = clean(formData.get("deliveryType")) === "delivery" ? "delivery" : "pickup"
+  return {
+    recipientPhone: clean(formData.get("recipientPhone")),
+    dueAt: clean(formData.get("dueAt")),
+    deliveryType,
+    address: deliveryType === "delivery" ? clean(formData.get("address")) : "",
+    source: clean(formData.get("source")),
+    note: clean(formData.get("note")),
+    deliveryPrice: Math.max(0, toNumber(formData.get("deliveryPrice"))),
+    courierPayout: Math.max(0, toNumber(formData.get("courierPayout"))),
+    orderDiscountType: normalizeDiscountType(clean(formData.get("orderDiscountType"))),
+    orderDiscountValue: Math.max(0, toNumber(formData.get("orderDiscountValue"))),
+  }
+}
+
+function writeDraftItems(
+  client: Database.Database,
+  orderId: number,
+  items: ReturnType<typeof buildOrderItems>
+) {
+  client.prepare("DELETE FROM order_items WHERE order_id = ?").run(orderId)
+  const insertItem = client.prepare(
+    `INSERT INTO order_items (
+      order_id, product_code, name, qty, price, discount_type, discount_value,
+      discount_amount, total_before_discount, total, is_custom, bouquet_id, bouquet_name, bouquet_group_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+  for (const item of items) {
+    insertItem.run(
+      orderId,
+      item.productCode,
+      item.name,
+      item.qty,
+      item.price,
+      item.discountType,
+      item.discountValue,
+      item.discountAmount,
+      item.totalBeforeDiscount,
+      item.total,
+      0,
+      item.bouquetId,
+      item.bouquetName,
+      item.bouquetGroupId
+    )
+  }
+}
+
+// Черновик заказа: недоформленный заказ. Минимум — имя клиента; БЕЗ резерва склада, БЕЗ предоплаты/смены,
+// БЕЗ движения в журнале (резерв и событие — только при отправке в работу).
+export function createOrderDraft(formData: FormData, currentUser: CurrentUser) {
+  const client = db()
+  const customerSnapshot = resolveCashCustomer(client, formData)
+  const customer = customerSnapshot.name || clean(formData.get("customer")) || clean(formData.get("customer_name"))
+  if (!customer) {
+    throw new Error("Укажите имя клиента.")
+  }
+  const phone = customerSnapshot.phone || clean(formData.get("phone"))
+  const fields = parseDraftFields(formData)
+
+  const save = client.transaction(() => {
+    const items = buildDraftOrderItems(client, formData)
+    const totals = calculateCommercialTotals(
+      itemsForCommercialTotals(items),
+      fields.orderDiscountType,
+      fields.orderDiscountValue
+    )
+    const total = totals.total + fields.deliveryPrice
+    const inserted = client
+      .prepare(
+        `INSERT INTO orders (
+          created_by_user_id, updated_by_user_id, customer_id, customer, phone, recipient_phone, source,
+          delivery_type, address, due_at, status, items_total_before_discount, items_discount_total, order_discount_type,
+          order_discount_value, order_discount_amount, total_before_discount, total, prepaid, paid,
+          delivery_price, courier_payout, is_reserved, note, updated_at
+        ) VALUES (
+          @createdByUserId, @updatedByUserId, @customerId, @customer, @phone, @recipientPhone, @source,
+          @deliveryType, @address, @dueAt, 'Черновик', @itemsTotalBeforeDiscount, @itemsDiscountTotal, @orderDiscountType,
+          @orderDiscountValue, @orderDiscountAmount, @totalBeforeDiscount, @total, 0, 0,
+          @deliveryPrice, @courierPayout, 0, @note, CURRENT_TIMESTAMP
+        )`
+      )
+      .run({
+        createdByUserId: currentUser.id,
+        updatedByUserId: currentUser.id,
+        customerId: customerSnapshot.id,
+        customer,
+        phone,
+        recipientPhone: fields.recipientPhone,
+        source: fields.source,
+        deliveryType: fields.deliveryType,
+        address: fields.address,
+        dueAt: fields.dueAt,
+        itemsTotalBeforeDiscount: totals.itemsTotalBeforeDiscount,
+        itemsDiscountTotal: totals.itemsDiscountTotal,
+        orderDiscountType: fields.orderDiscountType,
+        orderDiscountValue: fields.orderDiscountValue,
+        orderDiscountAmount: totals.dealDiscountAmount,
+        totalBeforeDiscount: totals.itemsTotalBeforeDiscount + fields.deliveryPrice,
+        total,
+        deliveryPrice: fields.deliveryPrice,
+        courierPayout: fields.courierPayout,
+        note: fields.note,
+      })
+    const orderId = Number(inserted.lastInsertRowid)
+    const number = generateOrderNumber(orderId)
+    client.prepare("UPDATE orders SET number = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(number, orderId)
+    writeDraftItems(client, orderId, items)
+    return orderId
+  })
+
+  return save()
+}
+
+// Редактирование черновика: мягкий разбор, замена позиций, пересчёт итогов. БЕЗ резерва. Только 'Черновик'.
+export function updateOrderDraft(orderId: number, formData: FormData, currentUser: CurrentUser) {
+  const client = db()
+  const save = client.transaction(() => {
+    const head = client.prepare("SELECT status, is_reserved FROM orders WHERE id = ?").get(orderId) as
+      | { status: string; is_reserved: number }
+      | undefined
+    if (!head) {
+      throw new Error("Заказ не найден.")
+    }
+    if (normalizeOrderStatus(head.status) !== "Черновик") {
+      throw new Error("Редактировать так можно только черновик.")
+    }
+    const customerSnapshot = resolveCashCustomer(client, formData)
+    const customer = customerSnapshot.name || clean(formData.get("customer")) || clean(formData.get("customer_name"))
+    if (!customer) {
+      throw new Error("Укажите имя клиента.")
+    }
+    const phone = customerSnapshot.phone || clean(formData.get("phone"))
+    const fields = parseDraftFields(formData)
+    const items = buildDraftOrderItems(client, formData)
+    const totals = calculateCommercialTotals(
+      itemsForCommercialTotals(items),
+      fields.orderDiscountType,
+      fields.orderDiscountValue
+    )
+    const total = totals.total + fields.deliveryPrice
+    client
+      .prepare(
+        `UPDATE orders SET
+          updated_by_user_id = @updatedByUserId, customer_id = @customerId, customer = @customer, phone = @phone,
+          recipient_phone = @recipientPhone, source = @source, delivery_type = @deliveryType, address = @address,
+          due_at = @dueAt, items_total_before_discount = @itemsTotalBeforeDiscount, items_discount_total = @itemsDiscountTotal,
+          order_discount_type = @orderDiscountType, order_discount_value = @orderDiscountValue,
+          order_discount_amount = @orderDiscountAmount, total_before_discount = @totalBeforeDiscount, total = @total,
+          delivery_price = @deliveryPrice, courier_payout = @courierPayout, note = @note, updated_at = CURRENT_TIMESTAMP
+        WHERE id = @orderId`
+      )
+      .run({
+        orderId,
+        updatedByUserId: currentUser.id,
+        customerId: customerSnapshot.id,
+        customer,
+        phone,
+        recipientPhone: fields.recipientPhone,
+        source: fields.source,
+        deliveryType: fields.deliveryType,
+        address: fields.address,
+        dueAt: fields.dueAt,
+        itemsTotalBeforeDiscount: totals.itemsTotalBeforeDiscount,
+        itemsDiscountTotal: totals.itemsDiscountTotal,
+        orderDiscountType: fields.orderDiscountType,
+        orderDiscountValue: fields.orderDiscountValue,
+        orderDiscountAmount: totals.dealDiscountAmount,
+        totalBeforeDiscount: totals.itemsTotalBeforeDiscount + fields.deliveryPrice,
+        total,
+        deliveryPrice: fields.deliveryPrice,
+        courierPayout: fields.courierPayout,
+        note: fields.note,
+      })
+    writeDraftItems(client, orderId, items)
+    return orderId
+  })
+  return save()
+}
+
+// Расхождения цен черновика с текущими sale_price (для подтверждения при отправке в работу).
+export function getDraftPriceChanges(orderId: number) {
+  const client = db()
+  const rows = client
+    .prepare("SELECT product_code as productCode, name, price, qty FROM order_items WHERE order_id = ?")
+    .all(orderId) as Array<{ productCode: string | null; name: string; price: number; qty: number }>
+  const changes: Array<{ name: string; oldPrice: number; newPrice: number }> = []
+  for (const row of rows) {
+    if (!row.productCode) continue
+    const product = getProduct(client, row.productCode)
+    if (!product) continue
+    const oldPrice = numberFromRow(row.price)
+    const newPrice = numberFromRow(product.sale_price)
+    if (roundMoney(oldPrice) !== roundMoney(newPrice)) {
+      changes.push({ name: row.name || String(row.productCode), oldPrice, newPrice })
+    }
+  }
+  return changes
+}
+
+// Отправка черновика в работу: ПОЛНАЯ валидация состава, резерв склада (один раз), статус → 'Новый'.
+// priceMode: 'keep' — цены как в черновике; 'current' — пересчёт по текущим sale_price.
+export function finalizeOrderDraft(
+  orderId: number,
+  currentUser: CurrentUser,
+  options: { priceMode?: "keep" | "current" } = {}
+) {
+  const client = db()
+  const priceMode = options.priceMode === "current" ? "current" : "keep"
+  const run = client.transaction(() => {
+    const order = client.prepare("SELECT * FROM orders WHERE id = ?").get(orderId) as Record<string, unknown> | undefined
+    if (!order) {
+      throw new Error("Заказ не найден.")
+    }
+    if (normalizeOrderStatus(order.status) !== "Черновик") {
+      throw new Error("Этот заказ не является черновиком.")
+    }
+    if (numberFromRow(order.is_reserved) !== 0) {
+      throw new Error("Черновик в несогласованном состоянии резерва.")
+    }
+    const rows = client.prepare("SELECT * FROM order_items WHERE order_id = ?").all(orderId) as Array<Record<string, unknown>>
+    if (!rows.length) {
+      throw new Error("Добавьте в заказ хотя бы одну позицию, прежде чем отправить в работу.")
+    }
+
+    // Полная валидация ВСЕХ позиций ДО любого резерва.
+    const lines = rows.map((row) => {
+      const productCode = String(row.product_code ?? "")
+      if (!productCode) {
+        throw new Error("У позиции заказа нет товара со склада — удалите её или укажите товар.")
+      }
+      const product = getProduct(client, productCode)
+      if (!product) {
+        throw new Error(`Товар «${String(row.name ?? productCode)}» не найден — обновите позицию.`)
+      }
+      const qty = numberFromRow(row.qty)
+      if (qty <= 0) {
+        throw new Error("Количество в каждой позиции должно быть больше нуля.")
+      }
+      const price = priceMode === "current" ? numberFromRow(product.sale_price) : numberFromRow(row.price)
+      if (price < 0) {
+        throw new Error("Цена позиции не может быть отрицательной.")
+      }
+      const discountType = normalizeDiscountType(String(row.discount_type ?? "none"))
+      const discountValue = numberFromRow(row.discount_value)
+      const bouquetGroupId = String(row.bouquet_group_id ?? "")
+      const totals = calculateComponentLineTotal({ qty, price, bouquetGroupId, discountType, discountValue })
+      return {
+        id: numberFromRow(row.id),
+        productCode,
+        qty,
+        price,
+        bouquetGroupId,
+        discountType,
+        discountValue,
+        discountAmount: totals.discountAmount,
+        totalBeforeDiscount: totals.totalBeforeDiscount,
+        total: totals.total,
+      }
+    })
+
+    const orderDiscountType = normalizeDiscountType(String(order.order_discount_type ?? "none"))
+    const orderDiscountValue = numberFromRow(order.order_discount_value)
+    const totals = calculateCommercialTotals(itemsForCommercialTotals(lines), orderDiscountType, orderDiscountValue)
+    const deliveryPrice = numberFromRow(order.delivery_price)
+    const total = totals.total + deliveryPrice
+    const prepaid = numberFromRow(order.prepaid)
+    if (prepaid > total && total >= 0) {
+      throw new Error("Предоплата не может быть больше суммы заказа.")
+    }
+    const shift = prepaid > 0 ? requireOpenShift(client) : null
+
+    // Обновляем цены/итоги позиций (на случай priceMode='current' или пересчёта скидок).
+    const updateItem = client.prepare(
+      "UPDATE order_items SET price = ?, discount_amount = ?, total_before_discount = ?, total = ? WHERE id = ?"
+    )
+    for (const line of lines) {
+      updateItem.run(line.price, line.discountAmount, line.totalBeforeDiscount, line.total, line.id)
+    }
+
+    const number = String(order.number ?? "")
+    client
+      .prepare(
+        `UPDATE orders SET status = 'Новый', is_reserved = 1, items_total_before_discount = ?, items_discount_total = ?,
+          order_discount_amount = ?, total_before_discount = ?, total = ?, prepaid = ?, paid = ?,
+          updated_by_user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+      )
+      .run(
+        totals.itemsTotalBeforeDiscount,
+        totals.itemsDiscountTotal,
+        totals.dealDiscountAmount,
+        totals.itemsTotalBeforeDiscount + deliveryPrice,
+        total,
+        prepaid,
+        prepaid,
+        currentUser.id,
+        orderId
+      )
+
+    const allowOversell = getAllowOversellOrders(client)
+    for (const line of lines) {
+      applyProductDelta(client, {
+        productCode: line.productCode,
+        reservedDelta: line.qty,
+        type: "reserve",
+        qty: line.qty,
+        orderId,
+        userId: currentUser.id,
+        comment: "Резерв при отправке черновика в работу",
+        enforceAvailable: !allowOversell,
+      })
+    }
+
+    if (shift && prepaid > 0) {
+      recordCashTransaction(client, {
+        shiftId: shift.id,
+        orderId,
+        customerId: order.customer_id == null ? null : numberFromRow(order.customer_id),
+        userId: currentUser.id,
+        type: "prepayment",
+        paymentMethod: "cash",
+        amount: prepaid,
+        comment: `Предоплата по заказу ${number}`,
+      })
+    }
+
+    addMovement(client, {
+      userId: currentUser.id,
+      type: "order_status",
+      total,
+      note: `Заказ ${number}: отправлен в работу`,
+    })
+  })
+
+  run()
+}
+
+// Физическое удаление черновика (резерва/оплат нет — освобождать нечего). Только 'Черновик'.
+export function deleteDraftOrder(orderId: number, currentUser: CurrentUser) {
+  void currentUser
+  const client = db()
+  const run = client.transaction(() => {
+    const head = client.prepare("SELECT status, is_reserved FROM orders WHERE id = ?").get(orderId) as
+      | { status: string; is_reserved: number }
+      | undefined
+    if (!head) {
+      throw new Error("Заказ не найден.")
+    }
+    if (normalizeOrderStatus(head.status) !== "Черновик" || numberFromRow(head.is_reserved) !== 0) {
+      throw new Error("Удалять можно только черновик.")
+    }
+    client.prepare("DELETE FROM order_items WHERE order_id = ?").run(orderId)
+    client.prepare("DELETE FROM orders WHERE id = ?").run(orderId)
+  })
+  run()
+}
+
 function getOrderWithItems(client: Database.Database, orderId: number) {
   const order = client.prepare("SELECT * FROM orders WHERE id = ?").get(orderId) as
     | Record<string, unknown>
@@ -309,6 +712,10 @@ export function markOrderReady(orderId: number, currentUser: CurrentUser) {
 
     if (["Готов", "Передан курьеру", "Выдан"].includes(order.status)) {
       return
+    }
+
+    if (order.status === "Черновик") {
+      throw new Error("Сначала отправьте черновик в работу.")
     }
 
     if (!["Новый", "В работе"].includes(order.status)) {

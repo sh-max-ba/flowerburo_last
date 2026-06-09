@@ -238,7 +238,7 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
     .prepare(
       `SELECT COUNT(*) as count
        FROM orders
-       WHERE status NOT IN ('Выдан', 'Отменен', 'Передан курьеру')
+       WHERE status NOT IN ('Черновик', 'Выдан', 'Отменен', 'Передан курьеру')
         AND COALESCE(due_at, '') != ''
         AND due_at < strftime('%Y-%m-%dT%H:%M', 'now', 'localtime')`
     )
@@ -248,7 +248,7 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
   // счётчиками (не выдан/не отменён/не передан курьеру — «Передан курьеру»
   // завершающий); сортировка по сроку — просрочка наверх.
   const activeOrdersRow = client
-    .prepare("SELECT COUNT(*) as count FROM orders WHERE status NOT IN ('Выдан', 'Отменен', 'Передан курьеру')")
+    .prepare("SELECT COUNT(*) as count FROM orders WHERE status NOT IN ('Черновик', 'Выдан', 'Отменен', 'Передан курьеру')")
     .get() as { count: number } | undefined
 
   const orderListRows = client
@@ -256,7 +256,7 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
       `SELECT id, number, COALESCE(customer, '') as customer, due_at as dueAt, status,
         COALESCE(total, 0) as total
        FROM orders
-       WHERE status NOT IN ('Выдан', 'Отменен', 'Передан курьеру')
+       WHERE status NOT IN ('Черновик', 'Выдан', 'Отменен', 'Передан курьеру')
        ORDER BY
         CASE WHEN COALESCE(due_at, '') = '' THEN 1 ELSE 0 END,
         due_at ASC,
@@ -279,7 +279,7 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
         COALESCE(SUM(total - COALESCE(paid, 0)), 0) as totalOutstanding,
         COUNT(*) as debtorOrdersCount
        FROM orders
-       WHERE status NOT IN ('Выдан', 'Отменен', 'Передан курьеру')
+       WHERE status NOT IN ('Черновик', 'Выдан', 'Отменен', 'Передан курьеру')
         AND (total - COALESCE(paid, 0)) > 0`
     )
     .get() as { totalOutstanding: number; debtorOrdersCount: number }
@@ -292,7 +292,7 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
         COALESCE(SUM(orders.total - COALESCE(orders.paid, 0)), 0) as amount,
         COUNT(*) as ordersCount
        FROM orders
-       WHERE orders.status NOT IN ('Выдан', 'Отменен', 'Передан курьеру')
+       WHERE orders.status NOT IN ('Черновик', 'Выдан', 'Отменен', 'Передан курьеру')
         AND (orders.total - COALESCE(orders.paid, 0)) > 0
        GROUP BY orders.customer_id, customerName
        ORDER BY amount DESC

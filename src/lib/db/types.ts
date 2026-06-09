@@ -253,6 +253,7 @@ export type User = {
 export type CurrentUser = Omit<User, "passwordHash">
 
 export type OrderStatus =
+  | "Черновик"
   | "Новый"
   | "В работе"
   | "Готов"

@@ -183,7 +183,7 @@ export function deleteProduct(code: string, currentUser: CurrentUser) {
         `SELECT COUNT(*) as count
          FROM order_items
          JOIN orders ON orders.id = order_items.order_id
-         WHERE order_items.product_code = ? AND orders.status NOT IN ('Выдан', 'Отменен')`
+         WHERE order_items.product_code = ? AND orders.status NOT IN ('Черновик', 'Выдан', 'Отменен')`
       )
       .get(code) as { count: number }
     if (numberFromRow(activeOrderRef.count) > 0) {

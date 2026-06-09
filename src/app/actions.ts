@@ -48,6 +48,10 @@ import {
   closeShift,
   completePickupOrder,
   createOrder,
+  createOrderDraft,
+  updateOrderDraft,
+  finalizeOrderDraft,
+  deleteDraftOrder,
   createOrderFromDeal,
   updateOrderFromDeal,
   updateOrder,
@@ -972,6 +976,40 @@ export async function reverseCashTransactionAction(formData: FormData) {
 
 export async function createOrderAction(formData: FormData) {
   return runRoleAction(["owner", "manager"], (user) => createOrder(formData, user), "Заказ создан и отправлен флористам")
+}
+
+// Черновики заказов — owner/manager (флористы их не видят и не трогают). Серверная граница доступа.
+export async function createOrderDraftAction(formData: FormData) {
+  return runRoleAction(
+    ["owner", "manager"],
+    (user) => {
+      createOrderDraft(formData, user)
+    },
+    "Черновик сохранён"
+  )
+}
+
+export async function updateOrderDraftAction(formData: FormData) {
+  const orderId = Number(formData.get("orderId") ?? formData.get("id"))
+  return runRoleAction(
+    ["owner", "manager"],
+    (user) => {
+      updateOrderDraft(orderId, formData, user)
+    },
+    "Черновик обновлён"
+  )
+}
+
+export async function finalizeOrderDraftAction(orderId: number, priceMode: "keep" | "current" = "keep") {
+  return runRoleAction(
+    ["owner", "manager"],
+    (user) => finalizeOrderDraft(orderId, user, { priceMode }),
+    "Черновик отправлен флористам"
+  )
+}
+
+export async function deleteDraftOrderAction(orderId: number) {
+  return runRoleAction(["owner", "manager"], (user) => deleteDraftOrder(orderId, user), "Черновик удалён")
 }
 
 export async function startOrderWorkAction(orderId: number) {

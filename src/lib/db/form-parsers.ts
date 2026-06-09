@@ -28,6 +28,7 @@ export function normalizeDeliveryType(value: unknown) {
 
 export function orderStatusSort(status: OrderStatus) {
   const order: Record<OrderStatus, number> = {
+    "Черновик": -1,
     "Новый": 0,
     "В работе": 1,
     "Готов": 2,

@@ -52,6 +52,7 @@ export function normalizeOrderStatus(value: unknown): OrderStatus {
     canceled: "Отменен",
   }
   const current = new Set<OrderStatus>([
+    "Черновик",
     "Новый",
     "В работе",
     "Готов",

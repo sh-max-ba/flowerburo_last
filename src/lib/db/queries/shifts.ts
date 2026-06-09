@@ -124,7 +124,7 @@ export function getOrdersActivityRevision(client: Database.Database = db()) {
     .prepare(
       `SELECT COUNT(*) as count, COALESCE(MAX(COALESCE(updated_at, created_at)), '') as latest
        FROM orders
-       WHERE status NOT IN ('Выдан', 'Отменен')`
+       WHERE status NOT IN ('Черновик', 'Выдан', 'Отменен')`
     )
     .get() as { count: number; latest: string }
 
