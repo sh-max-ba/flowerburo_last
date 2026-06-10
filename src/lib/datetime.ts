@@ -8,13 +8,23 @@ export function toDatetimeLocalValue(dateString?: string | null) {
   return localDate.toISOString().slice(0, 16)
 }
 
+// Смещение пояса магазина (Бишкек, UTC+6, перехода на летнее время нет). Нужно при разборе
+// «наивных» значений <input type="datetime-local">: их вводят в часах магазина, не сервера.
+const SHOP_UTC_OFFSET = "+06:00"
+
 export function fromDatetimeLocalValue(value?: FormDataEntryValue | string | null) {
   const rawValue = String(value ?? "").trim()
   if (!rawValue) {
     return new Date().toISOString()
   }
 
-  const date = new Date(rawValue)
+  // "YYYY-MM-DDTHH:MM(:SS)" без зоны — наивное время в поясе МАГАЗИНА. new Date(naive)
+  // трактовал бы его в поясе сервера (UTC на проде) → даты актов уезжали на +6 часов,
+  // и сдвиг накапливался при каждом цикле редактирования черновика.
+  const isNaive = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(rawValue)
+  const date = isNaive
+    ? new Date(`${rawValue}${rawValue.length === 16 ? ":00" : ""}${SHOP_UTC_OFFSET}`)
+    : new Date(rawValue)
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString()
 }
 
