@@ -7,9 +7,13 @@ const tablesToClear = [
   "sale_items",
   "order_items",
   "deal_items",
+  "deal_bouquet_messages",
   "bouquet_template_items",
   "bouquet_templates",
   "stock_document_items",
+  "stock_document_overheads",
+  "stock_lot_movements",
+  "stock_lots",
   "warehouse_import_items",
   "stock_movements",
   "movements",
@@ -28,16 +32,18 @@ const tablesToClear = [
   "stock_documents",
   "warehouse_imports",
   "shifts",
-  "products",
   "sessions",
 ] as const
 
+// Каталог товаров (products) НЕ чистится: его ведёт клиент, и пустая таблица в существующей
+// БД больше не пересеивается из CSV (см. connection.ts) — после вайпа склад остался бы пустым.
 const tablesToPreserve = [
   "users",
   "integration_settings",
   "suppliers",
   "deal_pipelines",
   "deal_stages",
+  "products",
 ] as const
 
 const summaryTables = [
@@ -107,8 +113,9 @@ function main() {
 
   try {
     db.pragma("foreign_keys = ON")
-    db.pragma("wal_checkpoint(FULL)")
-    fs.copyFileSync(dbPath, backupPath)
+    // VACUUM INTO даёт консистентный снимок независимо от состояния WAL (copyFileSync живой
+    // базы без -wal терял незачекпойнченные записи).
+    db.exec(`VACUUM INTO '${backupPath.replaceAll("'", "''")}'`)
 
     const reset = db.transaction(() => {
       for (const tableName of tablesToClear) {

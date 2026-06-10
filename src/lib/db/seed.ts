@@ -85,7 +85,9 @@ export function seedFromCsv(client: Database.Database) {
         name: row.name || row.code,
         unit: row.unit || "шт",
         stock: toNumber(row.stock),
-        reserved: toNumber(row.reserved),
+        // Резерв порождается ТОЛЬКО жизненным циклом заказов: резерв из CSV — фантом,
+        // который занижает available и который нечем снять (reserve_cancel привязан к заказам).
+        reserved: 0,
         expected: toNumber(row.expected),
         costPrice: toNumber(row.cost_price),
         salePrice: toNumber(row.sale_price),

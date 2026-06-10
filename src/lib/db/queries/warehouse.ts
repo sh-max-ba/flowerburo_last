@@ -380,9 +380,24 @@ function normalizeWarehouseImportRow(row: Record<string, unknown>, rowNumber: nu
 }
 
 function buildWarehouseImportReportItems(client: Database.Database, rows: WarehouseImportRow[]) {
+  const seenCodes = new Set<string>()
   return rows.map((row): WarehouseImportReportItem => {
     const product = row.code ? getProduct(client, row.code) : undefined
     const errors = [...row.errors]
+
+    if (row.code) {
+      // Excel превращает длинные числовые коды в научную нотацию ("1.77166E+11"): ведущие нули
+      // и точность теряются, импорт создал бы товар-дубль с мусорным кодом вместо обновления.
+      if (/^\d+(?:[.,]\d+)?[eE][+-]?\d+$/.test(row.code)) {
+        errors.push("code повреждён Excel (научная нотация) — отформатируйте колонку code как текст")
+      } else if (seenCodes.has(row.code)) {
+        // Дельта каждой строки считается от ОДНОГО текущего остатка: повторный код задвоил бы
+        // остаток при применении (превью при этом показало бы «правильное» число).
+        errors.push("дубликат code в файле — оставьте одну строку на товар")
+      } else {
+        seenCodes.add(row.code)
+      }
+    }
 
     if (!product && !row.name) {
       errors.push("name пустой для нового товара")
