@@ -255,6 +255,11 @@ function saveStockDocumentDraftInTransaction(
     if (String(existing.status) !== "draft") {
       throw new Error("Можно редактировать только черновик акта.")
     }
+    // Инвентаризацию (type='count') редактируют ТОЛЬКО в её разделе: здесь UPDATE сменил бы тип,
+    // а DELETE строк уничтожил бы снимок expected_qty и весь подсчёт. Зеркало гейта в post-функции.
+    if (String(existing.type) === "count") {
+      throw new Error("Это инвентаризация — редактируйте её в разделе инвентаризации.")
+    }
 
     client
       .prepare(

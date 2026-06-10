@@ -77,23 +77,41 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
     })
   }, [doc.items, query, filter, isDraft])
 
-  // Быстрое «факт = расчётному» для одной строки.
+  // Быстрое «факт = расчётному» для одной строки. Для отрицательного учётного остатка кнопка
+  // отключена (см. рендер): физический факт не бывает отрицательным, сервер такой ввод отклонит.
   function quickFill(item: StockDocument["items"][number]) {
     setRow(item.id, { counted: String(item.expectedQty ?? 0) })
   }
 
   // Принять расчётный для всех несосчитанных среди ВИДИМЫХ (учёт фильтра/поиска) — как «факт=расчётный».
+  // Строки с отрицательным учётным остатком пропускаем: подстановка минуса валила сохранение целиком.
   function bulkFillExpected() {
-    setRows((current) => {
-      const next = { ...current }
-      for (const item of visibleItems) {
-        const fact = current[item.id]?.counted ?? ""
-        if (fact.trim() === "") {
-          next[item.id] = { ...current[item.id], counted: String(item.expectedQty ?? 0) }
-        }
+    const fillable: Array<[number, string]> = []
+    let skipped = 0
+    for (const item of visibleItems) {
+      const fact = rows[item.id]?.counted ?? ""
+      if (fact.trim() !== "") continue
+      const expected = item.expectedQty ?? 0
+      if (expected < 0) {
+        skipped += 1
+        continue
       }
-      return next
-    })
+      fillable.push([item.id, String(expected)])
+    }
+    if (fillable.length > 0) {
+      setRows((current) => {
+        const next = { ...current }
+        for (const [id, counted] of fillable) {
+          next[id] = { ...current[id], counted }
+        }
+        return next
+      })
+    }
+    if (skipped > 0) {
+      toast.info(
+        `Пропущено позиций с отрицательным учётным остатком: ${skipped}. Введите по ним реальный факт вручную.`
+      )
+    }
   }
 
   // Сводка расхождений (по введённому факту против расчётного — что видит кладовщик).
@@ -112,11 +130,35 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
     return { surplus, shortage, counted, total: doc.items.length }
   }, [rows, doc.items])
 
+  // Строка «грязная», если ввод отличается от сохранённого в БД. Отправляем только такие строки:
+  // устаревшая вкладка не затирает подсчёт, сделанный в другой вкладке, а counted_at нетронутых
+  // строк не сбрасывается при каждом сохранении.
+  function isRowDirty(item: StockDocument["items"][number], row: RowState | undefined) {
+    if (!row) return false
+    const savedCounted = item.countedQty == null ? "" : String(item.countedQty)
+    const savedReason = item.varianceReason ?? ""
+    return row.counted.trim() !== savedCounted || row.reason !== savedReason
+  }
+
+  // Проверка до отправки: сервер откатывает сохранение целиком, поэтому называем виновную строку сразу.
+  function findInvalidRow(): string | null {
+    for (const item of doc.items) {
+      const raw = rows[item.id]?.counted ?? ""
+      if (raw.trim() === "") continue
+      const value = Number(raw)
+      if (!Number.isFinite(value) || value < 0) {
+        return `«${item.productName || item.productCode}»: фактическое количество не может быть отрицательным.`
+      }
+    }
+    return null
+  }
+
   function buildSaveFormData() {
     const formData = new FormData()
     formData.set("documentId", String(doc.id))
     for (const item of doc.items) {
       const row = rows[item.id]
+      if (!isRowDirty(item, row)) continue
       formData.append("itemId", String(item.id))
       formData.append("countedQty", row?.counted ?? "")
       formData.append("varianceReason", row?.reason ?? "")
@@ -125,6 +167,11 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
   }
 
   function save() {
+    const invalid = findInvalidRow()
+    if (invalid) {
+      toast.error(invalid)
+      return
+    }
     startTransition(async () => {
       const result = await saveInventoryDraftAction(buildSaveFormData())
       if (result.ok) {
@@ -138,6 +185,11 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
 
   // Проведение всегда сначала сохраняет текущий ввод (чтобы не провести устаревший факт), затем проводит.
   function saveThenPost() {
+    const invalid = findInvalidRow()
+    if (invalid) {
+      toast.error(invalid)
+      return
+    }
     startTransition(async () => {
       const saved = await saveInventoryDraftAction(buildSaveFormData())
       if (!saved.ok) {
@@ -299,8 +351,12 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
                             size="sm"
                             className="h-8 px-2 text-xs"
                             onClick={() => quickFill(item)}
-                            disabled={pending}
-                            title="Поставить факт = учётному остатку (позиция совпала)"
+                            disabled={pending || expected < 0}
+                            title={
+                              expected < 0
+                                ? "Учётный остаток отрицательный — введите реальный остаток вручную"
+                                : "Поставить факт = учётному остатку (позиция совпала)"
+                            }
                           >
                             совпало
                           </Button>

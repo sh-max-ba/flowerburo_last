@@ -128,15 +128,26 @@ export function saveInventoryDraft(formData: FormData) {
   const run = client.transaction(() => {
     loadDraftInventory(client, documentId)
 
-    const comment = clean(formData.get("comment"))
-    const operationAt = fromDatetimeLocalValue(formData.get("operationAt"))
-    client
-      .prepare("UPDATE stock_documents SET comment = ?, operation_at = ? WHERE id = ?")
-      .run(comment, operationAt, documentId)
+    // Комментарий и дату операции обновляем ТОЛЬКО если форма их прислала: лист подсчёта шлёт
+    // одни строки, и безусловный UPDATE стирал комментарий и сдвигал operation_at на «сейчас».
+    if (formData.has("comment")) {
+      client.prepare("UPDATE stock_documents SET comment = ? WHERE id = ?").run(clean(formData.get("comment")), documentId)
+    }
+    if (formData.has("operationAt")) {
+      client
+        .prepare("UPDATE stock_documents SET operation_at = ? WHERE id = ?")
+        .run(fromDatetimeLocalValue(formData.get("operationAt")), documentId)
+    }
 
     const itemIds = formData.getAll("itemId").map((value) => clean(value))
     const countedValues = formData.getAll("countedQty")
     const reasonValues = formData.getAll("varianceReason")
+
+    // Имена строк — для адресной ошибки валидации (иначе виновную строку среди сотен не найти).
+    const itemRows = client
+      .prepare("SELECT id, product_name, product_code FROM stock_document_items WHERE document_id = ?")
+      .all(documentId) as Array<{ id: number; product_name: string | null; product_code: string }>
+    const nameById = new Map(itemRows.map((row) => [Number(row.id), String(row.product_name || row.product_code)]))
 
     const updateItem = client.prepare(
       `UPDATE stock_document_items
@@ -156,7 +167,10 @@ export function saveInventoryDraft(formData: FormData) {
       if (!isBlank) {
         const value = toNumber(rawCounted)
         if (!Number.isFinite(value) || value < 0) {
-          throw new Error("Фактическое количество не может быть отрицательным.")
+          const name = nameById.get(id)
+          throw new Error(
+            `Фактическое количество не может быть отрицательным${name ? `: «${name}»` : ""}.`
+          )
         }
         countedQty = value
         countedAt = new Date().toISOString()
@@ -194,10 +208,12 @@ export function recalcInventoryExpected(documentId: number) {
   run()
 }
 
-// Проведение инвентаризации: для каждой сосчитанной строки дельта = counted_qty − ЖИВОЙ products.stock
-// (не от снимка → параллельные продажи не затираются), применяется как 'adjustment'-движение,
-// ПРИВЯЗАННОЕ к документу (не через applyProductDelta). reserved не трогаем. Себестоимость излишков —
-// по текущей средней (cost_price не меняется). Затем FEFO-сверка партий по затронутым кодам.
+// Проведение инвентаризации: для каждой сосчитанной строки дельта = counted_qty − expected_qty
+// (расхождение факта со СНИМКОМ), применяется к ЖИВОМУ остатку: stock += delta. Так параллельные
+// продажи/приходы между снимком и проведением не затираются (прежняя схема stock := counted
+// откатывала их). Движение — 'adjustment', ПРИВЯЗАННОЕ к документу (не через applyProductDelta).
+// reserved не трогаем. Себестоимость излишков — по текущей средней (cost_price не меняется).
+// Затем FEFO-сверка партий по затронутым кодам.
 function postInventoryInTransaction(client: Database.Database, documentId: number, currentUser: CurrentUser) {
   const document = loadDraftInventory(client, documentId)
   const number = String(document.number)
@@ -228,22 +244,24 @@ function postInventoryInTransaction(client: Database.Database, documentId: numbe
 
     const beforeStock = numberFromRow(product.stock)
     const beforeReserved = numberFromRow(product.reserved)
-    const delta = roundMoney(counted - beforeStock)
+    const expected = item.expected_qty == null ? beforeStock : numberFromRow(item.expected_qty)
+    const delta = roundMoney(counted - expected)
+    const afterStock = roundMoney(beforeStock + delta)
 
     client
       .prepare("UPDATE stock_document_items SET before_stock = ?, after_stock = ?, qty = ?, applied = 1 WHERE id = ?")
-      .run(beforeStock, counted, delta, item.id)
+      .run(beforeStock, afterStock, delta, item.id)
 
     if (delta !== 0) {
       client
         .prepare("UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE code = ?")
-        .run(counted, productCode)
+        .run(afterStock, productCode)
       recordStockMovement(client, {
         productCode,
         type: "adjustment",
         qty: delta,
         beforeStock,
-        afterStock: counted,
+        afterStock,
         beforeReserved,
         afterReserved: beforeReserved,
         documentId,
