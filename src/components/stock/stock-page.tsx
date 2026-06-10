@@ -851,6 +851,8 @@ function ProductSheet({
                 <FieldLabel htmlFor="code">Код</FieldLabel>
                 <Input id="code" name="code" defaultValue={product?.code} readOnly={Boolean(product)} required />
               </Field>
+              {/* Маркер режима: при «create» сервер отклоняет занятый код вместо молчаливой перезаписи. */}
+              <input type="hidden" name="formMode" value={product ? "edit" : "create"} />
               <Field>
                 <FieldLabel htmlFor="name">Название</FieldLabel>
                 <Input id="name" name="name" defaultValue={product?.name} required />

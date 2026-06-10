@@ -117,8 +117,11 @@ export function getShiftShellData(client: Database.Database = db()): ShiftShellD
   }
 }
 
-// Лёгкая «ревизия» активных заказов для поллинга: меняется при новом заказе,
-// смене статуса или оплате. Клиент делает полный refresh только когда она изменилась.
+// Лёгкая «ревизия» активности для поллинга: меняется при новом заказе, смене статуса, оплате —
+// и при ЛЮБОМ изменении каталога товаров (создание, переименование, остаток, архив, удаление).
+// Каталог входит обязательно: касса/заказы держат список товаров в пропсах серверного рендера,
+// и без этого переименованный/новый товар не доезжает до открытой кассы до ручной перезагрузки.
+// Клиент делает полный refresh только когда ревизия изменилась.
 export function getOrdersActivityRevision(client: Database.Database = db()) {
   const row = client
     .prepare(
@@ -128,7 +131,11 @@ export function getOrdersActivityRevision(client: Database.Database = db()) {
     )
     .get() as { count: number; latest: string }
 
-  return `${numberFromRow(row.count)}:${String(row.latest ?? "")}`
+  const products = client
+    .prepare(`SELECT COUNT(*) as count, COALESCE(MAX(updated_at), '') as latest FROM products`)
+    .get() as { count: number; latest: string }
+
+  return `${numberFromRow(row.count)}:${String(row.latest ?? "")}|${numberFromRow(products.count)}:${String(products.latest ?? "")}`
 }
 
 export function calculateShiftSummary(shiftId: number, client: Database.Database = db()): ShiftSummary {

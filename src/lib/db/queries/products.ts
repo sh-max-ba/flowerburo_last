@@ -29,9 +29,24 @@ export function upsertProduct(formData: FormData, currentUser: CurrentUser) {
   const client = db()
   const input = parseForm(ProductInputSchema, formData)
   const { code, name, costPrice, salePrice } = input
+  // "create" | "edit" из формы товара. Пустое значение (сторонний вызов без маркера) сохраняет
+  // историческое upsert-поведение.
+  const formMode = String(formData.get("formMode") ?? "")
 
   const saveProduct = client.transaction(() => {
     const before = getProduct(client, code)
+
+    // Код — первичный ключ: «Новый товар» с занятым кодом раньше МОЛЧА перезаписывал чужой товар
+    // (реальный инцидент: позиции «переименовывали» друг друга). Создание с коллизией — ошибка.
+    if (formMode === "create" && before) {
+      const isArchived = numberFromRow(before.is_active ?? 1) === 0
+      throw new Error(
+        `Код ${code} уже занят товаром «${String(before.name)}»${isArchived ? " (в архиве)" : ""}. Укажите другой код.`
+      )
+    }
+    if (formMode === "edit" && !before) {
+      throw new Error("Товар не найден — возможно, он был удалён. Обновите страницу.")
+    }
     const stock = before ? numberFromRow(before.stock) : toNumber(formData.get("stock"))
     const reserved = before ? numberFromRow(before.reserved) : toNumber(formData.get("reserved"))
     const expected = before ? numberFromRow(before.expected) : toNumber(formData.get("expected"))
