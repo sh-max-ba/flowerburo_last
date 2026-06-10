@@ -159,6 +159,7 @@ export interface SaleRow {
   total: number
   note: string
   createdAt: string
+  reversedAt?: string | null
   itemsCount: number
 }
 
@@ -182,6 +183,7 @@ export function rowToSale(row: SaleRow): Sale {
     total: numberFromRow(row.total),
     note: rowStr(row.note),
     createdAt: rowStr(row.createdAt),
+    reversedAt: row.reversedAt == null ? null : rowStr(row.reversedAt),
     itemsCount: numberFromRow(row.itemsCount),
   }
 }

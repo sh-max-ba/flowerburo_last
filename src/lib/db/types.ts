@@ -199,6 +199,7 @@ export type Sale = {
   total: number
   note: string
   createdAt: string
+  reversedAt: string | null
   itemsCount: number
 }
 

@@ -1785,6 +1785,8 @@ type TimelineRow = {
   paymentMethod: PaymentMethod
   outflow: boolean
   refund: boolean
+  // Сторнированная продажа: бейдж «сторнировано», способ оплаты только текстом (selectа нет).
+  reversed?: boolean
   customer: string
   items: CompositionItem[] | null
   editTarget: { target: "sale" | "transaction"; id: number } | null
@@ -1859,6 +1861,11 @@ function ShiftCashTimeline({
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
                     <Badge variant={row.refund ? "destructive" : "outline"}>{row.typeLabel}</Badge>
+                    {row.reversed && (
+                      <Badge variant="outline" className="ml-1 border-red-200 bg-red-50 text-red-700">
+                        сторнировано
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell className="whitespace-nowrap">{row.reference}</TableCell>
                   <TableCell
@@ -1911,6 +1918,7 @@ function buildTimelineRows(detail: DashboardData["shiftDetails"][number] | null)
   const rows: TimelineRow[] = []
 
   for (const sale of detail.sales) {
+    const reversed = Boolean(sale.reversedAt)
     rows.push({
       key: `sale-${sale.id}`,
       createdAt: sale.createdAt,
@@ -1920,9 +1928,12 @@ function buildTimelineRows(detail: DashboardData["shiftDetails"][number] | null)
       paymentMethod: sale.paymentMethod,
       outflow: false,
       refund: false,
+      reversed,
       customer: sale.customerName,
       items: sale.items,
-      editTarget: { target: "sale", id: sale.id },
+      // У сторнированной продажи способ оплаты заморожен: возврат повторил исходный метод,
+      // правка разбалансирует пару «приход+возврат» (сервер такую правку тоже отклоняет).
+      editTarget: reversed ? null : { target: "sale", id: sale.id },
     })
   }
 
@@ -1943,6 +1954,27 @@ function buildTimelineRows(detail: DashboardData["shiftDetails"][number] | null)
       customer: order.customer,
       items: order.items,
       editTarget: isPayment ? { target: "transaction", id: order.transactionId } : null,
+    })
+  }
+
+  // Возвраты по сторно продаж (sale_id != null, к заказу не привязаны) — раньше эти
+  // проводки не попадали ни в одну ветку ленты, и минус по кассе выглядел «ниоткуда».
+  for (const tx of detail.cashTransactions) {
+    if (tx.type !== "cash_refund" || tx.saleId === null || tx.orderId !== null) {
+      continue
+    }
+    rows.push({
+      key: `sale-refund-${tx.id}`,
+      createdAt: tx.createdAt,
+      typeLabel: cashTransactionTypeLabel(tx.type),
+      reference: `Продажа #${tx.saleId}`,
+      amount: tx.amount,
+      paymentMethod: tx.paymentMethod,
+      outflow: true,
+      refund: true,
+      customer: "",
+      items: null,
+      editTarget: null,
     })
   }
 

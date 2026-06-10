@@ -235,16 +235,33 @@ export function updatePaymentMethod(formData: FormData, currentUser: CurrentUser
     if (target === "sale") {
       const sale = client
         .prepare(
-          "SELECT shift_id as shiftId, user_id as userId, payment_method as paymentMethod, total FROM sales WHERE id = ?"
+          "SELECT shift_id as shiftId, user_id as userId, payment_method as paymentMethod, total, reversed_at as reversedAt FROM sales WHERE id = ?"
         )
         .get(id) as
-        | { shiftId: number | null; userId: number | null; paymentMethod: PaymentMethod; total: number }
+        | {
+            shiftId: number | null
+            userId: number | null
+            paymentMethod: PaymentMethod
+            total: number
+            reversedAt: string | null
+          }
         | undefined
       if (!sale) {
         throw new Error("Продажа не найдена.")
       }
       if (numberFromRow(sale.shiftId) !== shift.id) {
         throw new Error("Способ оплаты можно менять только в текущей смене.")
+      }
+      // Guard (зеркало заказного): сторно создало cash_refund тем же методом — правка прихода
+      // разбалансирует пару «приход+возврат» и развалит кассу по методам. Проверяем и флаг
+      // reversed_at, и фактический возврат по sale_id (на случай старых строк без флага).
+      const refunded =
+        sale.reversedAt ||
+        client.prepare("SELECT 1 FROM cash_transactions WHERE sale_id = ? AND type = 'cash_refund' LIMIT 1").get(id)
+      if (refunded) {
+        throw new Error(
+          "Продажа сторнирована — способ оплаты менять нельзя, иначе касса разойдётся. Если способ был неверным, проведите продажу заново нужным способом."
+        )
       }
       assertFloristEditsOwn(currentUser, sale.userId)
       if (sale.paymentMethod === paymentMethod) {

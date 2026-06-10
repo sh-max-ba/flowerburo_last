@@ -756,6 +756,9 @@ function applyOrderPayment(
 
   const paymentMethod = parsePaymentMethod(formData.get("paymentMethod"))
   const { order } = getOrderWithItems(client, orderId)
+  if (String(order.status) === "Отменен") {
+    throw new Error("Заказ отменён — оплату по нему принять нельзя.")
+  }
   const dealId = numberFromRow(order.deal_id) || null
   const customerId = numberFromRow(order.customer_id) || null
   const balance = Math.max(0, numberFromRow(order.total) - numberFromRow(order.paid))

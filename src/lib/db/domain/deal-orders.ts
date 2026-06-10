@@ -691,24 +691,30 @@ export function acceptDealPayment(formData: FormData, currentUser: CurrentUser) 
       throw new Error("Сумма оплаты не может быть больше остатка.")
     }
 
-    const orderId = numberFromRow(deal.order_id) || null
+    let orderId = numberFromRow(deal.order_id) || null
     const customerId = numberFromRow(deal.customer_id) || null
     let paymentLimit = balance
 
     if (orderId) {
-      const order = client.prepare("SELECT total, paid FROM orders WHERE id = ?").get(orderId) as
-        | { total: number; paid: number }
+      const order = client.prepare("SELECT total, paid, status FROM orders WHERE id = ?").get(orderId) as
+        | { total: number; paid: number; status: string }
         | undefined
       if (!order) {
         throw new Error("Заказ по сделке не найден.")
       }
 
-      const orderBalance = Math.max(0, numberFromRow(order.total) - numberFromRow(order.paid))
-      if (orderBalance <= 0) {
-        throw new Error("Заказ уже оплачен.")
-      }
+      // deals.order_id не очищается при отмене заказа: оплата шла бы на отменённый заказ
+      // (его paid «воскресал» и застревал навсегда). Платёж принимаем на саму сделку.
+      if (String(order.status) === "Отменен") {
+        orderId = null
+      } else {
+        const orderBalance = Math.max(0, numberFromRow(order.total) - numberFromRow(order.paid))
+        if (orderBalance <= 0) {
+          throw new Error("Заказ уже оплачен.")
+        }
 
-      paymentLimit = Math.min(paymentLimit, orderBalance)
+        paymentLimit = Math.min(paymentLimit, orderBalance)
+      }
     }
 
     if (amount - paymentLimit > 0.009) {

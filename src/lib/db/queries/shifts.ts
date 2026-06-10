@@ -533,7 +533,8 @@ export function getShiftDetails(
         COALESCE(sales.sale_discount_amount, 0) as saleDiscountAmount,
         COALESCE(NULLIF(sales.total_before_discount, 0), sales.total) as totalBeforeDiscount,
         COALESCE(sales.items_discount_total, 0) + COALESCE(sales.sale_discount_amount, 0) as discountTotal,
-        sales.total, sales.note, sales.created_at as createdAt, COUNT(sale_items.id) as itemsCount
+        sales.total, sales.note, sales.created_at as createdAt, sales.reversed_at as reversedAt,
+        COUNT(sale_items.id) as itemsCount
        FROM sales
        LEFT JOIN sale_items ON sale_items.sale_id = sales.id
        LEFT JOIN users ON users.id = sales.user_id
