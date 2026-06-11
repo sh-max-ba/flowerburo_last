@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { BanIcon, CheckCircle2Icon, FileEditIcon, MinusCircleIcon, PlusCircleIcon, RotateCcwIcon } from "lucide-react"
+import { BanIcon, CheckCircle2Icon, ClipboardCheckIcon, FileEditIcon, MinusCircleIcon, PlusCircleIcon, RotateCcwIcon } from "lucide-react"
 import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { Badge } from "@/components/ui/badge"
@@ -212,15 +212,21 @@ export default async function StockActsPage({ searchParams }: PageProps<"/stock/
 }
 
 function StockDocumentTypeBadge({ type }: { type: StockDocumentType }) {
+  // Инвентаризация — не расход: красный бейдж с минусом вводил в заблуждение
+  // (а её проведённая дельта может быть и плюсом).
   const className =
     type === "stock_in"
       ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-50"
-      : "border-red-200 bg-red-50 text-red-800 hover:bg-red-50"
+      : type === "count"
+        ? "border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-50"
+        : "border-red-200 bg-red-50 text-red-800 hover:bg-red-50"
 
   return (
     <Badge variant="outline" className={className}>
       {type === "stock_in" ? (
         <PlusCircleIcon data-icon="inline-start" />
+      ) : type === "count" ? (
+        <ClipboardCheckIcon data-icon="inline-start" />
       ) : (
         <MinusCircleIcon data-icon="inline-start" />
       )}

@@ -175,8 +175,12 @@ export function CashLedger({ entries }: { entries: CashLedgerEntry[] }) {
                         <TableRow>
                           <TableCell colSpan={7} className="bg-muted/30 p-0">
                             {entry.items.length > 0 ? <LineComposition items={entry.items} /> : null}
-                            {entry.orderId !== null ? <OrderCancelPanel entry={entry} /> : null}
-                            {entry.orderId === null && (entry.type === "cash_in" || entry.type === "cash_out") ? (
+                            {/* Для выплат (cash_out) по заказу правильное действие — встречная
+                                операция, а не отмена всего заказа: панель отмены тут не место. */}
+                            {entry.orderId !== null && entry.type !== "cash_out" ? (
+                              <OrderCancelPanel entry={entry} />
+                            ) : null}
+                            {entry.type === "cash_in" || entry.type === "cash_out" ? (
                               <ReverseOpPanel entry={entry} />
                             ) : null}
                             {entry.type === "sale" ? <SaleStornoPanel entry={entry} /> : null}
@@ -269,6 +273,11 @@ function OrderCancelPanel({ entry }: { entry: CashLedgerEntry }) {
   const orderLabel = entry.orderNumber ? `Заказ ${entry.orderNumber}` : `Заказ #${entry.orderId}`
   const willRefund = entry.orderPaid !== null && entry.orderPaid > 0
   const refundAmount = formatMoney(entry.orderPaid ?? 0)
+  // Заказ уже передан курьеру с выплатой: возврат клиенту её не сторнирует — предупреждаем.
+  const courierPayout =
+    entry.orderStatus === "Передан курьеру" && (entry.orderCourierPayout ?? 0) > 0
+      ? (entry.orderCourierPayout ?? 0)
+      : 0
 
   function handleConfirm() {
     if (entry.orderId === null) {
@@ -306,7 +315,11 @@ function OrderCancelPanel({ entry }: { entry: CashLedgerEntry }) {
               <AlertDialogDescription>
                 {orderLabel} будет отменён{willRefund ? `, возврат ${refundAmount} тем же способом оплаты` : ""}. Бронь и
                 склад откатятся, если букет ещё не собран. Возврат пройдёт по текущей открытой смене (для оплат прошлых
-                смен — с пометкой «за смену #N»). Действие необратимо.
+                смен — с пометкой «за смену #N»).
+                {courierPayout > 0
+                  ? ` Внимание: выплата курьеру ${formatMoney(courierPayout)} не сторнируется автоматически — при необходимости отмените её отдельно в строке выплаты.`
+                  : ""}{" "}
+                Действие необратимо.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

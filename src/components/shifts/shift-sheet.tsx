@@ -303,7 +303,6 @@ function ShiftSheetForm({
                 <input type="hidden" name="nightFloristId" value={nightFloristId} />
               </>
             )}
-            {openShiftDetails && <ShiftCloseSummary detail={openShiftDetails} />}
             <Field>
               <FieldLabel htmlFor="closingCash">Фактическая наличка в кассе</FieldLabel>
               <Input
@@ -367,6 +366,8 @@ function ShiftSheetForm({
                 </FieldDescription>
               )}
             </Field>
+            {/* Сводка — ПОСЛЕ поля факта: сначала пересчёт и разница, детали — для сверки ниже. */}
+            {openShiftDetails && <ShiftCloseSummary detail={openShiftDetails} />}
             {canOpenNightShift && (
               <FieldSet>
                 <Field orientation="horizontal">

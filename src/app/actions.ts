@@ -899,6 +899,11 @@ export async function previewWarehouseImportAction(formData: FormData) {
       if (!file.name.toLowerCase().endsWith(".xlsx")) {
         throw new Error("Загрузите файл в формате .xlsx.")
       }
+      // XLSX.read синхронный: большой файл заморозил бы единственный Node-процесс
+      // (касса, заказы, вебхуки). Реальные выгрузки склада — сотни КБ.
+      if (file.size > 15 * 1024 * 1024) {
+        throw new Error("Файл слишком большой (максимум 15 МБ). Сохраните XLSX без картинок и лишних листов.")
+      }
 
       const preview = previewWarehouseImport({
         filename: file.name,

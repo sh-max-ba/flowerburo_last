@@ -11,17 +11,17 @@ import {
   CheckIcon,
   ChevronDownIcon,
   EyeIcon,
+  InfoIcon,
   MessageSquareIcon,
   SunIcon,
 } from "lucide-react"
-import { Fragment, useState } from "react"
+import { useState } from "react"
 import type { DashboardData, ShiftDetails } from "@/lib/db"
-import { cashTransactionTypeLabel, getPaymentMethodLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { formatInstant } from "@/lib/datetime"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { buttonVariants } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -30,8 +30,17 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { ShiftCashTimeline } from "@/components/cash/shift-cash-timeline"
 
 export function ShiftsPage({ data }: { data: DashboardData }) {
   const router = useRouter()
@@ -53,9 +62,9 @@ export function ShiftsPage({ data }: { data: DashboardData }) {
                   <TableHead>Ответственный</TableHead>
                   <TableHead>Открыта</TableHead>
                   <TableHead>Закрыта</TableHead>
-                  <TableHead>Начальная наличка</TableHead>
-                  <TableHead>Ожидается</TableHead>
-                  <TableHead>Факт</TableHead>
+                  <TableHead className="text-right">Начальная наличка</TableHead>
+                  <TableHead className="text-right">Ожидается</TableHead>
+                  <TableHead className="text-right">Факт</TableHead>
                   <TableHead>Разница</TableHead>
                   <TableHead>Статус</TableHead>
                   <TableHead className="text-right">Действие</TableHead>
@@ -101,9 +110,11 @@ export function ShiftsPage({ data }: { data: DashboardData }) {
                       </TableCell>
                       <TableCell>{dateTime(shift.openedAt)}</TableCell>
                       <TableCell>{shift.closedAt ? dateTime(shift.closedAt) : "активна"}</TableCell>
-                      <TableCell>{formatMoney(shift.openingCash)}</TableCell>
-                      <TableCell className="font-medium">{formatMoney(shift.expectedCash)}</TableCell>
-                      <TableCell>{shift.closingCash === null ? "-" : formatMoney(shift.closingCash)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatMoney(shift.openingCash)}</TableCell>
+                      <TableCell className="text-right font-medium tabular-nums">{formatMoney(shift.expectedCash)}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {shift.closingCash === null ? "-" : formatMoney(shift.closingCash)}
+                      </TableCell>
                       <TableCell>
                         {difference === null ? "-" : <DifferenceBadge difference={difference} />}
                       </TableCell>
@@ -136,23 +147,7 @@ export function ShiftsPage({ data }: { data: DashboardData }) {
 export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
   const shift = detail.shift
   const difference = shift.closingCash === null ? null : shift.closingCash - shift.expectedCash
-  const revenueByMethod = getRevenueByMethod(detail)
-
   const note = shift.note?.trim()
-  const methodMetrics = [
-    { label: "Наличные", value: revenueByMethod.cash },
-    { label: "Карта", value: revenueByMethod.card },
-    { label: "Терминал", value: revenueByMethod.terminal },
-    { label: "Mbank", value: revenueByMethod.mbank },
-    { label: "Optima", value: revenueByMethod.optima },
-    { label: "ЭлСом", value: revenueByMethod.elsom },
-    { label: "Бакай", value: revenueByMethod.bakai },
-    { label: "Перевод", value: revenueByMethod.transfer },
-    { label: "Внесения", value: detail.summary.cashIn },
-    { label: "Изъятия", value: detail.breakdown.cashOutOther },
-    { label: "Выплаты курьеру", value: detail.breakdown.courierPayouts },
-    { label: "Возвраты безналичными", value: getNonCashRefunds(detail) },
-  ].filter((metric) => Math.abs(metric.value) >= 0.01)
 
   return (
       <div className="flex flex-col gap-5">
@@ -186,93 +181,28 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
           </Alert>
         ) : null}
 
-        <FormulaCard detail={detail} />
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <ShiftStat title="Выручка до скидок" value={formatMoney(detail.summary.revenueBeforeDiscount)} />
-          <ShiftStat title="Скидки" value={formatMoney(detail.summary.discountTotal)} />
-          <ShiftStat title="Выручка после скидок" value={formatMoney(detail.summary.revenueTotal)} />
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <FormulaCard detail={detail} />
+          <RevenueCard detail={detail} />
         </div>
 
-        {methodMetrics.length ? (
-          <Card className="rounded-2xl border bg-white">
-            <CardHeader>
-              <CardTitle>Разбивка по способам оплаты</CardTitle>
-              <CardDescription>Показаны только ненулевые способы и движения наличных</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {methodMetrics.map((metric) => (
-                  <Metric key={metric.label} label={metric.label} value={formatMoney(metric.value)} />
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
+        <MethodBreakdownCard detail={detail} />
 
         <Card className="rounded-2xl border bg-white">
           <CardHeader>
-            <CardTitle>Денежные операции</CardTitle>
-            <CardDescription>Продажи, оплаты, внесения и изъятия по этой смене</CardDescription>
+            <CardTitle>Хронология смены</CardTitle>
+            <CardDescription>
+              Все операции одной лентой: продажи, оплаты по заказам, возвраты, внесения и изъятия. Строки с составом раскрываются по клику
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            {!detail.cashTransactions.length ? (
-              <CompactEmpty title="Операций в смене пока нет" />
-            ) : (
-              <div className="min-w-0 overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Время</TableHead>
-                      <TableHead>Провёл</TableHead>
-                      <TableHead>Операция</TableHead>
-                      <TableHead>Способ оплаты</TableHead>
-                      <TableHead>Сумма</TableHead>
-                      <TableHead>Связь</TableHead>
-                      <TableHead>Комментарий</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {detail.cashTransactions.map((transaction) => (
-                      <TableRow key={transaction.id}>
-                        <TableCell>{dateTime(transaction.createdAt)}</TableCell>
-                        <TableCell>{operationUser(transaction.userName)}</TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1.5">
-                            <span>{cashTransactionTypeLabel(transaction.type)}</span>
-                            <CashEffectBadge type={transaction.type} method={transaction.paymentMethod} />
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{getPaymentMethodLabel(transaction.paymentMethod)}</Badge>
-                        </TableCell>
-                        <TableCell className="font-medium">{formatMoney(transaction.amount)}</TableCell>
-                        <TableCell>
-                          {transaction.orderId
-                            ? `Заказ #${transaction.orderId}`
-                            : transaction.saleId
-                              ? `Продажа #${transaction.saleId}`
-                              : transaction.dealId
-                                ? `Сделка #${transaction.dealId}`
-                                : "-"}
-                        </TableCell>
-                        <TableCell className="max-w-72 truncate">{transaction.comment || "-"}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
+            <ShiftCashTimeline detail={detail} editable={false} />
           </CardContent>
         </Card>
 
         {detail.operatorSummaries.length > 0 && (
           <OperatorSummaryCard operators={detail.operatorSummaries} />
         )}
-
-        <ShiftSalesCard sales={detail.sales} />
-
-        <ShiftOrderPaymentsCard orders={detail.relatedOrders} />
       </div>
   )
 }
@@ -333,50 +263,86 @@ function ReconciliationPanel({
   )
 }
 
+// Сводка в диалоге закрытия: только главное и только ненулевое. Поле «Фактическая наличка»
+// идёт ПЕРЕД этой сводкой (см. ShiftSheet) — менеджер сначала вводит факт, потом сверяет детали.
 export function ShiftCloseSummary({ detail }: { detail: ShiftDetails }) {
+  const [showFormula, setShowFormula] = useState(false)
   const revenueByMethod = getRevenueByMethod(detail)
+  const explainers = getRevenueExplainers(detail)
+  const tiles = [
+    { label: "Наличные", value: revenueByMethod.cash },
+    { label: "Карта", value: revenueByMethod.card },
+    { label: "Терминал", value: revenueByMethod.terminal },
+    { label: "Mbank", value: revenueByMethod.mbank },
+    { label: "Optima", value: revenueByMethod.optima },
+    { label: "ЭлСом", value: revenueByMethod.elsom },
+    { label: "Бакай", value: revenueByMethod.bakai },
+    { label: "Перевод", value: revenueByMethod.transfer },
+    { label: "Предоплаты", value: getPrepayments(detail) },
+    { label: "Доплаты по заказам", value: getOrderPayments(detail) },
+    { label: "Оплаты по сделкам", value: getDealPayments(detail) },
+    { label: "Внесения", value: detail.summary.cashIn },
+    { label: "Изъятия", value: detail.breakdown.cashOutOther },
+    { label: "Выплаты курьеру", value: detail.breakdown.courierPayouts },
+    { label: "Возвраты наличными", value: detail.summary.cashRefund },
+    { label: "Возвраты безналичными", value: getNonCashRefunds(detail) },
+  ].filter((tile) => Math.abs(tile.value) >= 0.01)
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <ShiftStat title="Ожидается в кассе" value={formatMoney(detail.summary.expectedCash)} emphasis />
-        <ShiftStat title="Выручка до скидок" value={formatMoney(detail.summary.revenueBeforeDiscount)} />
-        <ShiftStat title="Скидки" value={formatMoney(detail.summary.discountTotal)} />
         <ShiftStat title="Выручка после скидок" value={formatMoney(detail.summary.revenueTotal)} />
-        <ShiftStat title="Ответственный" value={detail.cashier} />
+        <ShiftStat title="Скидки" value={formatMoney(detail.summary.discountTotal)} />
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Metric label="Наличные" value={formatMoney(revenueByMethod.cash)} />
-        <Metric label="Карта" value={formatMoney(revenueByMethod.card)} />
-        <Metric label="Терминал" value={formatMoney(revenueByMethod.terminal)} />
-        <Metric label="Mbank" value={formatMoney(revenueByMethod.mbank)} />
-        <Metric label="Optima" value={formatMoney(revenueByMethod.optima)} />
-        <Metric label="ЭлСом" value={formatMoney(revenueByMethod.elsom)} />
-        <Metric label="Бакай" value={formatMoney(revenueByMethod.bakai)} />
-        <Metric label="Перевод" value={formatMoney(revenueByMethod.transfer)} />
-        <Metric label="Предоплаты" value={formatMoney(getPrepayments(detail))} />
-        <Metric label="Доплаты по заказам" value={formatMoney(getOrderPayments(detail))} />
-        <Metric label="Оплаты по сделкам" value={formatMoney(getDealPayments(detail))} />
-        <Metric label="Внесения" value={formatMoney(detail.summary.cashIn)} />
-        <Metric label="Изъятия" value={formatMoney(detail.breakdown.cashOutOther)} />
-        <Metric label="Выплаты курьеру" value={formatMoney(detail.breakdown.courierPayouts)} />
-        {getNonCashRefunds(detail) > 0.009 ? (
-          <Metric label="Возвраты безналичными" value={formatMoney(getNonCashRefunds(detail))} />
-        ) : null}
-      </div>
-      <FormulaCard detail={detail} compact />
+      {explainers.length > 0 && (
+        <div className="grid gap-1.5 text-xs text-muted-foreground">
+          {explainers.map((line) => (
+            <div key={line} className="flex items-start gap-1.5">
+              <InfoIcon className="mt-0.5 size-3.5 shrink-0" />
+              <span>{line}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {tiles.length > 0 && (
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          {tiles.map((tile) => (
+            <Metric key={tile.label} label={tile.label} value={formatMoney(tile.value)} />
+          ))}
+        </div>
+      )}
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="self-start text-muted-foreground"
+        onClick={() => setShowFormula((value) => !value)}
+      >
+        <ChevronDownIcon
+          data-icon="inline-start"
+          className={cn("transition-transform", showFormula && "rotate-180")}
+        />
+        Формула кассы
+      </Button>
+      {showFormula && <FormulaCard detail={detail} compact />}
     </div>
   )
 }
 
 function FormulaCard({ detail, compact }: { detail: ShiftDetails; compact?: boolean }) {
-  const rows = getFormulaRows(detail)
+  // Нулевые строки прячем (кроме начальной налички — она всегда часть формулы).
+  const rows = getFormulaRows(detail).filter(
+    (row) => row.label === "Начальная наличка" || Math.abs(row.amount) >= 0.01
+  )
 
   return (
     <Card className={cn("rounded-2xl border bg-white", compact && "rounded-xl")}>
       <CardHeader>
-        <CardTitle>Формула кассы</CardTitle>
-        <CardDescription>Безналичные оплаты входят в выручку, но не увеличивают expected cash</CardDescription>
+        <CardTitle>Наличные в кассе</CardTitle>
+        <CardDescription>
+          Физический ящик: только наличные по факту получения. Безнал входит в выручку, но не в ожидаемую наличку
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <div className="min-w-0 overflow-x-auto">
@@ -384,15 +350,20 @@ function FormulaCard({ detail, compact }: { detail: ShiftDetails; compact?: bool
             <TableBody>
               {rows.map((row) => (
                 <TableRow key={row.label}>
-                  <TableCell className="w-10 text-muted-foreground">{row.sign}</TableCell>
-                  <TableCell>{row.label}</TableCell>
-                  <TableCell className="text-right font-medium">{formatMoney(row.amount)}</TableCell>
+                  <TableCell className="text-muted-foreground">{row.label}</TableCell>
+                  <TableCell
+                    className={cn("text-right font-medium tabular-nums", row.sign === "-" && "text-red-600")}
+                  >
+                    {row.sign === "-" ? "−" : "+"}
+                    {formatMoney(row.amount)}
+                  </TableCell>
                 </TableRow>
               ))}
               <TableRow>
-                <TableCell className="font-semibold">=</TableCell>
-                <TableCell className="font-semibold">Ожидается в кассе</TableCell>
-                <TableCell className="text-right font-semibold">{formatMoney(detail.summary.expectedCash)}</TableCell>
+                <TableCell className="font-semibold">= Ожидается в кассе</TableCell>
+                <TableCell className="text-right font-semibold tabular-nums">
+                  {formatMoney(detail.summary.expectedCash)}
+                </TableCell>
               </TableRow>
             </TableBody>
           </Table>
@@ -402,7 +373,157 @@ function FormulaCard({ detail, compact }: { detail: ShiftDetails; compact?: bool
   )
 }
 
+// Правая колонка «двух миров»: коммерческая выручка смены + пояснения, почему она может
+// не совпадать ни с наличкой в ящике, ни с разбивкой по способам (кросс-сменные предоплаты).
+function RevenueCard({ detail }: { detail: ShiftDetails }) {
+  const summary = detail.summary
+  const explainers = getRevenueExplainers(detail)
+
+  return (
+    <Card className="rounded-2xl border bg-white">
+      <CardHeader>
+        <CardTitle>Выручка смены</CardTitle>
+        <CardDescription>Признаётся в смене выдачи заказа; быстрые продажи — сразу</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col">
+          <div className="flex items-center justify-between gap-3 py-1.5 text-sm">
+            <span className="text-muted-foreground">Выручка до скидок</span>
+            <span className="font-medium tabular-nums">{formatMoney(summary.revenueBeforeDiscount)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-3 py-1.5 text-sm">
+            <span className="text-muted-foreground">Скидки</span>
+            <span className={cn("font-medium tabular-nums", summary.discountTotal >= 0.01 && "text-red-600")}>
+              −{formatMoney(summary.discountTotal)}
+            </span>
+          </div>
+          <div className="mt-1 flex items-baseline justify-between gap-3 border-t pt-3">
+            <span className="font-medium">Выручка после скидок</span>
+            <span className="text-2xl font-semibold tabular-nums">{formatMoney(summary.revenueTotal)}</span>
+          </div>
+        </div>
+        {explainers.length > 0 && (
+          <div className="mt-4 grid gap-1.5 border-t pt-3 text-xs text-muted-foreground">
+            {explainers.map((line) => (
+              <div key={line} className="flex items-start gap-1.5">
+                <InfoIcon className="mt-0.5 size-3.5 shrink-0" />
+                <span>{line}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// Строки-объяснители разрыва «выручка ≠ наличные в кассе / разбивка по способам».
+function getRevenueExplainers(detail: ShiftDetails) {
+  const summary = detail.summary
+  const lines: string[] = []
+  if (summary.revenueReceivedInOtherShifts >= 0.01) {
+    lines.push(
+      `+${formatMoney(summary.revenueReceivedInOtherShifts)} — получены в прошлые смены, признаны выручкой в этой (заказы, выданные сейчас)`
+    )
+  }
+  if (summary.deferredPrepayments >= 0.01) {
+    lines.push(
+      `−${formatMoney(summary.deferredPrepayments)} — получены в эту смену за незавершённые заказы (станут выручкой при выдаче)`
+    )
+  }
+  // Черновики — глобальная справка «на сейчас», к закрытой смене отношения не имеет.
+  if (detail.shift.status === "open" && summary.draftPrepaidTotal >= 0.01) {
+    lines.push(`${formatMoney(summary.draftPrepaidTotal)} — предоплаты в черновиках, в кассу не проведены`)
+  }
+  return lines
+}
+
+const METHOD_LABELS: Array<{ key: keyof ReturnType<typeof getRevenueByMethod>; label: string }> = [
+  { key: "cash", label: "Наличные" },
+  { key: "card", label: "Карта" },
+  { key: "terminal", label: "Терминал" },
+  { key: "mbank", label: "Mbank" },
+  { key: "optima", label: "Optima" },
+  { key: "elsom", label: "ЭлСом" },
+  { key: "bakai", label: "Бакай" },
+  { key: "transfer", label: "Перевод" },
+]
+
+// Только способы оплаты (получено в смену, минус возвраты) с подытогом нал/безнал.
+// Движения наличных (внесения/изъятия/курьер) показаны в «Наличных в кассе», не здесь.
+function MethodBreakdownCard({ detail }: { detail: ShiftDetails }) {
+  const revenueByMethod = getRevenueByMethod(detail)
+  const entries = METHOD_LABELS.map(({ key, label }) => ({ label, value: revenueByMethod[key] })).filter(
+    (entry) => Math.abs(entry.value) >= 0.01
+  )
+
+  if (!entries.length) {
+    return null
+  }
+
+  const max = Math.max(...entries.map((entry) => Math.abs(entry.value)))
+  const cashTotal = revenueByMethod.cash
+  const nonCashTotal = METHOD_LABELS.filter((method) => method.key !== "cash").reduce(
+    (sum, method) => sum + revenueByMethod[method.key],
+    0
+  )
+
+  return (
+    <Card className="rounded-2xl border bg-white">
+      <CardHeader>
+        <CardTitle>Выручка по способам</CardTitle>
+        <CardDescription>
+          Получено в смену, за вычетом возвратов. Может не совпадать с признанной выручкой из-за кросс-сменных предоплат — см. пояснения в «Выручке смены»
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col gap-2.5">
+          {entries.map((entry) => (
+            <div key={entry.label} className="grid grid-cols-[6.5rem_minmax(0,1fr)_auto] items-center gap-3">
+              <span className="text-sm text-muted-foreground">{entry.label}</span>
+              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary"
+                  style={{
+                    width: `${max > 0 ? Math.max(4, Math.round((Math.abs(entry.value) / max) * 100)) : 0}%`,
+                  }}
+                />
+              </div>
+              <span className="text-sm font-medium tabular-nums">{formatMoney(entry.value)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 border-t pt-3 text-xs text-muted-foreground">
+          Наличные {formatMoney(cashTotal)} · Безнал {formatMoney(nonCashTotal)} · Всего{" "}
+          {formatMoney(cashTotal + nonCashTotal)}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 function OperatorSummaryCard({ operators }: { operators: ShiftDetails["operatorSummaries"] }) {
+  const totals = operators.reduce(
+    (acc, operator) => ({
+      salesCount: acc.salesCount + operator.salesCount,
+      salesTotal: acc.salesTotal + operator.salesTotal,
+      orderPaymentsTotal: acc.orderPaymentsTotal + operator.orderPaymentsTotal,
+      cashInTotal: acc.cashInTotal + operator.cashInTotal,
+      cashOutTotal: acc.cashOutTotal + operator.cashOutTotal,
+      courierPayoutTotal: acc.courierPayoutTotal + operator.courierPayoutTotal,
+      refundTotal: acc.refundTotal + operator.refundTotal,
+    }),
+    {
+      salesCount: 0,
+      salesTotal: 0,
+      orderPaymentsTotal: 0,
+      cashInTotal: 0,
+      cashOutTotal: 0,
+      courierPayoutTotal: 0,
+      refundTotal: 0,
+    }
+  )
+
   return (
     <Card className="rounded-2xl border bg-white">
       <CardHeader>
@@ -428,298 +549,37 @@ function OperatorSummaryCard({ operators }: { operators: ShiftDetails["operatorS
               {operators.map((operator) => (
                 <TableRow key={operator.userId ?? "null"}>
                   <TableCell className="font-medium">{operationUser(operator.userName)}</TableCell>
-                  <TableCell className="text-right">{operator.salesCount}</TableCell>
-                  <TableCell className="text-right">{formatMoney(operator.salesTotal)}</TableCell>
-                  <TableCell className="text-right">{formatMoney(operator.orderPaymentsTotal)}</TableCell>
-                  <TableCell className="text-right">{formatMoney(operator.cashInTotal)}</TableCell>
-                  <TableCell className="text-right">{formatMoney(operator.cashOutTotal)}</TableCell>
-                  <TableCell className="text-right">{formatMoney(operator.courierPayoutTotal)}</TableCell>
-                  <TableCell className="text-right">{formatMoney(operator.refundTotal)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{operator.salesCount}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatMoney(operator.salesTotal)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatMoney(operator.orderPaymentsTotal)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatMoney(operator.cashInTotal)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatMoney(operator.cashOutTotal)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatMoney(operator.courierPayoutTotal)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatMoney(operator.refundTotal)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
+            <TableFooter>
+              <TableRow>
+                <TableCell className="font-medium">Итого</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{totals.salesCount}</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{formatMoney(totals.salesTotal)}</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">
+                  {formatMoney(totals.orderPaymentsTotal)}
+                </TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{formatMoney(totals.cashInTotal)}</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{formatMoney(totals.cashOutTotal)}</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">
+                  {formatMoney(totals.courierPayoutTotal)}
+                </TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{formatMoney(totals.refundTotal)}</TableCell>
+              </TableRow>
+            </TableFooter>
           </Table>
         </div>
       </CardContent>
     </Card>
   )
-}
-
-function ShiftSalesCard({ sales }: { sales: ShiftDetails["sales"] }) {
-  const [openId, setOpenId] = useState<number | null>(null)
-
-  return (
-    <Card className="rounded-2xl border bg-white">
-      <CardHeader>
-        <CardTitle>Продажи смены</CardTitle>
-        <CardDescription>Быстрые продажи, проведенные в смене</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {!sales.length ? (
-          <CompactEmpty title="Продаж за эту смену нет" />
-        ) : (
-          <div className="min-w-0 overflow-x-auto">
-            <Table>
-              <TableHeader>
-                  <TableRow>
-                    <TableHead>Время</TableHead>
-                    <TableHead>Провёл</TableHead>
-                    <TableHead>№ продажи</TableHead>
-                    <TableHead>До скидки</TableHead>
-                    <TableHead>Скидка</TableHead>
-                    <TableHead>Итого</TableHead>
-                    <TableHead>Способ оплаты</TableHead>
-                    <TableHead>Позиций</TableHead>
-                    <TableHead>Комментарий</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sales.map((sale) => {
-                  const isOpen = openId === sale.id
-
-                  return (
-                    <Fragment key={sale.id}>
-                      <TableRow
-                        key={`sale-${sale.id}`}
-                        className="cursor-pointer"
-                        onClick={() => setOpenId(isOpen ? null : sale.id)}
-                      >
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <ChevronDownIcon
-                              className={cn("size-4 transition-transform", isOpen && "rotate-180")}
-                            />
-                            {dateTime(sale.createdAt)}
-                          </div>
-                        </TableCell>
-                        <TableCell>{operationUser(sale.userName)}</TableCell>
-                        <TableCell className="font-medium">#{sale.id}</TableCell>
-                        <TableCell>{formatMoney(sale.totalBeforeDiscount)}</TableCell>
-                        <TableCell>{formatMoney(sale.discountTotal)}</TableCell>
-                        <TableCell className="font-medium">{formatMoney(sale.total)}</TableCell>
-                        <TableCell>{getPaymentMethodLabel(sale.paymentMethod)}</TableCell>
-                        <TableCell>{sale.itemsCount}</TableCell>
-                        <TableCell className="max-w-72 truncate">{sale.note || "-"}</TableCell>
-                      </TableRow>
-                      {isOpen && (
-                        <TableRow key={`sale-${sale.id}-items`}>
-                          <TableCell colSpan={9} className="bg-muted/30 p-0">
-                            <ShiftItemsTable items={sale.items} emptyTitle="В продаже нет позиций" />
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </Fragment>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function ShiftOrderPaymentsCard({ orders }: { orders: ShiftDetails["relatedOrders"] }) {
-  const [openId, setOpenId] = useState<number | null>(null)
-
-  return (
-    <Card className="rounded-2xl border bg-white">
-      <CardHeader>
-        <CardTitle>Заказы / оплаты</CardTitle>
-        <CardDescription>Операции смены, связанные с заказами</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {!orders.length ? (
-          <CompactEmpty title="Операций по заказам в смене пока нет" />
-        ) : (
-          <div className="min-w-0 overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Заказ</TableHead>
-                  <TableHead>Клиент</TableHead>
-                  <TableHead>Провел</TableHead>
-                  <TableHead>Тип оплаты</TableHead>
-                  <TableHead>До скидки</TableHead>
-                  <TableHead>Скидка</TableHead>
-                  <TableHead>Итого заказа</TableHead>
-                  <TableHead>Сумма</TableHead>
-                  <TableHead>Комментарий</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {orders.map((order) => {
-                  const isOpen = openId === order.transactionId
-
-                  return (
-                    <Fragment key={order.transactionId}>
-                      <TableRow
-                        key={`order-payment-${order.transactionId}`}
-                        className="cursor-pointer"
-                        onClick={() => setOpenId(isOpen ? null : order.transactionId)}
-                      >
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <ChevronDownIcon
-                              className={cn("size-4 transition-transform", isOpen && "rotate-180")}
-                            />
-                            <span className="font-medium">{order.number || `#${order.orderId}`}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell>{order.customer || "-"}</TableCell>
-                        <TableCell>{operationUser(order.userName)}</TableCell>
-                        <TableCell>{cashTransactionTypeLabel(order.type)}</TableCell>
-                        <TableCell>{formatMoney(order.totalBeforeDiscount)}</TableCell>
-                        <TableCell>{formatMoney(order.discountTotal)}</TableCell>
-                        <TableCell>{formatMoney(order.total)}</TableCell>
-                        <TableCell className="font-medium">{formatMoney(order.amount)}</TableCell>
-                        <TableCell className="max-w-72 truncate">{order.comment || "-"}</TableCell>
-                      </TableRow>
-                      {isOpen && (
-                        <TableRow key={`order-payment-${order.transactionId}-items`}>
-                          <TableCell colSpan={9} className="bg-muted/30 p-0">
-                            <ShiftItemsTable items={order.items} emptyTitle="В заказе нет позиций" />
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </Fragment>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-type ShiftItemRow = {
-  id: number
-  name: string
-  productCode: string
-  qty: number
-  price: number
-  bouquetName?: string
-  bouquetGroupId?: string
-  discountAmount?: number
-  totalBeforeDiscount?: number
-  total: number
-}
-
-function ShiftItemsTable({
-  items,
-  emptyTitle,
-}: {
-  items: ShiftItemRow[]
-  emptyTitle: string
-}) {
-  const groups = groupShiftItems(items)
-
-  if (!items.length) {
-    return <div className="px-6 py-4 text-sm text-muted-foreground">{emptyTitle}</div>
-  }
-
-  return (
-    <div className="px-6 py-3">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Позиция</TableHead>
-            <TableHead>Код</TableHead>
-            <TableHead>Кол-во</TableHead>
-            <TableHead>Цена</TableHead>
-            <TableHead>До скидки</TableHead>
-            <TableHead>Скидка</TableHead>
-            <TableHead>Итого</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {groups.map((group) => {
-            if (group.type === "bouquet") {
-              const totalBeforeDiscount = group.items.reduce(
-                (sum, item) => sum + (item.totalBeforeDiscount ?? item.total),
-                0
-              )
-              const discountAmount = group.items.reduce((sum, item) => sum + (item.discountAmount ?? 0), 0)
-              const total = group.items.reduce((sum, item) => sum + item.total, 0)
-              const price = group.items.reduce((sum, item) => sum + item.price, 0)
-
-              return (
-                <TableRow key={group.key}>
-                  <TableCell colSpan={2}>
-                    <div className="flex flex-col gap-1">
-                      <div className="flex flex-wrap items-center gap-2 font-medium">
-                        <Badge variant="secondary">Букет</Badge>
-                        <span>{group.bouquetName || "Букет"}</span>
-                      </div>
-                      <div className="grid gap-1 text-xs text-muted-foreground">
-                        {group.items.map((item) => (
-                          <div key={item.id} className="flex justify-between gap-3">
-                            <span>{item.name}</span>
-                            <span>{formatNumber(item.qty)} шт</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>-</TableCell>
-                  <TableCell>{formatMoney(price)}</TableCell>
-                  <TableCell>{formatMoney(totalBeforeDiscount)}</TableCell>
-                  <TableCell>{formatMoney(discountAmount)}</TableCell>
-                  <TableCell className="font-medium">{formatMoney(total)}</TableCell>
-                </TableRow>
-              )
-            }
-
-            const item = group.item
-            return (
-              <TableRow key={item.id}>
-                <TableCell className="font-medium">{item.name}</TableCell>
-                <TableCell>{item.productCode || "-"}</TableCell>
-                <TableCell>{formatNumber(item.qty)}</TableCell>
-                <TableCell>{formatMoney(item.price)}</TableCell>
-                <TableCell>{formatMoney(item.totalBeforeDiscount ?? item.total)}</TableCell>
-                <TableCell>{formatMoney(item.discountAmount ?? 0)}</TableCell>
-                <TableCell className="font-medium">{formatMoney(item.total)}</TableCell>
-              </TableRow>
-            )
-          })}
-        </TableBody>
-      </Table>
-    </div>
-  )
-}
-
-function groupShiftItems(items: ShiftItemRow[]) {
-  const groups: Array<
-    | { type: "single"; key: string; item: ShiftItemRow }
-    | { type: "bouquet"; key: string; bouquetName: string; items: ShiftItemRow[] }
-  > = []
-  const bouquetGroups = new Map<string, Extract<(typeof groups)[number], { type: "bouquet" }>>()
-
-  for (const item of items) {
-    if (!item.bouquetGroupId) {
-      groups.push({ type: "single", key: `item-${item.id}`, item })
-      continue
-    }
-
-    let group = bouquetGroups.get(item.bouquetGroupId)
-    if (!group) {
-      group = {
-        type: "bouquet",
-        key: item.bouquetGroupId,
-        bouquetName: item.bouquetName ?? "",
-        items: [],
-      }
-      bouquetGroups.set(item.bouquetGroupId, group)
-      groups.push(group)
-    }
-    group.items.push(item)
-  }
-
-  return groups
 }
 
 function ShiftStat({ title, value, emphasis }: { title: string; value: string; emphasis?: boolean }) {
@@ -803,18 +663,6 @@ function DifferenceBadge({
       Излишек <span className="font-semibold">{formatMoney(magnitude)}</span>
     </Badge>
   )
-}
-
-function CashEffectBadge({ type, method }: { type: string; method: string }) {
-  if (method !== "cash") {
-    return <Badge variant="outline">Без налички</Badge>
-  }
-
-  if (type === "cash_out" || type === "cash_refund") {
-    return <Badge variant="destructive">Из кассы</Badge>
-  }
-
-  return <Badge variant="secondary">В кассу</Badge>
 }
 
 function CompactEmpty({ title }: { title: string }) {
@@ -955,10 +803,6 @@ function getDealPayments(detail: ShiftDetails) {
 
 function operationUser(name: string | null | undefined) {
   return name?.trim() || "не зафиксирован"
-}
-
-function formatNumber(value: number) {
-  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value)
 }
 
 // Метки смены (opened_at/closed_at/created_at — UTC из БД, показываем в поясе магазина).

@@ -131,7 +131,17 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
           </Card>
         )}
 
-        {document.status === "draft" && (
+        {/* Инвентаризация живёт в своём разделе: общий редактор/проведение актов для неё
+            заблокированы на сервере, кнопки здесь были бы тупиковыми. */}
+        {document.status === "draft" && document.type === "count" && (
+          <div className="flex flex-wrap gap-2">
+            <Link href={`/stock/inventory/${document.id}`} className={buttonVariants({ variant: "outline" })}>
+              Открыть в разделе «Инвентаризация»
+            </Link>
+          </div>
+        )}
+
+        {document.status === "draft" && document.type !== "count" && (
           <div className="flex flex-wrap gap-2">
             <Link href={`/stock/acts/${document.id}/edit`} className={buttonVariants({ variant: "outline" })}>
               Редактировать
@@ -255,6 +265,9 @@ function getStockDocumentOrNull(documentId: number) {
 }
 
 function stockDocumentOperationDateLabel(type: StockDocumentType) {
+  if (type === "count") {
+    return "Дата инвентаризации"
+  }
   return type === "stock_in" ? "Дата приемки" : "Дата списания"
 }
 
@@ -282,7 +295,9 @@ function stockDocumentItemDisplay(
   document: ReturnType<typeof getStockDocument>,
   item: ReturnType<typeof getStockDocument>["items"][number]
 ) {
-  const delta = document.type === "stock_in" ? item.qty : -item.qty
+  // У инвентаризации qty — УЖЕ подписанная дельта проведения (+излишек/−недостача),
+  // негирование переворачивало знак: излишек +3 показывался красным «−3».
+  const delta = document.type === "stock_in" || document.type === "count" ? item.qty : -item.qty
 
   if (document.status === "posted") {
     return {

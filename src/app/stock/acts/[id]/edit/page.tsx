@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { notFound } from "next/navigation"
+import { notFound, redirect } from "next/navigation"
 import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { StockDocumentForm } from "@/components/stock/stock-document-form"
@@ -25,6 +25,11 @@ export default async function EditStockActPage({ params }: PageProps<"/stock/act
   const document = getStockDocumentOrNull(documentId)
   if (!document || document.status !== "draft") {
     notFound()
+  }
+  // Черновик инвентаризации редактируется только в своём разделе: общий редактор актов
+  // открыл бы его как «Пополнение», а сохранение всё равно отбито серверным гейтом.
+  if (document.type === "count") {
+    redirect(`/stock/inventory/${document.id}`)
   }
 
   const data = getDashboardData()
