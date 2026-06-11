@@ -115,11 +115,6 @@ export function getDashboardData(): DashboardData {
     )
     .all() as CustomerOptionRow[]).map(rowToCustomerOption)
 
-  const today = new Date().toISOString().slice(0, 10)
-  const todaySales = client
-    .prepare("SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE DATE(created_at) = DATE(?)")
-    .get(today) as { total: number }
-
   return {
     products,
     sales,
@@ -138,7 +133,6 @@ export function getDashboardData(): DashboardData {
       negativeStockCount: products.filter((product) => product.available < 0).length,
       reservedCount: products.filter((product) => product.reserved > 0).length,
       openOrdersCount: orders.filter((order) => !["Выдан", "Отменен", "Передан курьеру"].includes(order.status)).length,
-      todaySalesTotal: Number(todaySales.total),
       openShift: shifts.find((shift) => shift.status === "open") ?? null,
       defaultOpeningCash: getDefaultOpeningCash(client),
     },

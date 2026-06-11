@@ -647,7 +647,6 @@ export type DashboardData = {
     negativeStockCount: number
     reservedCount: number
     openOrdersCount: number
-    todaySalesTotal: number
     openShift: Shift | null
     defaultOpeningCash: number
   }

@@ -94,11 +94,13 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
     : 0
 
   // Выручка и продажи за выбранный период --------------------------------------
+  // Зеркально формуле смены (shifts.ts): сторнированные продажи (reversed_at) и отменённые
+  // заказы (status = 'Отменен', включая отменённые после выдачи) — не выручка.
   const periodSalesRow = client
     .prepare(
       `SELECT COALESCE(SUM(total), 0) as total, COUNT(*) as count
        FROM sales
-       WHERE DATE(created_at) BETWEEN ? AND ?`
+       WHERE DATE(created_at) BETWEEN ? AND ? AND reversed_at IS NULL`
     )
     .get(range.from, range.to) as { total: number; count: number }
 
@@ -111,9 +113,9 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
           SELECT SUM(ct.amount) FROM cash_transactions ct
           JOIN orders o ON o.id = ct.order_id
           WHERE ct.type IN ('prepayment', 'order_payment', 'deal_payment')
-           AND DATE(o.completed_at) BETWEEN ? AND ?
+           AND DATE(o.completed_at) BETWEEN ? AND ? AND o.status != 'Отменен'
         ), 0) as received,
-        (SELECT COUNT(*) FROM orders WHERE DATE(completed_at) BETWEEN ? AND ?) as count`
+        (SELECT COUNT(*) FROM orders WHERE DATE(completed_at) BETWEEN ? AND ? AND status != 'Отменен') as count`
     )
     .get(range.from, range.to, range.from, range.to) as { received: number; count: number }
 
@@ -125,13 +127,13 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
        FROM (
          SELECT COALESCE(NULLIF(payment_method, ''), 'cash') as method, total, 1 as cnt
          FROM sales
-         WHERE DATE(created_at) BETWEEN ? AND ?
+         WHERE DATE(created_at) BETWEEN ? AND ? AND reversed_at IS NULL
          UNION ALL
          SELECT COALESCE(NULLIF(ct.payment_method, ''), 'cash') as method, ct.amount as total, 1 as cnt
          FROM cash_transactions ct
          JOIN orders o ON o.id = ct.order_id
          WHERE ct.type IN ('prepayment', 'order_payment', 'deal_payment')
-          AND DATE(o.completed_at) BETWEEN ? AND ?
+          AND DATE(o.completed_at) BETWEEN ? AND ? AND o.status != 'Отменен'
        )
        GROUP BY method
        ORDER BY total DESC`
@@ -151,15 +153,15 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
         SELECT DATE(d, '+1 day') FROM days WHERE d < ?
        )
        SELECT days.d as day,
-        COALESCE((SELECT SUM(total) FROM sales WHERE DATE(created_at) = days.d), 0)
+        COALESCE((SELECT SUM(total) FROM sales WHERE DATE(created_at) = days.d AND reversed_at IS NULL), 0)
         + COALESCE((
             SELECT SUM(ct.amount) FROM cash_transactions ct
             JOIN orders o ON o.id = ct.order_id
             WHERE ct.type IN ('prepayment', 'order_payment', 'deal_payment')
-             AND DATE(o.completed_at) = days.d
+             AND DATE(o.completed_at) = days.d AND o.status != 'Отменен'
           ), 0) as total,
-        COALESCE((SELECT COUNT(*) FROM sales WHERE DATE(created_at) = days.d), 0)
-        + COALESCE((SELECT COUNT(*) FROM orders WHERE DATE(completed_at) = days.d), 0) as count
+        COALESCE((SELECT COUNT(*) FROM sales WHERE DATE(created_at) = days.d AND reversed_at IS NULL), 0)
+        + COALESCE((SELECT COUNT(*) FROM orders WHERE DATE(completed_at) = days.d AND status != 'Отменен'), 0) as count
        FROM days
        ORDER BY days.d ASC`
     )
@@ -167,7 +169,7 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
 
   const windowOrdersRow = client
     .prepare(
-      `SELECT COUNT(*) as count FROM orders WHERE DATE(completed_at) BETWEEN ? AND ?`
+      `SELECT COUNT(*) as count FROM orders WHERE DATE(completed_at) BETWEEN ? AND ? AND status != 'Отменен'`
     )
     .get(chartFrom, range.to) as { count: number }
 
@@ -322,7 +324,7 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
        LEFT JOIN (
          SELECT user_id as uid, COUNT(*) as salesCount, COALESCE(SUM(total), 0) as salesTotal
          FROM sales
-         WHERE DATE(created_at) BETWEEN ? AND ? AND user_id IS NOT NULL
+         WHERE DATE(created_at) BETWEEN ? AND ? AND user_id IS NOT NULL AND reversed_at IS NULL
          GROUP BY user_id
        ) s ON s.uid = u.id
        LEFT JOIN (
@@ -331,7 +333,8 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
          FROM orders o
          JOIN cash_transactions ct ON ct.order_id = o.id
          WHERE ct.type IN ('prepayment', 'order_payment', 'deal_payment')
-          AND DATE(o.completed_at) BETWEEN ? AND ? AND o.created_by_user_id IS NOT NULL
+          AND DATE(o.completed_at) BETWEEN ? AND ? AND o.status != 'Отменен'
+          AND o.created_by_user_id IS NOT NULL
          GROUP BY o.created_by_user_id
        ) co ON co.uid = u.id
        WHERE COALESCE(u.is_active, 1) = 1 AND u.role IN ('owner', 'manager')
