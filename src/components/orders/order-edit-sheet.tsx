@@ -6,7 +6,7 @@ import { CalendarIcon, ClockIcon, Loader2Icon } from "lucide-react"
 import { toast } from "sonner"
 import { updateOrderAction, updateOrderDraftAction } from "@/app/actions"
 import type { BouquetTemplate, Order, OrderItem, Product } from "@/lib/db"
-import { deliveryTypeLabel } from "@/lib/labels"
+import { deliveryTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import { calculateCommercialTotals } from "@/lib/pricing"
 import { formatMoney } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -94,6 +94,10 @@ export function OrderEditSheet({
   const [note, setNote] = useState(order.note ?? "")
   const [deliveryPrice, setDeliveryPrice] = useState(order.deliveryPrice ?? 0)
   const [courierPayout, setCourierPayout] = useState(order.courierPayout ?? 0)
+  // Предоплата-намерение черновика: сумма и способ хранятся в черновике, в кассу проводятся
+  // только при отправке в работу. У обычного заказа этот блок не показывается.
+  const [prepaid, setPrepaid] = useState(order.prepaid ?? 0)
+  const [prepaidMethod, setPrepaidMethod] = useState(order.draftPrepaidMethod || "cash")
 
   const isDelivery = deliveryType === "delivery"
   // Итог считаем со скидкой на чек, сохранённой у заказа (на столе её не меняем).
@@ -285,6 +289,44 @@ export function OrderEditSheet({
                   <input type="hidden" name="deliveryPrice" value="0" />
                   <input type="hidden" name="courierPayout" value="0" />
                 </>
+              )}
+
+              {isDraft && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="order-edit-prepaid">Предоплата</FieldLabel>
+                    <Input
+                      id="order-edit-prepaid"
+                      name="prepaid"
+                      type="number"
+                      step="1"
+                      min="0"
+                      className="tabular-nums"
+                      value={prepaid}
+                      disabled={pending}
+                      onChange={(event) => setPrepaid(Math.max(0, Number(event.target.value) || 0))}
+                    />
+                    <FieldDescription>
+                      Не проведена — уйдёт в кассу при отправке в работу.
+                    </FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="order-edit-prepaid-method">Способ предоплаты</FieldLabel>
+                    <input type="hidden" name="paymentMethod" value={prepaidMethod} />
+                    <Select value={prepaidMethod} onValueChange={(value) => setPrepaidMethod(value ?? "cash")}>
+                      <SelectTrigger id="order-edit-prepaid-method" className="w-full" disabled={pending || prepaid <= 0}>
+                        <SelectValue>{(value) => getPaymentMethodLabel(String(value ?? "cash"))}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent align="start">
+                        {paymentMethodOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
               )}
 
               <div className="flex min-w-0 flex-col gap-2">

@@ -3,7 +3,7 @@ import { CrmShell } from "@/components/crm-shell"
 import { ReadyOrdersPage } from "@/components/orders/ready-orders-page"
 import { buildShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { canUseCash, getDefaultPathForRole, requireUser } from "@/lib/auth"
-import { getDashboardData } from "@/lib/db"
+import { getDashboardData, getOrderPaymentBreakdowns } from "@/lib/db"
 import { canAccessSection } from "@/lib/nav"
 
 export const dynamic = "force-dynamic"
@@ -17,6 +17,11 @@ export default async function Page() {
   }
 
   const data = getDashboardData()
+  // Разбивка принятых оплат по способам — комбинированная оплата видна на выдаче явно.
+  const readyOrderIds = data.orders
+    .filter((order) => order.status === "Готов" || order.status === "Передан курьеру")
+    .map((order) => order.id)
+  const paymentsByOrder = getOrderPaymentBreakdowns(readyOrderIds)
 
   return (
     <CrmShell
@@ -26,7 +31,7 @@ export default async function Page() {
       shiftContext={buildShiftShellContext(user, data)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
     >
-      <ReadyOrdersPage orders={data.orders} openShift={data.stats.openShift} />
+      <ReadyOrdersPage orders={data.orders} openShift={data.stats.openShift} paymentsByOrder={paymentsByOrder} />
     </CrmShell>
   )
 }

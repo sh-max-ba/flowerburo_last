@@ -171,6 +171,7 @@ export function calculateShiftSummary(shiftId: number, client: Database.Database
     cashRefund: 0,
     expectedCash: 0,
     deferredPrepayments: 0,
+    draftPrepaidTotal: 0,
   }
 
   for (const row of rows) {
@@ -239,6 +240,14 @@ export function calculateShiftSummary(shiftId: number, client: Database.Database
     )
     .get(shiftId) as { v: number }
   summary.deferredPrepayments = numberFromRow(deferredRow.v)
+
+  // Предоплаты-намерения в черновиках: записаны при сохранении черновика, но кассовой проводки
+  // НЕТ (создаётся при отправке в работу). Справочно — объясняет менеджеру, почему этих денег
+  // нет ни в выручке, ни в «Ожидается в кассе».
+  const draftPrepaidRow = client
+    .prepare("SELECT COALESCE(SUM(prepaid), 0) as v FROM orders WHERE status = 'Черновик' AND prepaid > 0")
+    .get() as { v: number }
+  summary.draftPrepaidTotal = numberFromRow(draftPrepaidRow.v)
 
   const saleDiscountRow = client
     .prepare(

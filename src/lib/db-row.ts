@@ -117,6 +117,7 @@ export function mapOrderRow(row: Row, items: OrderItem[] = []): Order {
     total: numberFromRow(row.total),
     prepaid: numberFromRow(row.prepaid),
     paid: numberFromRow(row.paid),
+    draftPrepaidMethod: row.draftPrepaidMethod == null ? null : String(row.draftPrepaidMethod),
     deliveryPrice: numberFromRow(row.deliveryPrice),
     courierPayout: numberFromRow(row.courierPayout),
     deliveryPayoutPaid: numberFromRow(row.deliveryPayoutPaid) === 1,

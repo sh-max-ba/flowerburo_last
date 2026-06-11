@@ -271,6 +271,12 @@ function parseDraftFields(formData: FormData) {
     courierPayout: Math.max(0, toNumber(formData.get("courierPayout"))),
     orderDiscountType: normalizeDiscountType(clean(formData.get("orderDiscountType"))),
     orderDiscountValue: Math.max(0, toNumber(formData.get("orderDiscountValue"))),
+    // Предоплата черновика — НАМЕРЕНИЕ: сумма и способ хранятся в черновике, в кассу ничего
+    // не проводится (по решению клиента вся сумма попадает в учёт в «конечной» смене).
+    // Проводка предоплаты создаётся при отправке в работу — см. finalizeOrderDraft.
+    // total'ом не ограничиваем: у черновика состав может быть пустым/неполным.
+    prepaid: Math.max(0, toNumber(formData.get("prepaid"))),
+    prepaidMethod: parsePaymentMethod(formData.get("paymentMethod")),
   }
 }
 
@@ -332,12 +338,12 @@ export function createOrderDraft(formData: FormData, currentUser: CurrentUser) {
           created_by_user_id, updated_by_user_id, customer_id, customer, phone, recipient_phone, source,
           delivery_type, address, due_at, status, items_total_before_discount, items_discount_total, order_discount_type,
           order_discount_value, order_discount_amount, total_before_discount, total, prepaid, paid,
-          delivery_price, courier_payout, is_reserved, note, updated_at
+          draft_prepaid_method, delivery_price, courier_payout, is_reserved, note, updated_at
         ) VALUES (
           @createdByUserId, @updatedByUserId, @customerId, @customer, @phone, @recipientPhone, @source,
           @deliveryType, @address, @dueAt, 'Черновик', @itemsTotalBeforeDiscount, @itemsDiscountTotal, @orderDiscountType,
-          @orderDiscountValue, @orderDiscountAmount, @totalBeforeDiscount, @total, 0, 0,
-          @deliveryPrice, @courierPayout, 0, @note, CURRENT_TIMESTAMP
+          @orderDiscountValue, @orderDiscountAmount, @totalBeforeDiscount, @total, @prepaid, 0,
+          @prepaidMethod, @deliveryPrice, @courierPayout, 0, @note, CURRENT_TIMESTAMP
         )`
       )
       .run({
@@ -358,6 +364,8 @@ export function createOrderDraft(formData: FormData, currentUser: CurrentUser) {
         orderDiscountAmount: totals.dealDiscountAmount,
         totalBeforeDiscount: totals.itemsTotalBeforeDiscount + fields.deliveryPrice,
         total,
+        prepaid: fields.prepaid,
+        prepaidMethod: fields.prepaid > 0 ? fields.prepaidMethod : null,
         deliveryPrice: fields.deliveryPrice,
         courierPayout: fields.courierPayout,
         note: fields.note,
@@ -432,6 +440,13 @@ export function updateOrderDraft(orderId: number, formData: FormData, currentUse
         courierPayout: fields.courierPayout,
         note: fields.note,
       })
+    // Предоплату-намерение трогаем только если форма прислала поле — форма без него
+    // (старый клиент в открытой вкладке) не должна молча обнулять записанную сумму.
+    if (formData.has("prepaid")) {
+      client
+        .prepare("UPDATE orders SET prepaid = ?, draft_prepaid_method = ? WHERE id = ?")
+        .run(fields.prepaid, fields.prepaid > 0 ? fields.prepaidMethod : null, orderId)
+    }
     writeDraftItems(client, orderId, items)
     return orderId
   })
@@ -572,15 +587,17 @@ export function finalizeOrderDraft(
     }
 
     if (shift && prepaid > 0) {
+      // Момент, когда предоплата-намерение черновика становится деньгами в кассе: проводим
+      // в ТЕКУЩУЮ смену способом, выбранным при сохранении черновика (draft_prepaid_method).
       recordCashTransaction(client, {
         shiftId: shift.id,
         orderId,
         customerId: order.customer_id == null ? null : numberFromRow(order.customer_id),
         userId: currentUser.id,
         type: "prepayment",
-        paymentMethod: "cash",
+        paymentMethod: parsePaymentMethod(String(order.draft_prepaid_method ?? "") || "cash"),
         amount: prepaid,
-        comment: `Предоплата по заказу ${number}`,
+        comment: `Предоплата по заказу ${number} (из черновика)`,
       })
     }
 
@@ -595,13 +612,15 @@ export function finalizeOrderDraft(
   run()
 }
 
-// Физическое удаление черновика (резерва/оплат нет — освобождать нечего). Только 'Черновик'.
+// Физическое удаление черновика (резерва/оплат нет — освобождать нечего: предоплата черновика
+// это намерение, в кассу не проводилась). Только 'Черновик'. Факт удаления — в журнал операций.
 export function deleteDraftOrder(orderId: number, currentUser: CurrentUser) {
-  void currentUser
   const client = db()
   const run = client.transaction(() => {
-    const head = client.prepare("SELECT status, is_reserved FROM orders WHERE id = ?").get(orderId) as
-      | { status: string; is_reserved: number }
+    const head = client
+      .prepare("SELECT status, is_reserved, number, customer, total, prepaid FROM orders WHERE id = ?")
+      .get(orderId) as
+      | { status: string; is_reserved: number; number: string | null; customer: string | null; total: number; prepaid: number }
       | undefined
     if (!head) {
       throw new Error("Заказ не найден.")
@@ -611,6 +630,13 @@ export function deleteDraftOrder(orderId: number, currentUser: CurrentUser) {
     }
     client.prepare("DELETE FROM order_items WHERE order_id = ?").run(orderId)
     client.prepare("DELETE FROM orders WHERE id = ?").run(orderId)
+    const prepaidNote = numberFromRow(head.prepaid) > 0 ? `, предоплата-намерение ${numberFromRow(head.prepaid)} не проводилась` : ""
+    addMovement(client, {
+      userId: currentUser.id,
+      type: "order_status",
+      total: numberFromRow(head.total),
+      note: `Черновик ${head.number || `#${orderId}`} удалён (${head.customer || "без имени"}${prepaidNote})`,
+    })
   })
   run()
 }

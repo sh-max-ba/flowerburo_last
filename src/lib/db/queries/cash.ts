@@ -467,3 +467,34 @@ export function reverseCashTransaction(formData: FormData, currentUser: CurrentU
 
   apply()
 }
+
+// Разбивка принятых оплат заказа по способам (prepayment/order_payment/deal_payment) — чтобы
+// комбинированная оплата была видна явно: «чем уже оплачено» рядом с «к доплате» на выдаче.
+// Plain-object (не Map) — результат уходит пропсом в клиентский компонент.
+export function getOrderPaymentBreakdowns(
+  orderIds: number[]
+): Record<number, Array<{ paymentMethod: PaymentMethod; amount: number }>> {
+  const breakdowns: Record<number, Array<{ paymentMethod: PaymentMethod; amount: number }>> = {}
+  if (!orderIds.length) {
+    return breakdowns
+  }
+  const placeholders = orderIds.map(() => "?").join(", ")
+  const rows = db()
+    .prepare(
+      `SELECT order_id as orderId, payment_method as paymentMethod, COALESCE(SUM(amount), 0) as amount
+       FROM cash_transactions
+       WHERE order_id IN (${placeholders}) AND type IN ('prepayment', 'order_payment', 'deal_payment')
+       GROUP BY order_id, payment_method
+       ORDER BY MIN(id)`
+    )
+    .all(...orderIds) as Array<{ orderId: number; paymentMethod: string; amount: number }>
+  for (const row of rows) {
+    const orderId = numberFromRow(row.orderId)
+    const method = paymentMethods.has(row.paymentMethod as PaymentMethod)
+      ? (row.paymentMethod as PaymentMethod)
+      : "cash"
+    const list = breakdowns[orderId] ?? (breakdowns[orderId] = [])
+    list.push({ paymentMethod: method, amount: numberFromRow(row.amount) })
+  }
+  return breakdowns
+}

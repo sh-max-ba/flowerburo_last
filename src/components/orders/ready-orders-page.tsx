@@ -58,7 +58,23 @@ type Result = Awaited<ReturnType<typeof completePickupOrderAction>>
 
 type ReadyStatusFilter = "pending" | "Передан курьеру" | "all"
 
-export function ReadyOrdersPage({ orders: allOrders, openShift }: { orders: Order[]; openShift: OpenShift }) {
+// Принятые оплаты заказа по способам (предоплата + доплаты) — комбинированная оплата явно.
+export type OrderPaymentPart = { paymentMethod: string; amount: number }
+
+// «5 000 Наличные + 3 000 Mbank» — чем заказ уже оплачен, одним взглядом.
+function formatPaymentParts(parts: OrderPaymentPart[]) {
+  return parts.map((part) => `${formatMoney(part.amount)} ${getPaymentMethodLabel(part.paymentMethod)}`).join(" + ")
+}
+
+export function ReadyOrdersPage({
+  orders: allOrders,
+  openShift,
+  paymentsByOrder = {},
+}: {
+  orders: Order[]
+  openShift: OpenShift
+  paymentsByOrder?: Record<number, OrderPaymentPart[]>
+}) {
   const router = useRouter()
   const [sortMode, setSortMode] = useState<OrderSortMode>("default")
   const [viewMode, setViewMode] = useState<OrderViewMode>("list")
@@ -182,6 +198,7 @@ export function ReadyOrdersPage({ orders: allOrders, openShift }: { orders: Orde
               <ReadyOrderCard
                 key={order.id}
                 order={order}
+                payments={paymentsByOrder[order.id] ?? []}
                 shiftOpen={Boolean(openShift)}
                 pendingAction={pendingOrderId === order.id}
                 onPickup={(target, event) => {
@@ -198,6 +215,7 @@ export function ReadyOrdersPage({ orders: allOrders, openShift }: { orders: Orde
 
       <CourierSheet
         order={handoverOrder}
+        payments={handoverOrder ? paymentsByOrder[handoverOrder.id] ?? [] : []}
         openShift={openShift}
         pending={handoverOrder ? pendingOrderId === handoverOrder.id : false}
         onOpenChange={(open) => !open && setHandoverOrder(null)}
@@ -213,12 +231,14 @@ export function ReadyOrdersPage({ orders: allOrders, openShift }: { orders: Orde
 
 function ReadyOrderCard({
   order,
+  payments,
   shiftOpen,
   pendingAction,
   onPickup,
   onHandover,
 }: {
   order: Order
+  payments: OrderPaymentPart[]
   shiftOpen: boolean
   pendingAction: boolean
   onPickup: (order: Order, event: React.FormEvent<HTMLFormElement>) => void
@@ -279,11 +299,17 @@ function ReadyOrderCard({
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3">
             <div className="text-xs text-amber-900/70">К доплате</div>
             <div className="text-2xl font-semibold text-amber-900">{formatMoney(balance)}</div>
+            {payments.length > 0 && (
+              <div className="mt-1 text-xs text-amber-900/70">Уже оплачено: {formatPaymentParts(payments)}</div>
+            )}
           </div>
         ) : (
           <div className="rounded-2xl border bg-muted/30 p-3">
             <div className="text-xs text-muted-foreground">К доплате</div>
             <div className="text-lg font-semibold text-emerald-700">Оплачено полностью</div>
+            {payments.length > 0 && (
+              <div className="mt-1 text-xs text-muted-foreground">Оплачено: {formatPaymentParts(payments)}</div>
+            )}
           </div>
         )}
 
@@ -298,7 +324,10 @@ function ReadyOrderCard({
               <Info label="До скидки" value={formatMoney(order.totalBeforeDiscount)} />
               <Info label="Скидка" value={formatMoney(order.itemsDiscountTotal + order.orderDiscountAmount)} />
               <Info label="Итого" value={formatMoney(order.total)} />
-              <Info label="Оплачено" value={formatMoney(order.paid)} />
+              <Info
+                label="Оплачено"
+                value={payments.length > 0 ? formatPaymentParts(payments) : formatMoney(order.paid)}
+              />
               <Info label="Остаток" value={formatMoney(balance)} />
             </div>
             {order.deliveryType === "delivery" && (
@@ -381,12 +410,14 @@ function ReadyOrderCard({
 
 function CourierSheet({
   order,
+  payments,
   openShift,
   pending,
   onOpenChange,
   onSubmit,
 }: {
   order: Order | null
+  payments: OrderPaymentPart[]
   openShift: OpenShift
   pending: boolean
   onOpenChange: (open: boolean) => void
@@ -420,7 +451,10 @@ function CourierSheet({
                     value={formatMoney(order.itemsDiscountTotal + order.orderDiscountAmount)}
                   />
                   <Info label="Итого" value={formatMoney(order.total)} />
-                  <Info label="Оплачено" value={formatMoney(order.paid)} />
+                  <Info
+                    label="Оплачено"
+                    value={payments.length > 0 ? formatPaymentParts(payments) : formatMoney(order.paid)}
+                  />
                   <Info label="Остаток" value={formatMoney(balance)} />
                   <Info label="Доставка" value={formatMoney(order.deliveryPrice)} />
                   <Info label="Курьеру" value={formatMoney(order.courierPayout)} />

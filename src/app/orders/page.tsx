@@ -3,7 +3,7 @@ import { CrmShell } from "@/components/crm-shell"
 import { OrdersPage } from "@/components/orders/orders-page"
 import { buildShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { canUseCash, getDefaultPathForRole, requireUser } from "@/lib/auth"
-import { getDashboardData, listOrderDrafts } from "@/lib/db"
+import { countOrderDrafts, getDashboardData } from "@/lib/db"
 import { canAccessSection } from "@/lib/nav"
 
 export const dynamic = "force-dynamic"
@@ -18,9 +18,9 @@ export default async function Page() {
   }
 
   const data = getDashboardData()
-  // Черновики видят только owner/manager (флористу — пустой список, вкладка скрыта).
+  // Черновики живут на /orders/drafts (owner/manager); здесь — только счётчик для бейджа-ссылки.
   const canManageDrafts = user.role === "owner" || user.role === "manager"
-  const drafts = canManageDrafts ? listOrderDrafts() : []
+  const draftsCount = canManageDrafts ? countOrderDrafts() : 0
 
   return (
     <CrmShell
@@ -36,7 +36,7 @@ export default async function Page() {
         products={data.products}
         bouquets={data.bouquetTemplates}
         hasOpenShift={Boolean(data.stats.openShift)}
-        drafts={drafts}
+        draftsCount={draftsCount}
         canManageDrafts={canManageDrafts}
       />
     </CrmShell>

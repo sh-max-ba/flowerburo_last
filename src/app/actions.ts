@@ -176,6 +176,7 @@ async function runAction(
     revalidatePath("/cash")
     revalidatePath("/ready-orders")
     revalidatePath("/orders")
+    revalidatePath("/orders/drafts")
     revalidatePath("/bouquets")
     revalidatePath("/shifts")
     revalidatePath("/users")

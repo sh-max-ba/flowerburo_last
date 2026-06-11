@@ -7,12 +7,10 @@ import { AlertTriangleIcon, PencilIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
   cancelOrderAction,
-  deleteDraftOrderAction,
-  finalizeOrderDraftAction,
   markOrderReadyAction,
   startOrderWorkAction,
 } from "@/app/actions"
-import type { BouquetTemplate, DraftOrderView, Order, OrderStatus, Product } from "@/lib/db"
+import type { BouquetTemplate, Order, OrderStatus, Product } from "@/lib/db"
 import { deliveryTypeLabel } from "@/lib/labels"
 import { Alert, AlertTitle } from "@/components/ui/alert"
 import {
@@ -74,7 +72,7 @@ export function OrdersPage({
   products,
   bouquets,
   hasOpenShift,
-  drafts = [],
+  draftsCount = 0,
   canManageDrafts = false,
 }: {
   orders: Order[]
@@ -82,14 +80,15 @@ export function OrdersPage({
   bouquets: BouquetTemplate[]
   // Когда смена не открыта, в пустом состоянии показываем подсказку перейти к сменам.
   hasOpenShift?: boolean
-  // Черновики заказов (только owner/manager). Флористу — пустой список и скрытая вкладка.
-  drafts?: DraftOrderView[]
+  // Черновики живут на отдельной странице /orders/drafts (owner/manager);
+  // здесь — только бейдж-ссылка с количеством.
+  draftsCount?: number
   canManageDrafts?: boolean
 }) {
   const router = useRouter()
   const [sortMode, setSortMode] = useState<OrderSortMode>("default")
   const [viewMode, setViewMode] = useState<OrderViewMode>("list")
-  const [statusFilter, setStatusFilter] = useState<WorkStatusFilter | "Черновики">("all")
+  const [statusFilter, setStatusFilter] = useState<WorkStatusFilter>("all")
   const [weekStart, setWeekStart] = useState(() => startOfLocalDay(new Date()))
   const [pendingOrderId, setPendingOrderId] = useState<number | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
@@ -139,25 +138,27 @@ export function OrdersPage({
       <OrdersActivityRefresh />
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <Tabs
-            value={statusFilter}
-            onValueChange={(value) => setStatusFilter((value ?? "all") as WorkStatusFilter | "Черновики")}
-          >
-            <TabsList>
-              {workStatusFilters.map((filter) => (
-                <TabsTrigger key={filter.value} value={filter.value}>
-                  {filter.label}
-                  <span className="ml-1.5 text-muted-foreground">{counts[filter.value]}</span>
-                </TabsTrigger>
-              ))}
-              {canManageDrafts && (
-                <TabsTrigger value="Черновики">
-                  Черновики
-                  <span className="ml-1.5 text-muted-foreground">{drafts.length}</span>
-                </TabsTrigger>
-              )}
-            </TabsList>
-          </Tabs>
+          <div className="flex flex-wrap items-center gap-2">
+            <Tabs
+              value={statusFilter}
+              onValueChange={(value) => setStatusFilter((value ?? "all") as WorkStatusFilter)}
+            >
+              <TabsList>
+                {workStatusFilters.map((filter) => (
+                  <TabsTrigger key={filter.value} value={filter.value}>
+                    {filter.label}
+                    <span className="ml-1.5 text-muted-foreground">{counts[filter.value]}</span>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            {canManageDrafts && (
+              <Button variant="outline" size="sm" render={<Link href="/orders/drafts" />}>
+                Черновики
+                <span className="ml-1.5 text-muted-foreground">{draftsCount}</span>
+              </Button>
+            )}
+          </div>
           <OrderToolbar
             sortMode={sortMode}
             viewMode={viewMode}
@@ -165,35 +166,6 @@ export function OrdersPage({
             onViewModeChange={setViewMode}
           />
         </div>
-        {statusFilter === "Черновики" ? (
-          <Card className="rounded-2xl border bg-white">
-            <CardContent>
-              {!drafts.length ? (
-                <Empty>
-                  <EmptyHeader>
-                    <EmptyTitle>Черновиков нет</EmptyTitle>
-                    <EmptyDescription>
-                      Черновик можно сохранить на кассе в окне «Создать заказ» кнопкой «Сохранить черновик».
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              ) : (
-                <div className="grid gap-3 lg:grid-cols-2">
-                  {drafts.map((draft) => (
-                    <DraftOrderCard
-                      key={draft.id}
-                      draft={draft}
-                      pendingAction={pendingOrderId === draft.id}
-                      onFinalize={(id, priceMode) => run(id, () => finalizeOrderDraftAction(id, priceMode))}
-                      onDelete={(id) => run(id, () => deleteDraftOrderAction(id))}
-                      onEdit={setEditingOrder}
-                    />
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ) : (
         <Card className="rounded-2xl border bg-white">
           <CardContent>
             {!orders.length ? (
@@ -251,7 +223,6 @@ export function OrdersPage({
             )}
           </CardContent>
         </Card>
-        )}
       </div>
 
       {editingOrder && (
@@ -269,119 +240,6 @@ export function OrdersPage({
         />
       )}
     </>
-  )
-}
-
-function DraftOrderCard({
-  draft,
-  pendingAction,
-  onFinalize,
-  onDelete,
-  onEdit,
-}: {
-  draft: DraftOrderView
-  pendingAction: boolean
-  onFinalize: (id: number, priceMode: "keep" | "current") => void
-  onDelete: (id: number) => void
-  onEdit: (order: Order) => void
-}) {
-  const itemsCount = draft.items.length
-  const hasPriceChanges = draft.priceChanges.length > 0
-  const money = (value: number) => `${Math.round(value).toLocaleString("ru-RU")} ₽`
-
-  return (
-    <div className="flex flex-col gap-3 rounded-2xl border border-dashed bg-white p-4">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="font-semibold">{draft.number || `#${draft.id}`}</span>
-            <OrderStatusBadge status="Черновик" />
-          </div>
-          <p className="text-sm text-muted-foreground">{draft.customer || "Без имени"}</p>
-        </div>
-        <div className="text-right text-sm">
-          <div className="font-medium tabular-nums">{money(draft.total)}</div>
-          <div className="text-muted-foreground">{itemsCount ? `${itemsCount} поз.` : "без позиций"}</div>
-        </div>
-      </div>
-
-      {hasPriceChanges && (
-        <Alert>
-          <AlertTriangleIcon />
-          <AlertTitle>Цены некоторых позиций изменились с момента сохранения</AlertTitle>
-        </Alert>
-      )}
-
-      <div className="flex flex-wrap gap-2">
-        {hasPriceChanges ? (
-          <AlertDialog>
-            <AlertDialogTrigger
-              render={<Button size="sm" className="flex-1" disabled={pendingAction || !itemsCount} />}
-            >
-              Отправить в работу
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Цены изменились</AlertDialogTitle>
-                <AlertDialogDescription>С момента сохранения изменились цены позиций:</AlertDialogDescription>
-              </AlertDialogHeader>
-              <ul className="space-y-1 text-sm">
-                {draft.priceChanges.map((change) => (
-                  <li key={change.name} className="flex justify-between gap-2">
-                    <span className="truncate">{change.name}</span>
-                    <span className="tabular-nums text-muted-foreground">
-                      {money(change.oldPrice)} → {money(change.newPrice)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Отмена</AlertDialogCancel>
-                <AlertDialogAction onClick={() => onFinalize(draft.id, "keep")}>
-                  Оставить цены черновика
-                </AlertDialogAction>
-                <AlertDialogAction onClick={() => onFinalize(draft.id, "current")}>
-                  Обновить по текущим
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        ) : (
-          <Button
-            size="sm"
-            className="flex-1"
-            disabled={pendingAction || !itemsCount}
-            onClick={() => onFinalize(draft.id, "keep")}
-          >
-            Отправить в работу
-          </Button>
-        )}
-        <Button size="sm" variant="outline" disabled={pendingAction} onClick={() => onEdit(draft)}>
-          <PencilIcon data-icon="inline-start" />
-          Изменить
-        </Button>
-        <AlertDialog>
-          <AlertDialogTrigger render={<Button size="sm" variant="ghost" disabled={pendingAction} />}>
-            Удалить
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Удалить черновик?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Черновик {draft.number || `#${draft.id}`} будет удалён без возможности восстановления.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Отмена</AlertDialogCancel>
-              <AlertDialogAction onClick={() => onDelete(draft.id)}>Удалить</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </div>
-      {!itemsCount && (
-        <p className="text-xs text-muted-foreground">Добавьте позиции, чтобы отправить заказ в работу.</p>
-      )}
-    </div>
   )
 }
 

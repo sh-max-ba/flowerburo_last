@@ -1424,6 +1424,12 @@ function NewOrderForm({
                   </Select>
                 </Field>
               </div>
+              {prepaid > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  «Провести заказ» — предоплата сразу уходит в кассу текущей смены. «Сохранить черновик» —
+                  сумма и способ запоминаются, в кассу попадут при отправке черновика в работу.
+                </p>
+              )}
 
               {showOrderDiscount ? (
                 <div className="grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
@@ -1663,6 +1669,12 @@ function ShiftDetailsSheet({
               <CashMetric label="Ожидается в кассе" value={formatMoney(summary.expectedCash)} />
               {summary.deferredPrepayments > 0 && (
                 <CashMetric label="Предоплаты по будущим заказам" value={formatMoney(summary.deferredPrepayments)} />
+              )}
+              {summary.draftPrepaidTotal > 0 && (
+                <CashMetric
+                  label="Предоплаты в черновиках (не проведены)"
+                  value={formatMoney(summary.draftPrepaidTotal)}
+                />
               )}
               <CashMetric label="Наличные" value={formatMoney(summary.cash)} />
               <CashMetric label="Карта" value={formatMoney(summary.card)} />
@@ -2186,6 +2198,7 @@ function getShiftCashSummary(detail: DashboardData["shiftDetails"][number]) {
     revenueTotal: detail.summary.revenueTotal,
     expectedCash: detail.summary.expectedCash,
     deferredPrepayments: detail.summary.deferredPrepayments,
+    draftPrepaidTotal: detail.summary.draftPrepaidTotal,
     cashIn: detail.summary.cashIn,
     cashOutOther: detail.breakdown.cashOutOther,
     courierPayouts: detail.breakdown.courierPayouts,

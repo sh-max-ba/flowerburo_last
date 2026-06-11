@@ -166,7 +166,8 @@ const ORDER_LIST_COLUMNS = `id, number, customer_id as customerId, deal_id as de
   COALESCE(order_discount_amount, 0) as orderDiscountAmount,
   COALESCE(NULLIF(total_before_discount, 0), total) as totalBeforeDiscount,
   total, COALESCE(prepaid, 0) as prepaid,
-  COALESCE(paid, 0) as paid, COALESCE(delivery_price, 0) as deliveryPrice,
+  COALESCE(paid, 0) as paid, draft_prepaid_method as draftPrepaidMethod,
+  COALESCE(delivery_price, 0) as deliveryPrice,
   COALESCE(courier_payout, 0) as courierPayout,
   COALESCE(delivery_payout_paid, 0) as deliveryPayoutPaid,
   COALESCE(is_reserved, 0) as isReserved, note, ready_at as readyAt,
@@ -226,8 +227,16 @@ function loadOrderItemsByOrder(client: Database.Database, orderIds: number[]): M
 
 export type DraftOrderView = Order & { priceChanges: Array<{ name: string; oldPrice: number; newPrice: number }> }
 
-// Черновики заказов для стола /orders (отдельной выборкой — НЕ в основном окне LIMIT 80). С позициями
-// и расхождениями цен (для подтверждения при отправке в работу).
+// Лёгкий счётчик черновиков — для бейджа-ссылки на /orders (сами черновики живут на /orders/drafts).
+export function countOrderDrafts(): number {
+  const row = db().prepare("SELECT COUNT(*) as count FROM orders WHERE status = 'Черновик'").get() as
+    | { count: number }
+    | undefined
+  return numberFromRow(row?.count ?? 0)
+}
+
+// Черновики заказов для страницы /orders/drafts (отдельной выборкой — НЕ в основном окне LIMIT 80).
+// С позициями и расхождениями цен (для подтверждения при отправке в работу).
 export function listOrderDrafts(): DraftOrderView[] {
   const client = db()
   const orderRows = client

@@ -306,6 +306,8 @@ export type Order = {
   totalBeforeDiscount: number
   prepaid: number
   paid: number
+  // Способ предоплаты-намерения черновика (проводится при отправке в работу); у обычных заказов null.
+  draftPrepaidMethod: string | null
   deliveryPrice: number
   courierPayout: number
   deliveryPayoutPaid: boolean
@@ -509,6 +511,9 @@ export type ShiftSummary = {
   expectedCash: number
   // Деньги, полученные в эту смену по заказам, ещё НЕ завершённым (в выручку не входят).
   deferredPrepayments: number
+  // Предоплаты-намерения в черновиках заказов: записаны, но в кассу НЕ проведены
+  // (проводятся при отправке черновика в работу). Справочная строка против путаницы.
+  draftPrepaidTotal: number
 }
 
 export type CustomerOption = {

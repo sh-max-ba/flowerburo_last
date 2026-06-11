@@ -1081,3 +1081,15 @@ export function migrateStockInventory(client: Database.Database) {
     "CREATE INDEX IF NOT EXISTS idx_stock_document_items_variance ON stock_document_items(document_id, variance_reason);"
   )
 }
+
+// v19: предоплата-намерение у черновика заказа. Сумма хранится в существующей колонке prepaid
+// (paid у черновика остаётся 0 — деньги в кассу НЕ проведены), способ — здесь; проводка
+// создаётся при отправке черновика в работу этим способом. Аддитивно, идемпотентно.
+export function migrateOrderDraftPrepayment(client: Database.Database) {
+  ensureColumn(
+    "orders",
+    "draft_prepaid_method",
+    "ALTER TABLE orders ADD COLUMN draft_prepaid_method TEXT",
+    client
+  )
+}
