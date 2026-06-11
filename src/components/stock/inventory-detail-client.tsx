@@ -419,7 +419,7 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
             variant="outline"
             onClick={() => runAction(() => recalcInventoryExpectedAction(doc.id))}
             disabled={pending}
-            title="Подтянуть текущие остатки из системы в колонку «Учётный» (если остатки меняли после старта инвентаризации)"
+            title="Подтянуть текущие остатки из системы в колонку «Учётный» — только для строк без введённого факта. У сосчитанных строк учётный остаток заморожен: их расхождение считается от снимка на момент подсчёта."
           >
             Обновить учётные остатки
           </Button>

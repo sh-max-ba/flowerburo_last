@@ -191,7 +191,10 @@ export function saveInventoryDraft(formData: FormData) {
 }
 
 // Пересчитать расчётный остаток (expected_qty) к текущему products.stock — если остатки правили после
-// старта инвентаризации. Только для черновика. Обновляет и count_started_at (новый снимок).
+// старта инвентаризации. Только для черновика, и ТОЛЬКО для ещё не сосчитанных строк: факт сосчитанной
+// строки снят против её снимка, и проведение считает дельту от него (counted − expected). Перенос базы
+// сосчитанной строки на «сейчас» превратил бы все движения между снимком и пересчётом (продажи, приходы)
+// в ложную дельту с обратным знаком — проведение «воскрешало» бы проданное. Обновляет и count_started_at.
 export function recalcInventoryExpected(documentId: number) {
   const client = db()
   const run = client.transaction(() => {
@@ -200,7 +203,7 @@ export function recalcInventoryExpected(documentId: number) {
       .prepare(
         `UPDATE stock_document_items
          SET expected_qty = COALESCE((SELECT stock FROM products WHERE products.code = stock_document_items.product_code), expected_qty)
-         WHERE document_id = ?`
+         WHERE document_id = ? AND counted_qty IS NULL`
       )
       .run(documentId)
     client.prepare("UPDATE stock_documents SET count_started_at = CURRENT_TIMESTAMP WHERE id = ?").run(documentId)
