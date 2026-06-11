@@ -171,6 +171,7 @@ export function calculateShiftSummary(shiftId: number, client: Database.Database
     cashRefund: 0,
     expectedCash: 0,
     deferredPrepayments: 0,
+    revenueReceivedInOtherShifts: 0,
     draftPrepaidTotal: 0,
   }
 
@@ -228,18 +229,35 @@ export function calculateShiftSummary(shiftId: number, client: Database.Database
 
   // Деньги, полученные В ЭТУ смену по заказам, ещё НЕ завершённым — в выручку не идут, но
   // физически лежат в кассе. Отдельной строкой, чтобы был виден разрыв «касса > выручка».
+  // LEFT JOIN: оплата сделки без заказа (order_id IS NULL) — тоже «получено за будущее»,
+  // INNER JOIN терял её, и разрыв оставался без объяснения.
   const deferredRow = client
     .prepare(
       `SELECT COALESCE(SUM(cash_transactions.amount), 0) as v
        FROM cash_transactions
-       JOIN orders ON orders.id = cash_transactions.order_id
+       LEFT JOIN orders ON orders.id = cash_transactions.order_id
        WHERE cash_transactions.shift_id = ?
         AND cash_transactions.type IN ('prepayment', 'order_payment', 'deal_payment')
-        AND orders.completed_shift_id IS NULL
-        AND orders.status != 'Отменен'`
+        AND (
+          orders.id IS NULL
+          OR (orders.completed_shift_id IS NULL AND orders.status != 'Отменен')
+        )`
     )
     .get(shiftId) as { v: number }
   summary.deferredPrepayments = numberFromRow(deferredRow.v)
+
+  // Обратная сторона того же разрыва: из признанной в эту смену выручки — сколько физически
+  // получено в ДРУГИЕ смены (предоплаты прошлых смен по заказам, выданным в эту).
+  const earlierRow = client
+    .prepare(
+      `SELECT COALESCE(SUM(amount), 0) as v
+       FROM cash_transactions
+       WHERE type IN ('prepayment', 'order_payment', 'deal_payment')
+        AND COALESCE(shift_id, -1) != ?
+        AND order_id IN (SELECT id FROM orders WHERE completed_shift_id = ? AND status != 'Отменен')`
+    )
+    .get(shiftId, shiftId) as { v: number }
+  summary.revenueReceivedInOtherShifts = numberFromRow(earlierRow.v)
 
   // Предоплаты-намерения в черновиках: записаны при сохранении черновика, но кассовой проводки
   // НЕТ (создаётся при отправке в работу). Справочно — объясняет менеджеру, почему этих денег

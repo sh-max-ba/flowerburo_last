@@ -510,7 +510,12 @@ export type ShiftSummary = {
   cashRefund: number
   expectedCash: number
   // Деньги, полученные в эту смену по заказам, ещё НЕ завершённым (в выручку не входят).
+  // Включая оплаты сделок без заказа.
   deferredPrepayments: number
+  // Из признанной в эту смену выручки — полученное физически в ДРУГИЕ смены
+  // (предоплаты прошлых смен по заказам, выданным в эту). Объяснитель разрыва
+  // «выручка ≠ сумма способов оплаты».
+  revenueReceivedInOtherShifts: number
   // Предоплаты-намерения в черновиках заказов: записаны, но в кассу НЕ проведены
   // (проводятся при отправке черновика в работу). Справочная строка против путаницы.
   draftPrepaidTotal: number
@@ -783,6 +788,8 @@ export type CashLedgerEntry = {
   // Статус и оплаченная сумма связанного заказа — для отмены/возврата из истории кассы.
   orderStatus: string | null
   orderPaid: number | null
+  // Выплата курьеру по заказу — предупреждение при отмене: возврат клиенту её не сторнирует.
+  orderCourierPayout: number | null
   saleId: number | null
   dealId: number | null
   userId: number | null

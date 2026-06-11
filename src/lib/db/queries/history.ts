@@ -81,6 +81,7 @@ export function getCashLedger(limit = 1000): CashLedgerEntry[] {
       `SELECT cash_transactions.id, cash_transactions.shift_id as shiftId,
         cash_transactions.order_id as orderId, orders.number as orderNumber,
         orders.status as orderStatus, orders.paid as orderPaid,
+        orders.courier_payout as orderCourierPayout,
         cash_transactions.sale_id as saleId, cash_transactions.deal_id as dealId,
         cash_transactions.user_id as userId, COALESCE(users.name, '') as userName,
         COALESCE(NULLIF(orders.customer, ''), NULLIF(sales.customer_name, ''), '') as customerName,
