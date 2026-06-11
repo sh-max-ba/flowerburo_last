@@ -849,7 +849,16 @@ function ProductSheet({
             <FieldGroup>
               <Field>
                 <FieldLabel htmlFor="code">Код</FieldLabel>
-                <Input id="code" name="code" defaultValue={product?.code} readOnly={Boolean(product)} required />
+                {/* autoComplete=off: Chrome подставлял ранее введённый код (вектор обоих
+                    инцидентов с перезаписью товара — 09.06 и 11.06). */}
+                <Input
+                  id="code"
+                  name="code"
+                  defaultValue={product?.code}
+                  readOnly={Boolean(product)}
+                  autoComplete="off"
+                  required
+                />
               </Field>
               {/* Маркер режима: при «create» сервер отклоняет занятый код вместо молчаливой перезаписи. */}
               <input type="hidden" name="formMode" value={product ? "edit" : "create"} />

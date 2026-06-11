@@ -29,19 +29,23 @@ export function upsertProduct(formData: FormData, currentUser: CurrentUser) {
   const client = db()
   const input = parseForm(ProductInputSchema, formData)
   const { code, name, costPrice, salePrice } = input
-  // "create" | "edit" из формы товара. Пустое значение (сторонний вызов без маркера) сохраняет
-  // историческое upsert-поведение.
+  // "create" | "edit" из формы товара.
   const formMode = String(formData.get("formMode") ?? "")
 
   const saveProduct = client.transaction(() => {
     const before = getProduct(client, code)
 
     // Код — первичный ключ: «Новый товар» с занятым кодом раньше МОЛЧА перезаписывал чужой товар
-    // (реальный инцидент: позиции «переименовывали» друг друга). Создание с коллизией — ошибка.
-    if (formMode === "create" && before) {
+    // (реальные инциденты 09.06 и 11.06: позиции «переименовывали» друг друга). Создание с
+    // коллизией — ошибка. Форма без маркера formMode (вкладка со сборкой до деплоя гарда) тем
+    // более не имеет права перезаписывать: именно через такую вкладку инцидент повторился —
+    // требуем обновить страницу. Создание НОВОГО кода без маркера безопасно (чистый INSERT).
+    if (before && formMode !== "edit") {
       const isArchived = numberFromRow(before.is_active ?? 1) === 0
       throw new Error(
-        `Код ${code} уже занят товаром «${String(before.name)}»${isArchived ? " (в архиве)" : ""}. Укажите другой код.`
+        formMode === "create"
+          ? `Код ${code} уже занят товаром «${String(before.name)}»${isArchived ? " (в архиве)" : ""}. Укажите другой код.`
+          : `Код ${code} уже занят товаром «${String(before.name)}». Обновите страницу (она устарела) и повторите.`
       )
     }
     if (formMode === "edit" && !before) {
