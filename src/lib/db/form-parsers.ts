@@ -1,3 +1,4 @@
+import { SHOP_TIME_ZONE } from "@/lib/datetime"
 import type { OrderStatus, PaymentMethod, StockDocumentType, UserRole } from "./types"
 import { paymentMethods } from "./types"
 
@@ -59,7 +60,15 @@ export function normalizeRole(value: FormDataEntryValue | string | null): UserRo
 }
 
 export function formatOrderNumber(orderId: number, date = new Date()) {
-  const day = date.toISOString().slice(0, 10).replaceAll("-", "")
+  // Дата в номере — день МАГАЗИНА (Бишкек): по UTC ночные заказы 00:00–06:00 получали вчерашнюю дату.
+  const day = new Intl.DateTimeFormat("en-CA", {
+    timeZone: SHOP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .format(date)
+    .replaceAll("-", "")
   return `ORD-${day}-${String(orderId).padStart(4, "0")}`
 }
 

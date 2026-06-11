@@ -1,16 +1,33 @@
+// Префилл <input type="datetime-local"> — в поясе МАГАЗИНА, симметрично fromDatetimeLocalValue
+// (наивный ввод трактуется как бишкекский). Раньше префилл шёл в поясе УСТРОЙСТВА
+// (getTimezoneOffset), и на устройстве не в +6 каждый цикл «открыть черновик → сохранить»
+// сдвигал дату на разницу поясов.
 export function toDatetimeLocalValue(dateString?: string | null) {
-  const date = dateString ? new Date(dateString) : new Date()
+  const date = dateString ? (parseDbInstant(dateString) ?? new Date(dateString)) : new Date()
   if (Number.isNaN(date.getTime())) {
     return ""
   }
 
-  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-  return localDate.toISOString().slice(0, 16)
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: SHOP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date)
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? ""
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`
 }
 
 // Смещение пояса магазина (Бишкек, UTC+6, перехода на летнее время нет). Нужно при разборе
 // «наивных» значений <input type="datetime-local">: их вводят в часах магазина, не сервера.
 const SHOP_UTC_OFFSET = "+06:00"
+
+// То же смещение в синтаксисе модификаторов SQLite: границы «дня» и «сейчас» в SQL-агрегатах
+// считаются в поясе магазина, а не сервера ('localtime' на проде = UTC).
+export const SHOP_UTC_OFFSET_SQL = "+6 hours"
 
 export function fromDatetimeLocalValue(value?: FormDataEntryValue | string | null) {
   const rawValue = String(value ?? "").trim()
