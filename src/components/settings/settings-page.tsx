@@ -409,6 +409,7 @@ function OrderPolicyBlock({ orderSettings }: { orderSettings: OrderSettings }) {
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const formData = new FormData()
+    formData.set("allowOversellOrdersPresent", "1")
     if (allowOversell) {
       formData.set("allowOversellOrders", "on")
     }
@@ -506,6 +507,9 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const formData = new FormData()
+    formData.set("recomputeCostOnReceiptPresent", "1")
+    formData.set("trackLotsEnabledPresent", "1")
+    formData.set("enableInventoryPresent", "1")
     if (recompute) {
       formData.set("recomputeCostOnReceipt", "on")
     }

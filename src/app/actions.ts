@@ -313,17 +313,29 @@ export async function saveWazzupSettingsAction(formData: FormData) {
   }, "Настройки Wazzup сохранены.")
 }
 
+// Флаги настроек меняем только при маркере присутствия `<имя>Present`: вкладка устаревшей
+// сборки (без нового чекбокса и его маркера) иначе молча ВЫКЛЮЧАЛА бы флаг, которого не знала —
+// тот же класс stale-форм, что инциденты с товарами 09.06/11.06. Снятый чекбокс новой сборки
+// отличим от отсутствующего: маркер шлётся всегда, ключ "on" — только при включении.
 export async function saveOrderSettingsAction(formData: FormData) {
   return runRoleAction(["owner"], () => {
-    setAllowOversellOrders(formData.get("allowOversellOrders") === "on")
+    if (formData.has("allowOversellOrdersPresent")) {
+      setAllowOversellOrders(formData.get("allowOversellOrders") === "on")
+    }
   }, "Настройки заказов сохранены.")
 }
 
 export async function saveStockCostSettingsAction(formData: FormData) {
   return runRoleAction(["owner"], () => {
-    setRecomputeCostOnReceipt(formData.get("recomputeCostOnReceipt") === "on")
-    setTrackLotsEnabled(formData.get("trackLotsEnabled") === "on")
-    setInventoryEnabled(formData.get("enableInventory") === "on")
+    if (formData.has("recomputeCostOnReceiptPresent")) {
+      setRecomputeCostOnReceipt(formData.get("recomputeCostOnReceipt") === "on")
+    }
+    if (formData.has("trackLotsEnabledPresent")) {
+      setTrackLotsEnabled(formData.get("trackLotsEnabled") === "on")
+    }
+    if (formData.has("enableInventoryPresent")) {
+      setInventoryEnabled(formData.get("enableInventory") === "on")
+    }
   }, "Настройки склада сохранены.")
 }
 
