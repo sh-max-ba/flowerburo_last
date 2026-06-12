@@ -459,14 +459,16 @@ function QuickSaleForm({
   const shortfall = hasReceived ? Math.round((saleTotal - received) * 100) / 100 : 0
   const cashShort = isCash && hasReceived && shortfall > 0
   const cartEmpty = items.length === 0
+  // Причина видна не только тултипом (на тач-экране наведения нет), но и текстом под кнопкой —
+  // поэтому формулировки сразу подсказывают действие.
   const completeDisabledReason = disabled
-    ? "Смена закрыта"
+    ? "Смена закрыта — откройте смену, чтобы проводить продажи"
     : cartEmpty
-      ? "Добавьте позиции"
+      ? "Добавьте позиции в корзину"
       : !paymentMethod
         ? "Выберите способ оплаты"
         : cashShort
-          ? `Не хватает ${formatMoney(shortfall)}`
+          ? `Полученная сумма меньше итога — не хватает ${formatMoney(shortfall)}`
           : null
   const completeDisabled = pending || Boolean(completeDisabledReason)
 
@@ -769,14 +771,16 @@ function QuickSaleForm({
                 </div>
               )}
 
+              {/* Информационное предупреждение, НЕ блокировка: продажа в минус разрешена.
+                  Янтарный, не красный — красный читался как «продавать нельзя». */}
               {cartShortageCount > 0 && (
-                <Alert variant="destructive">
+                <Alert className="border-amber-200 bg-amber-50 text-amber-900 *:data-[slot=alert-description]:text-amber-900/80">
                   <AlertTriangleIcon />
-                  <AlertTitle>Не хватает остатков</AlertTitle>
+                  <AlertTitle>Остаток уйдёт в минус</AlertTitle>
                   <AlertDescription>
                     {cartShortageCount === 1
-                      ? "По одной позиции склад уйдёт в минус. Проверьте корзину."
-                      : `По ${cartShortageCount} позициям склад уйдёт в минус. Проверьте корзину.`}
+                      ? "По одной позиции не хватает остатка на складе. Продажа всё равно пройдёт — остаток станет отрицательным."
+                      : `По ${cartShortageCount} позициям не хватает остатка на складе. Продажа всё равно пройдёт — остатки станут отрицательными.`}
                   </AlertDescription>
                 </Alert>
               )}
@@ -854,11 +858,6 @@ function QuickSaleForm({
                   )
                 )}
               </div>
-              {isCash && hasReceived && cashShort && (
-                <div className="text-xs text-destructive/80">
-                  Полученной суммы недостаточно — продажу нельзя провести.
-                </div>
-              )}
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger
@@ -889,6 +888,17 @@ function QuickSaleForm({
                   )}
                 </Tooltip>
               </TooltipProvider>
+              {/* Причина блокировки текстом — тултип на тач-экране кассы недоступен. */}
+              {completeDisabledReason && !pending && (
+                <div
+                  className={cn(
+                    "text-center text-xs",
+                    cashShort ? "font-medium text-destructive" : "text-muted-foreground"
+                  )}
+                >
+                  {completeDisabledReason}
+                </div>
+              )}
               {/* Оформление заказа с доставкой — наследует текущую корзину. */}
               <Button
                 type="button"
