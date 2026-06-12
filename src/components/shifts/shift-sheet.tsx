@@ -65,6 +65,7 @@ export function ShiftSheet({
   currentUserRole,
   defaultOpeningCash,
   activeFlorists,
+  activeCashUsers,
   openShift,
   openShiftDetails,
   pending,
@@ -77,6 +78,7 @@ export function ShiftSheet({
   currentUserRole: UserRole
   defaultOpeningCash: number
   activeFlorists: CurrentUser[]
+  activeCashUsers: CurrentUser[]
   openShift: DashboardData["stats"]["openShift"]
   openShiftDetails: DashboardData["shiftDetails"][number] | null
   pending: boolean
@@ -97,7 +99,7 @@ export function ShiftSheet({
           <DialogDescription>
             {openShift
               ? `Смена #${openShift.id} · Ответственный: ${openShift.cashierName || "не указан"}`
-              : "Ответственный берется из текущего профиля."}
+              : "По умолчанию ответственный — текущий профиль; владелец и менеджер могут открыть смену на другого сотрудника."}
           </DialogDescription>
         </DialogHeader>
         <ShiftSheetForm
@@ -107,6 +109,7 @@ export function ShiftSheet({
           currentUserRole={currentUserRole}
           defaultOpeningCash={defaultOpeningCash}
           activeFlorists={activeFlorists}
+          activeCashUsers={activeCashUsers}
           openShift={openShift}
           openShiftDetails={openShiftDetails}
           pending={pending}
@@ -123,6 +126,7 @@ function ShiftSheetForm({
   currentUserRole,
   defaultOpeningCash,
   activeFlorists,
+  activeCashUsers,
   openShift,
   openShiftDetails,
   pending,
@@ -133,6 +137,7 @@ function ShiftSheetForm({
   currentUserRole: UserRole
   defaultOpeningCash: number
   activeFlorists: CurrentUser[]
+  activeCashUsers: CurrentUser[]
   openShift: DashboardData["stats"]["openShift"]
   openShiftDetails: DashboardData["shiftDetails"][number] | null
   pending: boolean
@@ -142,6 +147,11 @@ function ShiftSheetForm({
     ...initialOpenShiftForm,
     openingCash: defaultOpeningCash.toString(),
   })
+  // Ответственный за открываемую смену: по умолчанию текущий профиль; владелец/менеджер
+  // могут выбрать другого сотрудника (кейс: общая сессия на кассе, смену открывает флорист).
+  const [responsibleId, setResponsibleId] = useState(String(currentUserId))
+  const canChooseResponsible = currentUserRole === "owner" || currentUserRole === "manager"
+  const responsibleUser = activeCashUsers.find((candidate) => String(candidate.id) === responsibleId)
   // Поле «Фактическая наличка» намеренно пустое — кассир обязан пересчитать кассу,
   // а не подтверждать подставленное ожидаемое значение.
   const [closeForm, setCloseForm] = useState({ ...initialCloseShiftForm })
@@ -243,10 +253,44 @@ function ShiftSheetForm({
         {!openShift && (
           <>
             <Field>
-              <FieldLabel>Ответственный</FieldLabel>
-              <FieldDescription className="rounded-xl border bg-muted/30 p-3 text-foreground">
-                Ответственный: {currentUserName}
-              </FieldDescription>
+              <FieldLabel htmlFor={canChooseResponsible ? "responsibleUserId" : undefined}>
+                Ответственный
+              </FieldLabel>
+              {canChooseResponsible ? (
+                <>
+                  <input type="hidden" name="responsibleUserId" value={responsibleId} />
+                  <Select
+                    items={activeCashUsers.map((candidate) => ({
+                      label: shiftUserLabel(candidate, currentUserId),
+                      value: String(candidate.id),
+                    }))}
+                    value={responsibleId || null}
+                    onValueChange={(value) => setResponsibleId(value ?? String(currentUserId))}
+                  >
+                    <SelectTrigger id="responsibleUserId" className="w-full">
+                      <SelectValue placeholder="Выберите сотрудника" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {activeCashUsers.map((candidate) => (
+                          <SelectItem key={candidate.id} value={String(candidate.id)}>
+                            {shiftUserLabel(candidate, currentUserId)}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>
+                    {responsibleUser && responsibleUser.id !== currentUserId
+                      ? `Смена откроется на сотрудника «${responsibleUser.name}» (открывает: ${currentUserName}).`
+                      : "Смена откроется на вас. Можно выбрать другого сотрудника — например, флориста."}
+                  </FieldDescription>
+                </>
+              ) : (
+                <FieldDescription className="rounded-xl border bg-muted/30 p-3 text-foreground">
+                  Ответственный: {currentUserName}
+                </FieldDescription>
+              )}
             </Field>
             <Field>
               <FieldLabel htmlFor="openingCash">Начальная наличка</FieldLabel>
@@ -460,6 +504,17 @@ function ShiftSheetForm({
     )}
     </>
   )
+}
+
+const SHIFT_USER_ROLE_LABELS: Record<UserRole, string> = {
+  owner: "владелец",
+  manager: "менеджер",
+  florist: "флорист",
+}
+
+function shiftUserLabel(candidate: CurrentUser, currentUserId: number) {
+  const suffix = candidate.id === currentUserId ? " (вы)" : ""
+  return `${candidate.name}${suffix} · ${SHIFT_USER_ROLE_LABELS[candidate.role]}`
 }
 
 const DIFFERENCE_WARNING_THRESHOLD = 100

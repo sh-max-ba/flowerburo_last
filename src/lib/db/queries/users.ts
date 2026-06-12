@@ -232,6 +232,33 @@ export function getActiveFloristById(userId: number, client: Database.Database) 
   return row ? publicUser(mapUser(row)) : null
 }
 
+// Активные сотрудники, которые могут быть ответственными за смену (держателями кассы) —
+// для выбора ответственного при открытии смены владельцем/менеджером.
+export function getActiveCashUsers(client: Database.Database = db()) {
+  const rows = client
+    .prepare(
+      `SELECT id, login, name, role, password_hash, is_active, created_at, updated_at
+       FROM users
+       WHERE role IN ('owner', 'manager', 'florist') AND is_active = 1
+       ORDER BY name COLLATE NOCASE`
+    )
+    .all() as Record<string, unknown>[]
+
+  return rows.map((row) => publicUser(mapUser(row)))
+}
+
+export function getActiveCashUserById(userId: number, client: Database.Database) {
+  const row = client
+    .prepare(
+      `SELECT id, login, name, role, password_hash, is_active, created_at, updated_at
+       FROM users
+       WHERE id = ? AND role IN ('owner', 'manager', 'florist') AND is_active = 1`
+    )
+    .get(userId) as Record<string, unknown> | undefined
+
+  return row ? publicUser(mapUser(row)) : null
+}
+
 export function createSessionRecord(userId: number, token: string, expiresAt: Date) {
   db()
     .prepare(

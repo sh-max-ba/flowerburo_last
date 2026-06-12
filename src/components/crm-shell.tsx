@@ -187,6 +187,7 @@ export function CrmShell({
           currentUserRole={user.role}
           defaultOpeningCash={shiftContext.defaultOpeningCash}
           activeFlorists={shiftContext.activeFlorists}
+          activeCashUsers={shiftContext.activeCashUsers}
           openShift={shiftContext.openShift}
           openShiftDetails={shiftContext.openShiftDetails}
           pending={isPending}

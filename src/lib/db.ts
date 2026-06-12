@@ -87,6 +87,7 @@ export {
   getUserByLogin,
   getUserBySessionToken,
   getActiveFlorists,
+  getActiveCashUsers,
   createSessionRecord,
   deleteSessionRecord,
 } from "./db/queries/users"

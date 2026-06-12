@@ -1,10 +1,18 @@
 import { cookies } from "next/headers"
 import { canCloseShift } from "@/lib/auth"
-import { getActiveFlorists, getShiftShellData, type CurrentUser, type DashboardData } from "@/lib/db"
+import {
+  getActiveCashUsers,
+  getActiveFlorists,
+  getShiftShellData,
+  type CurrentUser,
+  type DashboardData,
+} from "@/lib/db"
 
 export type ShiftShellContext = {
   defaultOpeningCash: number
   activeFlorists: CurrentUser[]
+  // Кандидаты в ответственные за смену (для выбора при открытии владельцем/менеджером).
+  activeCashUsers: CurrentUser[]
   openShift: DashboardData["stats"]["openShift"]
   openShiftDetails: DashboardData["shiftDetails"][number] | null
   canManageShift: boolean
@@ -16,6 +24,7 @@ export function getShiftShellContext(user: CurrentUser): ShiftShellContext {
   return {
     defaultOpeningCash,
     activeFlorists: getActiveFlorists(),
+    activeCashUsers: getActiveCashUsers(),
     openShift,
     openShiftDetails,
     // Нет открытой смены → показываем кнопку «Открыть смену» всем, кто работает на кассе
@@ -37,6 +46,7 @@ export function buildShiftShellContext(
   return {
     defaultOpeningCash: data.stats.defaultOpeningCash,
     activeFlorists,
+    activeCashUsers: getActiveCashUsers(),
     openShift,
     openShiftDetails: openShift
       ? data.shiftDetails.find((detail) => detail.shift.id === openShift.id) ?? null

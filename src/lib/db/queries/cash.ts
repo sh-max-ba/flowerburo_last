@@ -13,7 +13,7 @@ import {
   getShiftAccessInfo,
   requireOpenShift,
 } from "./shifts"
-import { getActiveFloristById } from "./users"
+import { getActiveCashUserById, getActiveFloristById } from "./users"
 
 // Флорист может изменять только СВОИ кассовые операции (сторно / смена способа оплаты) — чтобы при
 // общей кассе (несколько операторов в одной открытой смене) флорист не правил чужие операции.
@@ -37,8 +37,27 @@ export function openShift(formData: FormData, currentUser: CurrentUser) {
     const rawOpeningCash = clean(formData.get("openingCash"))
     const cash = rawOpeningCash ? toNumber(rawOpeningCash) : getDefaultOpeningCash(client)
     const defaultOpeningCash = getDefaultOpeningCash(client)
-    const cashierName = currentUser.name
     const note = clean(formData.get("note"))
+
+    // Ответственный за смену: по умолчанию открывающий; владелец/менеджер могут открыть смену
+    // на другого активного сотрудника (общая сессия на кассе — кейс «смену держит флорист»).
+    // Старые вкладки поле не шлют → поведение прежнее (на себя).
+    let responsible: { id: number; name: string } = { id: currentUser.id, name: currentUser.name }
+    const requestedResponsibleId = Number(clean(formData.get("responsibleUserId")))
+    if (
+      Number.isInteger(requestedResponsibleId) &&
+      requestedResponsibleId > 0 &&
+      requestedResponsibleId !== currentUser.id
+    ) {
+      if (currentUser.role !== "owner" && currentUser.role !== "manager") {
+        throw new Error("Открыть смену на другого сотрудника может только владелец или менеджер.")
+      }
+      const target = getActiveCashUserById(requestedResponsibleId, client)
+      if (!target) {
+        throw new Error("Сотрудник не найден или отключён.")
+      }
+      responsible = { id: target.id, name: target.name }
+    }
 
     if (Math.abs(cash - defaultOpeningCash) >= 0.01 && !note) {
       throw new Error("Укажите комментарий, если начальная наличка отличается от прошлой закрытой смены.")
@@ -49,13 +68,16 @@ export function openShift(formData: FormData, currentUser: CurrentUser) {
         `INSERT INTO shifts (opening_cash, cashier_name, note, user_id, opened_by_user_id, type)
          VALUES (?, ?, ?, ?, ?, 'day')`
       )
-      .run(cash, cashierName, note, currentUser.id, currentUser.id)
+      .run(cash, responsible.name, note, responsible.id, currentUser.id)
 
     addMovement(client, {
       userId: currentUser.id,
       type: "shift_open",
       total: cash,
-      note: `Открыта смена #${shift.lastInsertRowid}: ${cashierName}`,
+      note:
+        responsible.id === currentUser.id
+          ? `Открыта смена #${shift.lastInsertRowid}: ${responsible.name}`
+          : `Открыта смена #${shift.lastInsertRowid}: ${responsible.name} (открыл: ${currentUser.name})`,
     })
   })
 
