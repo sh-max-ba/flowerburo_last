@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { ChevronDownIcon, Loader2Icon } from "lucide-react"
 import { toast } from "sonner"
 import { updatePaymentMethodAction } from "@/app/actions"
-import type { PaymentMethod, ShiftDetails } from "@/lib/db"
+import type { PaymentMethod, SalePaymentMethod, ShiftDetails } from "@/lib/db"
 import { cashTransactionTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { formatInstant } from "@/lib/datetime"
@@ -37,7 +37,8 @@ type TimelineRow = {
   typeLabel: string
   reference: string
   amount: number
-  paymentMethod: PaymentMethod
+  // 'mixed' — только у строки продажи со смешанной оплатой (показ текстом, без правки).
+  paymentMethod: SalePaymentMethod
   outflow: boolean
   refund: boolean
   // Сторнированная продажа: бейдж «сторнировано», способ оплаты только текстом (selectа нет).
@@ -153,7 +154,8 @@ export function ShiftCashTimeline({
                       <PaymentMethodCell
                         target={row.editTarget.target}
                         id={row.editTarget.id}
-                        method={row.paymentMethod}
+                        // editTarget не ставится для mixed-строк — здесь всегда конкретный способ.
+                        method={row.paymentMethod as PaymentMethod}
                         editable={editable}
                       />
                     ) : (
@@ -216,7 +218,8 @@ function buildTimelineRows(detail: ShiftDetails | null): TimelineRow[] {
       items: sale.items,
       // У сторнированной продажи способ оплаты заморожен: возврат повторил исходный метод,
       // правка разбалансирует пару «приход+возврат» (сервер такую правку тоже отклоняет).
-      editTarget: reversed ? null : { target: "sale", id: sale.id },
+      // У смешанной оплаты частей две — единого способа нет, правка тоже заморожена.
+      editTarget: reversed || sale.paymentMethod === "mixed" ? null : { target: "sale", id: sale.id },
     })
   }
 

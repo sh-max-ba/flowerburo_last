@@ -1,6 +1,6 @@
 "use client"
 
-import { Fragment, useMemo, useRef, useState, useTransition } from "react"
+import { Fragment, useCallback, useMemo, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import {
   AlertTriangleIcon,
@@ -105,6 +105,7 @@ import {
   OrdersActivityRefresh,
 } from "@/components/orders/order-shared"
 import { ShiftCashTimeline } from "@/components/cash/shift-cash-timeline"
+import { SplitPaymentFields, type SplitPaymentState } from "@/components/cash/split-payment-fields"
 
 type Result = Awaited<ReturnType<typeof createSaleAction>>
 type CustomerCreateResult = Awaited<ReturnType<typeof createCashCustomerAction>>
@@ -418,6 +419,20 @@ function QuickSaleForm({
   const [receivedInput, setReceivedInput] = useState("")
   const [note, setNote] = useState("")
   const [noteOpen, setNoteOpen] = useState(false)
+  // Смешанная оплата: состояние дочернего блока (валидность гейтит submit), epoch ремоунтит
+  // блок при сбросе формы после проведения.
+  const [splitState, setSplitState] = useState<SplitPaymentState>({ enabled: false, valid: true })
+  const [saleFormEpoch, setSaleFormEpoch] = useState(0)
+  // Стабильный колбэк: bail при том же значении (иначе эффект ребёнка зациклит рендер).
+  // При включении сплита очищаем «Получено» — сдача в смешанной оплате не считается.
+  const handleSplitStateChange = useCallback((state: SplitPaymentState) => {
+    setSplitState((current) =>
+      current.enabled === state.enabled && current.valid === state.valid ? current : state
+    )
+    if (state.enabled) {
+      setReceivedInput("")
+    }
+  }, [])
   // Клиент/скидка/комментарий для walk-in опциональны — секции свёрнуты, пока их не раскрыли
   // или пока в них нет данных.
   const saleDiscountActive = saleDiscountType !== "none"
@@ -457,7 +472,8 @@ function QuickSaleForm({
   const hasReceived = receivedInput.trim() !== "" && Number.isFinite(received)
   const changeDue = hasReceived ? Math.max(0, Math.round((received - saleTotal) * 100) / 100) : 0
   const shortfall = hasReceived ? Math.round((saleTotal - received) * 100) / 100 : 0
-  const cashShort = isCash && hasReceived && shortfall > 0
+  // При смешанной оплате суммы вводятся точно по частям — расчёт сдачи не участвует.
+  const cashShort = isCash && !splitState.enabled && hasReceived && shortfall > 0
   const cartEmpty = items.length === 0
   // Причина видна не только тултипом (на тач-экране наведения нет), но и текстом под кнопкой —
   // поэтому формулировки сразу подсказывают действие.
@@ -467,9 +483,11 @@ function QuickSaleForm({
       ? "Добавьте позиции в корзину"
       : !paymentMethod
         ? "Выберите способ оплаты"
-        : cashShort
-          ? `Полученная сумма меньше итога — не хватает ${formatMoney(shortfall)}`
-          : null
+        : splitState.enabled && !splitState.valid
+          ? "Заполните части смешанной оплаты"
+          : cashShort
+            ? `Полученная сумма меньше итога — не хватает ${formatMoney(shortfall)}`
+            : null
   const completeDisabled = pending || Boolean(completeDisabledReason)
 
   function addProduct(product: Product) {
@@ -491,6 +509,8 @@ function QuickSaleForm({
     setReceivedInput("")
     setNote("")
     setNoteOpen(false)
+    setSplitState({ enabled: false, valid: true })
+    setSaleFormEpoch((value) => value + 1)
   }
 
   function clearSaleDiscount() {
@@ -612,7 +632,16 @@ function QuickSaleForm({
                 </Select>
               </Field>
 
-              {isCash && (
+              <SplitPaymentFields
+                key={saleFormEpoch}
+                total={saleTotal}
+                primaryMethod={paymentMethod}
+                disabled={disabled || pending}
+                idPrefix="sale-split"
+                onStateChange={handleSplitStateChange}
+              />
+
+              {isCash && !splitState.enabled && (
                 <Field>
                   <FieldLabel htmlFor="sale-received">Получено от клиента</FieldLabel>
                   <Input
@@ -1050,6 +1079,13 @@ function NewOrderForm({
   const [address, setAddress] = useState("")
   const [note, setNote] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("cash")
+  // Смешанная предоплата: блок размонтируется при prepaid=0 (сброс состояния «бесплатный»).
+  const [prepaidSplit, setPrepaidSplit] = useState<SplitPaymentState>({ enabled: false, valid: true })
+  const handlePrepaidSplitChange = useCallback((state: SplitPaymentState) => {
+    setPrepaidSplit((current) =>
+      current.enabled === state.enabled && current.valid === state.valid ? current : state
+    )
+  }, [])
 
   const availableCustomers = useMemo(
     () => createdCustomers.reduce((current, customerOption) => upsertCustomerOption(current, customerOption), customers),
@@ -1074,7 +1110,9 @@ function NewOrderForm({
       ? "Откройте смену для предоплаты"
       : prepaidTooHigh
         ? "Предоплата выше итога"
-        : null
+        : prepaidSplit.enabled && !prepaidSplit.valid
+          ? "Заполните части смешанной предоплаты"
+          : null
   const orderDisabled = pending || Boolean(orderDisabledReason)
   const orderDiscountActive = orderDiscountType !== "none"
   const showOrderDiscount = orderDiscountOpen || orderDiscountActive
@@ -1431,6 +1469,15 @@ function NewOrderForm({
                 </Field>
               </div>
               {prepaid > 0 && (
+                <SplitPaymentFields
+                  total={prepaid}
+                  primaryMethod={paymentMethod}
+                  disabled={pending}
+                  idPrefix="order-split"
+                  onStateChange={handlePrepaidSplitChange}
+                />
+              )}
+              {prepaid > 0 && (
                 <p className="text-xs text-muted-foreground">
                   «Провести заказ» — предоплата сразу уходит в кассу текущей смены. «Сохранить черновик» —
                   сумма и способ запоминаются, в кассу попадут при отправке черновика в работу.
@@ -1584,16 +1631,22 @@ function NewOrderForm({
               </Tooltip>
             </TooltipProvider>
             {/* Черновик: недоформленный заказ (минимум — имя клиента), без резерва склада. Доступен
-                даже без позиций/смены, поэтому НЕ гейтится orderDisabled. */}
+                даже без позиций/смены, поэтому НЕ гейтится orderDisabled. Черновик хранит ОДИН
+                способ предоплаты-намерения — со смешанной оплатой недоступен (сервер тоже гардит). */}
             <Button
               type="submit"
               data-intent="draft"
               variant="outline"
               className="h-10 w-full"
-              disabled={pending}
+              disabled={pending || prepaidSplit.enabled}
             >
               Сохранить черновик
             </Button>
+            {prepaidSplit.enabled && (
+              <p className="text-center text-xs text-muted-foreground">
+                Черновик хранит один способ предоплаты — уберите смешанную оплату или проведите заказ сразу.
+              </p>
+            )}
           </div>
         </div>
       </form>

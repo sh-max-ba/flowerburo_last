@@ -433,9 +433,10 @@ function SaleStornoPanel({ entry }: { entry: CashLedgerEntry }) {
             <AlertDialogHeader>
               <AlertDialogTitle>Сторнировать продажу?</AlertDialogTitle>
               <AlertDialogDescription>
-                Продажа {entry.saleId ? `#${entry.saleId}` : ""} на {amount} будет отменена: возврат {amount} тем же
-                способом оплаты, выручка уменьшится, товар вернётся на склад. Возврат пройдёт по текущей открытой смене
-                (для продаж прошлых смен — с пометкой «за смену #N»). Действие необратимо.
+                Продажа {entry.saleId ? `#${entry.saleId}` : ""} будет отменена целиком: возврат каждой оплаты тем же
+                способом (при смешанной оплате — обеих частей), выручка уменьшится, товар вернётся на склад. Возврат
+                пройдёт по текущей открытой смене (для продаж прошлых смен — с пометкой «за смену #N»). Действие
+                необратимо.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

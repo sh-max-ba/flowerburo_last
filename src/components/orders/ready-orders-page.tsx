@@ -18,6 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { SplitPaymentFields } from "@/components/cash/split-payment-fields"
 import {
   Select,
   SelectContent,
@@ -385,6 +386,9 @@ function ReadyOrderCard({
                   </Field>
                 </div>
               )}
+              {needsPayment && (
+                <SplitPaymentFields total={balance} disabled={!shiftOpen} idPrefix={`pickup-split-${order.id}`} />
+              )}
               <Button type="submit" disabled={pendingAction || (needsPayment && !shiftOpen)}>
                 {pendingAction && <Spinner className="size-4" />}
                 Выдать клиенту
@@ -494,6 +498,7 @@ function CourierSheet({
                         </Select>
                       </Field>
                     </div>
+                    <SplitPaymentFields total={balance} idPrefix={`courier-split-${order.id}`} />
                   </FieldSet>
                 )}
                 <FieldSet>
