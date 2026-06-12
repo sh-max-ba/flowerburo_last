@@ -4,7 +4,7 @@ import { calculateCommercialTotals, normalizeDiscountType } from "@/lib/pricing"
 import type { CurrentUser } from "../types"
 import { db } from "../connection"
 import { addMovement, applyProductDelta, getProduct, recordCashTransaction } from "../ledger"
-import { clean, parsePaymentMethod, toNumber, toOptionalNumber } from "../form-parsers"
+import { clean, parsePaymentParts, toNumber, toOptionalNumber } from "../form-parsers"
 import { parseForm } from "@/lib/forms/parse"
 import { SaleInputSchema } from "@/lib/forms/schemas"
 import { calculateComponentLineTotal, itemsForCommercialTotals, resolveCashCustomer } from "./commercial"
@@ -81,7 +81,6 @@ function buildSaleItems(client: Database.Database, formData: FormData) {
 
 export function createSale(formData: FormData, currentUser: CurrentUser) {
   const client = db()
-  const paymentMethod = parsePaymentMethod(formData.get("paymentMethod"))
   const { note } = parseForm(SaleInputSchema, formData)
 
   const saveSale = client.transaction(() => {
@@ -92,6 +91,10 @@ export function createSale(formData: FormData, currentUser: CurrentUser) {
     const saleDiscountValue = saleDiscountType === "none" ? 0 : Math.max(0, toNumber(formData.get("saleDiscountValue")))
     const totals = calculateCommercialTotals(itemsForCommercialTotals(items), saleDiscountType, saleDiscountValue)
     const total = totals.total
+    // Оплата, возможно смешанная: одна денежная проводка на каждую часть. В sales.payment_method
+    // при сплите пишем 'mixed' — разбор по способам везде идёт из cash_transactions.
+    const paymentParts = parsePaymentParts(formData, total)
+    const paymentMethod = paymentParts.length > 1 ? "mixed" : paymentParts[0].method
     const sale = client
       .prepare(
         `INSERT INTO sales (
@@ -161,16 +164,18 @@ export function createSale(formData: FormData, currentUser: CurrentUser) {
       })
     }
     if (total > 0) {
-      recordCashTransaction(client, {
-        shiftId: shift.id,
-        saleId,
-        customerId: customer.id,
-        userId: currentUser.id,
-        type: "sale",
-        paymentMethod,
-        amount: total,
-        comment: note || "Продажа на кассе",
-      })
+      for (const part of paymentParts) {
+        recordCashTransaction(client, {
+          shiftId: shift.id,
+          saleId,
+          customerId: customer.id,
+          userId: currentUser.id,
+          type: "sale",
+          paymentMethod: part.method,
+          amount: part.amount,
+          comment: note || "Продажа на кассе",
+        })
+      }
     }
   })
 

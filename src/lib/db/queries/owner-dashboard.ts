@@ -125,13 +125,17 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
 
   // Разбивка выручки по методам оплаты за период (для donut) — продажи + полученное по
   // заказам, завершённым в периоде, сгруппированное по способу оплаты.
+  // Продажи берём из денежных проводок (а не sales.payment_method): при смешанной оплате
+  // частей две, каждая со своим способом; для обычной продажи проводка одна — эквивалентно.
   const paymentRows = client
     .prepare(
       `SELECT method, COALESCE(SUM(total), 0) as total, COALESCE(SUM(cnt), 0) as count
        FROM (
-         SELECT COALESCE(NULLIF(payment_method, ''), 'cash') as method, total, 1 as cnt
-         FROM sales
-         WHERE DATE(created_at, '${TZ}') BETWEEN ? AND ? AND reversed_at IS NULL
+         SELECT COALESCE(NULLIF(ct.payment_method, ''), 'cash') as method, ct.amount as total, 1 as cnt
+         FROM cash_transactions ct
+         JOIN sales s ON s.id = ct.sale_id
+         WHERE ct.type = 'sale'
+          AND DATE(s.created_at, '${TZ}') BETWEEN ? AND ? AND s.reversed_at IS NULL
          UNION ALL
          SELECT COALESCE(NULLIF(ct.payment_method, ''), 'cash') as method, ct.amount as total, 1 as cnt
          FROM cash_transactions ct

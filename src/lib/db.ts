@@ -32,6 +32,7 @@ export type {
   Product,
   Sale,
   SaleItem,
+  SalePaymentMethod,
   Shift,
   ShiftDetails,
   ShiftPaymentBreakdown,

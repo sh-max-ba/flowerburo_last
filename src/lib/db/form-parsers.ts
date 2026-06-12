@@ -50,6 +50,44 @@ export function parsePaymentMethod(value: FormDataEntryValue | string | null | u
   return method as PaymentMethod
 }
 
+export type PaymentPart = { method: PaymentMethod; amount: number }
+
+// Разбор оплаты, возможно смешанной (до двух способов). target — полная сумма платёжного
+// события (итог продажи / сумма доплаты / предоплата). Без поля paymentMethod2 — одна часть
+// на весь target (прежнее поведение, формы старых сборок не ломаются). Со второй частью:
+// обе суммы > 0, способы различны, сумма частей сходится с target до копейки.
+export function parsePaymentParts(formData: FormData, target: number): PaymentPart[] {
+  const method = parsePaymentMethod(formData.get("paymentMethod"))
+  const method2Raw = typeof formData.get("paymentMethod2") === "string" ? String(formData.get("paymentMethod2")).trim() : ""
+  if (!method2Raw) {
+    return [{ method, amount: roundMoney(target) }]
+  }
+
+  const method2 = parsePaymentMethod(method2Raw)
+  if (method2 === method) {
+    throw new Error("В смешанной оплате способы должны различаться.")
+  }
+  const amount2 = roundMoney(toNumber(formData.get("paymentAmount2")))
+  // Первая часть может не передаваться — тогда это «остальное» (target − вторая часть).
+  const rawAmount1 = formData.get("paymentAmount1")
+  const amount1 =
+    rawAmount1 == null || String(rawAmount1).trim() === ""
+      ? roundMoney(target - amount2)
+      : roundMoney(toNumber(rawAmount1))
+  if (amount1 <= 0 || amount2 <= 0) {
+    throw new Error("Обе части смешанной оплаты должны быть больше нуля.")
+  }
+  if (Math.abs(amount1 + amount2 - target) > 0.009) {
+    throw new Error(
+      `Части смешанной оплаты (${amount1} + ${amount2}) не сходятся с суммой ${roundMoney(target)}.`
+    )
+  }
+  return [
+    { method, amount: amount1 },
+    { method: method2, amount: amount2 },
+  ]
+}
+
 export function normalizeRole(value: FormDataEntryValue | string | null): UserRole {
   const role = String(value ?? "").trim()
   if (role === "owner" || role === "manager" || role === "florist") {

@@ -4,7 +4,15 @@ import { calculateCommercialTotals, normalizeDiscountType } from "@/lib/pricing"
 import type { CurrentUser, OrderStatus } from "../types"
 import { db } from "../connection"
 import { addMovement, applyProductDelta, getProduct, recordCashTransaction } from "../ledger"
-import { clean, generateOrderNumber, parsePaymentMethod, roundMoney, toNumber, toOptionalNumber } from "../form-parsers"
+import {
+  clean,
+  generateOrderNumber,
+  parsePaymentMethod,
+  parsePaymentParts,
+  roundMoney,
+  toNumber,
+  toOptionalNumber,
+} from "../form-parsers"
 import { parseForm } from "@/lib/forms/parse"
 import { OrderInputSchema } from "@/lib/forms/schemas"
 import { paymentMethods } from "../types"
@@ -83,7 +91,6 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
   const customerSnapshot = resolveCashCustomer(client, formData)
   const customer = customerSnapshot.name || clean(formData.get("customer")) || clean(formData.get("customer_name"))
   const phone = customerSnapshot.phone || clean(formData.get("phone"))
-  const paymentMethod = parsePaymentMethod(formData.get("paymentMethod"))
   const orderDiscountType = normalizeDiscountType(clean(formData.get("orderDiscountType")))
   const orderDiscountValue = orderDiscountType === "none" ? 0 : Math.max(0, toNumber(formData.get("orderDiscountValue")))
 
@@ -189,16 +196,19 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
     }
 
     if (shift && prepaid > 0) {
-      recordCashTransaction(client, {
-        shiftId: shift.id,
-        orderId,
-        customerId: customerSnapshot.id,
-        userId: currentUser.id,
-        type: "prepayment",
-        paymentMethod,
-        amount: prepaid,
-        comment: `Предоплата по заказу ${number}`,
-      })
+      // Предоплата, возможно смешанная: одна проводка на каждую часть со своим способом.
+      for (const part of parsePaymentParts(formData, prepaid)) {
+        recordCashTransaction(client, {
+          shiftId: shift.id,
+          orderId,
+          customerId: customerSnapshot.id,
+          userId: currentUser.id,
+          type: "prepayment",
+          paymentMethod: part.method,
+          amount: part.amount,
+          comment: `Предоплата по заказу ${number}`,
+        })
+      }
     }
 
     addMovement(client, {
@@ -276,8 +286,19 @@ function parseDraftFields(formData: FormData) {
     // Проводка предоплаты создаётся при отправке в работу — см. finalizeOrderDraft.
     // total'ом не ограничиваем: у черновика состав может быть пустым/неполным.
     prepaid: Math.max(0, toNumber(formData.get("prepaid"))),
-    prepaidMethod: parsePaymentMethod(formData.get("paymentMethod")),
+    prepaidMethod: parseDraftPrepaidMethod(formData),
   }
+}
+
+// Черновик хранит ОДИН способ предоплаты-намерения (draft_prepaid_method): смешанную тихо
+// урезать до первого способа нельзя — при отправке в работу провелось бы не то, что обещали.
+function parseDraftPrepaidMethod(formData: FormData) {
+  if (clean(formData.get("paymentMethod2"))) {
+    throw new Error(
+      "Для черновика смешанная предоплата недоступна: укажите один способ или проведите заказ сразу."
+    )
+  }
+  return parsePaymentMethod(formData.get("paymentMethod"))
 }
 
 function writeDraftItems(
@@ -780,7 +801,8 @@ function applyOrderPayment(
     return 0
   }
 
-  const paymentMethod = parsePaymentMethod(formData.get("paymentMethod"))
+  // Доплата, возможно смешанная (до двух способов) — валидация частей до денежных проверок.
+  const paymentParts = parsePaymentParts(formData, amount)
   const { order } = getOrderWithItems(client, orderId)
   if (String(order.status) === "Отменен") {
     throw new Error("Заказ отменён — оплату по нему принять нельзя.")
@@ -814,17 +836,19 @@ function applyOrderPayment(
     throw new Error("Сумма оплаты не может быть больше остатка.")
   }
 
-  recordCashTransaction(client, {
-    shiftId,
-    orderId,
-    customerId,
-    dealId,
-    userId: currentUser.id,
-    type: "order_payment",
-    paymentMethod,
-    amount,
-    comment: `Доплата по заказу #${orderId}`,
-  })
+  for (const part of paymentParts) {
+    recordCashTransaction(client, {
+      shiftId,
+      orderId,
+      customerId,
+      dealId,
+      userId: currentUser.id,
+      type: "order_payment",
+      paymentMethod: part.method,
+      amount: part.amount,
+      comment: `Доплата по заказу #${orderId}`,
+    })
+  }
   client
     .prepare(
       `UPDATE orders

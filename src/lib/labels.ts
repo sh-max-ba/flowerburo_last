@@ -12,6 +12,11 @@ export const paymentMethodOptions: Array<{ value: PaymentMethod; label: string }
 ]
 
 export function getPaymentMethodLabel(method: PaymentMethod | string) {
+  // Смешанная оплата существует только как признак ПРОДАЖИ (sales.payment_method='mixed');
+  // денежные проводки всегда несут конкретный способ. В селекты способов не попадает.
+  if (method === "mixed") {
+    return "Смешанная"
+  }
   const labels: Record<PaymentMethod, string> = {
     cash: "Наличные",
     card: "Карта",

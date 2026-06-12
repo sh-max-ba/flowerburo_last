@@ -285,6 +285,12 @@ export function updatePaymentMethod(formData: FormData, currentUser: CurrentUser
           "Продажа сторнирована — способ оплаты менять нельзя, иначе касса разойдётся. Если способ был неверным, проведите продажу заново нужным способом."
         )
       }
+      // У смешанной оплаты две проводки разными способами — массовая перезапись смешала бы их.
+      if (String(sale.paymentMethod) === "mixed") {
+        throw new Error(
+          "У продажи смешанная оплата — способ менять нельзя. Если оплата проведена неверно, сторнируйте продажу и проведите заново."
+        )
+      }
       assertFloristEditsOwn(currentUser, sale.userId)
       if (sale.paymentMethod === paymentMethod) {
         return
@@ -447,17 +453,40 @@ export function reverseCashTransaction(formData: FormData, currentUser: CurrentU
       if (!saleId) {
         throw new Error("Продажа не найдена.")
       }
-      recordCashTransaction(client, {
-        shiftId: shift.id,
-        saleId,
-        sourceShiftId: originalShiftId,
-        userId: currentUser.id,
-        reversesId: id,
-        type: "cash_refund",
-        paymentMethod: original.paymentMethod,
-        amount,
-        comment: `Сторно продажи #${saleId}${crossShiftNote}`,
-      })
+      const saleRow = client.prepare("SELECT reversed_at as reversedAt FROM sales WHERE id = ?").get(saleId) as
+        | { reversedAt: string | null }
+        | undefined
+      if (!saleRow) {
+        throw new Error("Продажа не найдена.")
+      }
+      if (saleRow.reversedAt) {
+        throw new Error("Продажа уже сторнирована.")
+      }
+      // Сторно возвращает ВСЕ денежные части продажи (при смешанной оплате их две) — каждую
+      // тем же способом, которым пришла: пара «приход+возврат» остаётся метод-в-метод.
+      const saleParts = client
+        .prepare(
+          "SELECT id, shift_id as shiftId, payment_method as paymentMethod, amount FROM cash_transactions WHERE sale_id = ? AND type = 'sale' ORDER BY id"
+        )
+        .all(saleId) as Array<{ id: number; shiftId: number | null; paymentMethod: PaymentMethod; amount: number }>
+      let refundedTotal = 0
+      for (const part of saleParts) {
+        const partShiftId = numberFromRow(part.shiftId) || null
+        const partNote = partShiftId && partShiftId !== shift.id ? ` (за смену #${partShiftId})` : ""
+        const partAmount = numberFromRow(part.amount)
+        refundedTotal += partAmount
+        recordCashTransaction(client, {
+          shiftId: shift.id,
+          saleId,
+          sourceShiftId: partShiftId,
+          userId: currentUser.id,
+          reversesId: numberFromRow(part.id),
+          type: "cash_refund",
+          paymentMethod: part.paymentMethod,
+          amount: partAmount,
+          comment: `Сторно продажи #${saleId}${partNote}`,
+        })
+      }
       client.prepare("UPDATE sales SET reversed_at = CURRENT_TIMESTAMP WHERE id = ?").run(saleId)
       const saleItems = client
         .prepare("SELECT product_code as productCode, qty FROM sale_items WHERE sale_id = ?")
@@ -477,7 +506,7 @@ export function reverseCashTransaction(formData: FormData, currentUser: CurrentU
       addMovement(client, {
         userId: currentUser.id,
         type: "cash_reversal",
-        total: amount,
+        total: refundedTotal,
         note: `Сторно продажи #${saleId}`,
       })
       return

@@ -9,6 +9,7 @@ import type {
   PaymentMethod,
   Product,
   Sale,
+  SalePaymentMethod,
   ShiftRelatedOrder,
 } from "@/lib/db"
 
@@ -170,7 +171,7 @@ export function rowToSale(row: SaleRow): Sale {
     shiftId: rowNumOrNull(row.shiftId),
     userId: rowNumOrNull(row.userId),
     userName: row.userName === null || row.userName === undefined ? null : rowStr(row.userName),
-    paymentMethod: rowStr(row.paymentMethod) as PaymentMethod,
+    paymentMethod: rowStr(row.paymentMethod) as SalePaymentMethod,
     customerId: rowNumOrNull(row.customerId),
     customerName: rowStr(row.customerName),
     customerPhone: rowStr(row.customerPhone),

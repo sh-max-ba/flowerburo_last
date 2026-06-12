@@ -180,12 +180,16 @@ export type WarehouseImportPreview = WarehouseImport & {
   items: WarehouseImportItem[]
 }
 
+// Способ оплаты продажи: 'mixed' — смешанная (две денежные проводки с разными способами).
+// В cash_transactions «mixed» не бывает — каждая проводка несёт конкретный способ.
+export type SalePaymentMethod = PaymentMethod | "mixed"
+
 export type Sale = {
   id: number
   shiftId: number | null
   userId: number | null
   userName: string | null
-  paymentMethod: PaymentMethod
+  paymentMethod: SalePaymentMethod
   customerId: number | null
   customerName: string
   customerPhone: string
