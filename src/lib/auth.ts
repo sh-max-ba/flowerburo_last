@@ -198,12 +198,11 @@ export function canCloseShift(user: CurrentUser, shiftId: number) {
     return false
   }
 
-  if (user.role === "owner") {
+  // Владелец и менеджер закрывают любую открытую смену. Менеджер не привязан к ответственному:
+  // смену можно открыть «на другого сотрудника» (см. openShift), поэтому закрыть её должен мочь
+  // любой менеджер/владелец, а не только тот, на кого она оформлена.
+  if (user.role === "owner" || user.role === "manager") {
     return true
-  }
-
-  if (user.role === "manager") {
-    return shift.type === "night" || (shift.type === "day" && shift.userId === user.id)
   }
 
   // Флорист закрывает СВОЮ смену (которую сам открыл — type='day' — или назначенную ночную).
