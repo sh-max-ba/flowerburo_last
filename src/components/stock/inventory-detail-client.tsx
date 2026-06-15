@@ -1,7 +1,7 @@
 "use client"
 
 import { useRouter } from "next/navigation"
-import { useMemo, useState, useTransition } from "react"
+import { useEffect, useMemo, useState, useTransition } from "react"
 import { SearchIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
@@ -40,6 +40,11 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
   const isDraft = doc.status === "draft"
+  // Подсчёт хранится только в памяти страницы и пишется в БД лишь по «Сохранить». Если сохранение
+  // упало (например, после деплоя — «Failed to find Server Action» с последующей перезагрузкой),
+  // несохранённый ввод терялся целиком. Поэтому зеркалим введённое в localStorage и восстанавливаем
+  // при загрузке — данные переживают любую перезагрузку до явного проведения/отмены.
+  const storageKey = `fb-inventory-draft-${doc.id}`
 
   const [rows, setRows] = useState<Record<number, RowState>>(() => {
     const initial: Record<number, RowState> = {}
@@ -139,6 +144,63 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
     const savedReason = item.varianceReason ?? ""
     return row.counted.trim() !== savedCounted || row.reason !== savedReason
   }
+
+  // Восстановление несохранённого ввода из localStorage — только на клиенте, после монтирования,
+  // чтобы не ломать гидрацию. Накатываем поверх серверных значений лишь «грязные» строки.
+  useEffect(() => {
+    if (!isDraft || typeof window === "undefined") return
+    try {
+      const raw = window.localStorage.getItem(storageKey)
+      if (!raw) return
+      const stored = JSON.parse(raw) as Record<number, RowState>
+      // Одноразовая регидрация из localStorage после монтирования — чтение из внешнего хранилища
+      // нельзя делать в инициализаторе useState (рассинхрон гидрации SSR↔клиент), поэтому здесь.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setRows((current) => {
+        const next = { ...current }
+        for (const item of doc.items) {
+          const saved = item.countedQty == null ? "" : String(item.countedQty)
+          const savedReason = item.varianceReason ?? ""
+          const s = stored[item.id]
+          if (s && (String(s.counted ?? "") !== saved || String(s.reason ?? "") !== savedReason)) {
+            next[item.id] = { counted: String(s.counted ?? ""), reason: String(s.reason ?? "") }
+          }
+        }
+        return next
+      })
+    } catch {
+      // повреждённое хранилище игнорируем
+    }
+    // только при монтировании (восстановление одноразовое)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Зеркалим в localStorage только «грязные» строки: когда всё сохранено — ключ самоочищается.
+  // Проведённый/отменённый акт (не draft) тоже очищаем.
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      if (!isDraft) {
+        window.localStorage.removeItem(storageKey)
+        return
+      }
+      const dirty: Record<number, RowState> = {}
+      for (const item of doc.items) {
+        const row = rows[item.id]
+        if (!row) continue
+        const saved = item.countedQty == null ? "" : String(item.countedQty)
+        const savedReason = item.varianceReason ?? ""
+        if (row.counted.trim() !== saved || row.reason !== savedReason) dirty[item.id] = row
+      }
+      if (Object.keys(dirty).length > 0) {
+        window.localStorage.setItem(storageKey, JSON.stringify(dirty))
+      } else {
+        window.localStorage.removeItem(storageKey)
+      }
+    } catch {
+      // переполнение/недоступность localStorage — не критично
+    }
+  }, [rows, doc.items, isDraft, storageKey])
 
   // Проверка до отправки: сервер откатывает сохранение целиком, поэтому называем виновную строку сразу.
   function findInvalidRow(): string | null {
