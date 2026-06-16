@@ -173,6 +173,10 @@ export function calculateShiftSummary(shiftId: number, client: Database.Database
     deferredPrepayments: 0,
     revenueReceivedInOtherShifts: 0,
     draftPrepaidTotal: 0,
+    deliveryPaidCount: 0,
+    deliveryPaidTotal: 0,
+    deliveryFreeCount: 0,
+    deliveryPickupCount: 0,
   }
 
   for (const row of rows) {
@@ -266,6 +270,25 @@ export function calculateShiftSummary(shiftId: number, client: Database.Database
     .prepare("SELECT COALESCE(SUM(prepaid), 0) as v FROM orders WHERE status = 'Черновик' AND prepaid > 0")
     .get() as { v: number }
   summary.draftPrepaidTotal = numberFromRow(draftPrepaidRow.v)
+
+  // Доставка за смену — по заказам, завершённым (выданным/переданным курьеру) в эту смену,
+  // тот же якорь completed_shift_id, что у выручки. Платная: тип «доставка» и цена > 0;
+  // бесплатная: тип «доставка» и цена 0; самовывоз: всё остальное (pickup / legacy NULL).
+  const deliveryRow = client
+    .prepare(
+      `SELECT
+        COALESCE(SUM(CASE WHEN delivery_type = 'delivery' AND delivery_price > 0 THEN 1 ELSE 0 END), 0) as paidCount,
+        COALESCE(SUM(CASE WHEN delivery_type = 'delivery' AND delivery_price > 0 THEN delivery_price ELSE 0 END), 0) as paidTotal,
+        COALESCE(SUM(CASE WHEN delivery_type = 'delivery' AND COALESCE(delivery_price, 0) <= 0 THEN 1 ELSE 0 END), 0) as freeCount,
+        COALESCE(SUM(CASE WHEN COALESCE(delivery_type, 'pickup') != 'delivery' THEN 1 ELSE 0 END), 0) as pickupCount
+       FROM orders
+       WHERE completed_shift_id = ? AND status != 'Отменен'`
+    )
+    .get(shiftId) as { paidCount: number; paidTotal: number; freeCount: number; pickupCount: number }
+  summary.deliveryPaidCount = numberFromRow(deliveryRow.paidCount)
+  summary.deliveryPaidTotal = numberFromRow(deliveryRow.paidTotal)
+  summary.deliveryFreeCount = numberFromRow(deliveryRow.freeCount)
+  summary.deliveryPickupCount = numberFromRow(deliveryRow.pickupCount)
 
   const saleDiscountRow = client
     .prepare(

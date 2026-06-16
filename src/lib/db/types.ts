@@ -523,6 +523,13 @@ export type ShiftSummary = {
   // Предоплаты-намерения в черновиках заказов: записаны, но в кассу НЕ проведены
   // (проводятся при отправке черновика в работу). Справочная строка против путаницы.
   draftPrepaidTotal: number
+  // Доставка за смену — по заказам, ВЫДАННЫМ/переданным курьеру в эту смену
+  // (completed_shift_id, тот же якорь, что у выручки). Платная — delivery_price > 0,
+  // бесплатная — доставка с ценой 0, самовывоз — pickup. Для отчёта по доставке в панели смены.
+  deliveryPaidCount: number
+  deliveryPaidTotal: number
+  deliveryFreeCount: number
+  deliveryPickupCount: number
 }
 
 export type CustomerOption = {
