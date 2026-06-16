@@ -289,3 +289,17 @@ export function listArchivedProducts(): Product[] {
       .all() as Array<Record<string, unknown>>
   ).map(mapProductRow)
 }
+
+// Активные товары для отчёта «Остатки» — отсортированы по категории, затем по названию.
+// Суммы (себестоимость/продажа) и группировку по категориям считаем на клиенте.
+export function listActiveProductsForReport(): Product[] {
+  return (
+    db()
+      .prepare(
+        `SELECT * FROM products
+         WHERE COALESCE(is_active, 1) = 1
+         ORDER BY category_path COLLATE NOCASE, name COLLATE NOCASE`
+      )
+      .all() as Array<Record<string, unknown>>
+  ).map(mapProductRow)
+}

@@ -2,6 +2,7 @@
 
 import {
   BanknoteIcon,
+  BarChart3Icon,
   BoxesIcon,
   CalendarClockIcon,
   ClipboardCheckIcon,
@@ -33,6 +34,7 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   "order-drafts": NotebookPenIcon,
   "ready-orders": PackageCheckIcon,
   stock: BoxesIcon,
+  "stock-report": BarChart3Icon,
   "stock-acts": ScrollTextIcon,
   "stock-lots": CalendarClockIcon,
   "stock-inventory": ClipboardCheckIcon,

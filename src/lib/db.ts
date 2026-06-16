@@ -128,6 +128,7 @@ export {
   deleteProduct,
   setProductArchived,
   listArchivedProducts,
+  listActiveProductsForReport,
 } from "./db/queries/products"
 export {
   listBouquetTemplates,
