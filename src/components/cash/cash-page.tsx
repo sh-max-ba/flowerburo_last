@@ -14,6 +14,7 @@ import {
   PlusCircleIcon,
   PlusIcon,
   ReceiptTextIcon,
+  TruckIcon,
   UserPlusIcon,
   WalletIcon,
   XIcon,
@@ -105,6 +106,7 @@ import {
   OrdersActivityRefresh,
 } from "@/components/orders/order-shared"
 import { ShiftCashTimeline } from "@/components/cash/shift-cash-timeline"
+import { ShiftReceiptsList } from "@/components/cash/shift-receipts-list"
 import { SplitPaymentFields, type SplitPaymentState } from "@/components/cash/split-payment-fields"
 
 type Result = Awaited<ReturnType<typeof createSaleAction>>
@@ -1721,33 +1723,122 @@ function ShiftDetailsSheet({
           )}
 
           {summary ? (
-            <div className="grid grid-cols-2 gap-2">
-              <CashMetric label="Выручка до скидок" value={formatMoney(summary.revenueBeforeDiscount)} />
-              <CashMetric label="Скидки" value={formatMoney(summary.discountTotal)} />
-              <CashMetric label="Выручка после скидок" value={formatMoney(summary.revenueTotal)} />
-              <CashMetric label="Ожидается в кассе" value={formatMoney(summary.expectedCash)} />
-              {summary.deferredPrepayments > 0 && (
-                <CashMetric label="Предоплаты по будущим заказам" value={formatMoney(summary.deferredPrepayments)} />
+            <div className="flex flex-col gap-5">
+              {/* Hero: выручка за смену — главное число, крупно. */}
+              <div>
+                <div className="text-xs text-muted-foreground">Выручка за смену</div>
+                <div className="text-3xl font-semibold tabular-nums text-zinc-950">
+                  {formatMoney(summary.revenueTotal)}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+                  <span>до скидок {formatMoney(summary.revenueBeforeDiscount)}</span>
+                  {summary.discountTotal > 0 && <span>скидки −{formatMoney(summary.discountTotal)}</span>}
+                </div>
+              </div>
+
+              {/* Ожидается в кассе — ключевое число для сверки на закрытии. */}
+              <div className="flex items-baseline justify-between rounded-xl border border-zinc-200 bg-zinc-50/60 px-4 py-3">
+                <span className="text-sm text-muted-foreground">Ожидается в кассе</span>
+                <span className="text-xl font-semibold tabular-nums text-zinc-950">
+                  {formatMoney(summary.expectedCash)}
+                </span>
+              </div>
+
+              {/* Справочно: деньги, не входящие в выручку/кассу этой смены. */}
+              {(summary.deferredPrepayments > 0 ||
+                summary.revenueReceivedInOtherShifts > 0 ||
+                (Boolean(openShift) && summary.draftPrepaidTotal > 0)) && (
+                <div className="flex flex-col gap-1 rounded-lg bg-amber-50/60 px-3 py-2 text-xs text-amber-900">
+                  {summary.deferredPrepayments > 0 && (
+                    <ShiftNote label="Предоплаты по будущим заказам" value={formatMoney(summary.deferredPrepayments)} />
+                  )}
+                  {summary.revenueReceivedInOtherShifts > 0 && (
+                    <ShiftNote
+                      label="Из выручки получено в другие смены"
+                      value={formatMoney(summary.revenueReceivedInOtherShifts)}
+                    />
+                  )}
+                  {Boolean(openShift) && summary.draftPrepaidTotal > 0 && (
+                    <ShiftNote
+                      label="Предоплаты в черновиках (не проведены)"
+                      value={formatMoney(summary.draftPrepaidTotal)}
+                    />
+                  )}
+                </div>
               )}
-              {/* Черновики — глобальная справка «на сейчас», к закрытой смене отношения не имеет. */}
-              {Boolean(openShift) && summary.draftPrepaidTotal > 0 && (
-                <CashMetric
-                  label="Предоплаты в черновиках (не проведены)"
-                  value={formatMoney(summary.draftPrepaidTotal)}
-                />
-              )}
-              <CashMetric label="Наличные" value={formatMoney(summary.cash)} />
-              <CashMetric label="Карта" value={formatMoney(summary.card)} />
-              <CashMetric label="Терминал" value={formatMoney(summary.terminal)} />
-              <CashMetric label="Mbank" value={formatMoney(summary.mbank)} />
-              <CashMetric label="Optima" value={formatMoney(summary.optima)} />
-              <CashMetric label="ЭлСом" value={formatMoney(summary.elsom)} />
-              <CashMetric label="Бакай" value={formatMoney(summary.bakai)} />
-              <CashMetric label="Перевод" value={formatMoney(summary.transfer)} />
-              <CashMetric label="Внесения" value={formatMoney(summary.cashIn)} />
-              <CashMetric label="Изъятия" value={formatMoney(summary.cashOutOther)} />
-              {summary.courierPayouts > 0 && (
-                <CashMetric label="Выплаты курьеру" value={formatMoney(summary.courierPayouts)} />
+
+              {/* Поступления по способам — только ненулевые (net возвратов). */}
+              {(() => {
+                const methods = (
+                  [
+                    { key: "cash", value: summary.cash },
+                    { key: "card", value: summary.card },
+                    { key: "terminal", value: summary.terminal },
+                    { key: "mbank", value: summary.mbank },
+                    { key: "optima", value: summary.optima },
+                    { key: "elsom", value: summary.elsom },
+                    { key: "bakai", value: summary.bakai },
+                    { key: "transfer", value: summary.transfer },
+                  ] as Array<{ key: PaymentMethod; value: number }>
+                ).filter((m) => Math.abs(m.value) >= 0.01)
+                if (!methods.length) return null
+                return (
+                  <div>
+                    <ShiftSectionHeader>Поступления по способам</ShiftSectionHeader>
+                    <div className="flex flex-col">
+                      {methods.map((m) => (
+                        <ShiftStatRow key={m.key} label={getPaymentMethodLabel(m.key)} value={formatMoney(m.value)} />
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Доставка за смену — по заказам, выданным/переданным курьеру в эту смену. */}
+              <div>
+                <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-zinc-900">
+                  <TruckIcon className="size-4 text-muted-foreground" />
+                  <span>Доставка за смену</span>
+                </div>
+                {summary.deliveryPaidCount + summary.deliveryFreeCount + summary.deliveryPickupCount === 0 ? (
+                  <div className="text-xs text-muted-foreground">Выдач и доставок в эту смену не было.</div>
+                ) : (
+                  <div className="flex flex-col">
+                    <ShiftStatRow
+                      label={`Платная · ${summary.deliveryPaidCount} ${pluralOrders(summary.deliveryPaidCount)}`}
+                      value={formatMoney(summary.deliveryPaidTotal)}
+                      tone={summary.deliveryPaidTotal > 0 ? "in" : undefined}
+                    />
+                    <ShiftStatRow
+                      label="Бесплатная"
+                      value={`${summary.deliveryFreeCount} ${pluralOrders(summary.deliveryFreeCount)}`}
+                      muted
+                    />
+                    <ShiftStatRow
+                      label="Самовывоз"
+                      value={`${summary.deliveryPickupCount} ${pluralOrders(summary.deliveryPickupCount)}`}
+                      muted
+                    />
+                    {summary.courierPayouts > 0 && (
+                      <ShiftStatRow label="Выплаты курьеру" value={`−${formatMoney(summary.courierPayouts)}`} tone="out" />
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Наличные операции — если были. */}
+              {(summary.cashIn > 0 || summary.cashOutOther > 0) && (
+                <div>
+                  <ShiftSectionHeader>Наличные операции</ShiftSectionHeader>
+                  <div className="flex flex-col">
+                    {summary.cashIn > 0 && (
+                      <ShiftStatRow label="Внесения" value={`+${formatMoney(summary.cashIn)}`} tone="in" />
+                    )}
+                    {summary.cashOutOther > 0 && (
+                      <ShiftStatRow label="Изъятия" value={`−${formatMoney(summary.cashOutOther)}`} tone="out" />
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           ) : (
@@ -1759,9 +1850,19 @@ function ShiftDetailsSheet({
             </Empty>
           )}
 
+          {/* Чеки за смену — что продали и какие оплаты по заказам прошли. */}
+          <div>
+            <div className="mb-2 flex items-center gap-1.5 text-sm font-medium text-zinc-900">
+              <ReceiptTextIcon className="size-4 text-muted-foreground" />
+              <span>Чеки за смену</span>
+            </div>
+            <ShiftReceiptsList detail={detail} />
+          </div>
+
+          {/* Все операции — полная лента (включая возвраты и ручные внесения/изъятия). */}
           <div>
             <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="text-sm font-medium">Хронология кассы</span>
+              <span className="text-sm font-medium text-zinc-900">Все операции</span>
               {(sales.length > 0 || orderPayments.length > 0) && (
                 <span className="text-xs text-muted-foreground">
                   {canEditPayments ? "Строка — состав, способ оплаты можно менять" : "Нажмите на строку — состав"}
@@ -1777,13 +1878,56 @@ function ShiftDetailsSheet({
 }
 
 
-function CashMetric({ label, value }: { label: string; value: string }) {
+function ShiftSectionHeader({ children }: { children: React.ReactNode }) {
+  return <div className="mb-1.5 text-sm font-medium text-zinc-900">{children}</div>
+}
+
+// Строка «метка — значение» в секциях панели смены. tone красит сумму (приход/расход),
+// muted — для справочных счётчиков (кол-во заказов и т.п.).
+function ShiftStatRow({
+  label,
+  value,
+  tone,
+  muted,
+}: {
+  label: string
+  value: string
+  tone?: "in" | "out"
+  muted?: boolean
+}) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 font-semibold tabular-nums text-zinc-950">{value}</div>
+    <div className="flex items-baseline justify-between gap-3 border-b border-zinc-100 py-1.5 text-sm last:border-b-0">
+      <span className="text-muted-foreground">{label}</span>
+      <span
+        className={cn(
+          "shrink-0 font-medium tabular-nums",
+          tone === "in" && "text-emerald-600",
+          tone === "out" && "text-red-600",
+          muted && "font-normal text-muted-foreground"
+        )}
+      >
+        {value}
+      </span>
     </div>
   )
+}
+
+function ShiftNote({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span>{label}</span>
+      <span className="shrink-0 font-medium tabular-nums">{value}</span>
+    </div>
+  )
+}
+
+// Склонение «заказ/заказа/заказов» для счётчиков доставки.
+function pluralOrders(n: number) {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return "заказ"
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return "заказа"
+  return "заказов"
 }
 
 function CashOperationDialog({
@@ -1961,9 +2105,14 @@ function getShiftCashSummary(detail: DashboardData["shiftDetails"][number]) {
     expectedCash: detail.summary.expectedCash,
     deferredPrepayments: detail.summary.deferredPrepayments,
     draftPrepaidTotal: detail.summary.draftPrepaidTotal,
+    revenueReceivedInOtherShifts: detail.summary.revenueReceivedInOtherShifts,
     cashIn: detail.summary.cashIn,
     cashOutOther: detail.breakdown.cashOutOther,
     courierPayouts: detail.breakdown.courierPayouts,
+    deliveryPaidCount: detail.summary.deliveryPaidCount,
+    deliveryPaidTotal: detail.summary.deliveryPaidTotal,
+    deliveryFreeCount: detail.summary.deliveryFreeCount,
+    deliveryPickupCount: detail.summary.deliveryPickupCount,
   }
 }
 
