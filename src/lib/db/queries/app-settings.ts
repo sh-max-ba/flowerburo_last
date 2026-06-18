@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3"
 import { db } from "../connection"
+import type { AllocationMethod } from "../types"
 
 // Универсальное key-value хранилище настроек приложения (таблица app_settings,
 // создаётся миграцией v6). Значения храним строками; типобезопасные обёртки ниже.
@@ -72,11 +73,25 @@ export function setInventoryEnabled(value: boolean, client: Database.Database = 
   setAppSetting(ENABLE_INVENTORY_KEY, value ? "1" : "0", client)
 }
 
+// Метод распределения накладных расходов ПО УМОЛЧАНИЮ — подставляется в новый приходный акт
+// (на самом акте метод можно поменять). by_value (по стоимости) | by_qty (по количеству).
+// По умолчанию by_value, как и прежде.
+const DEFAULT_ALLOCATION_METHOD_KEY = "default_overhead_allocation_method"
+
+export function getDefaultAllocationMethod(client: Database.Database = db()): AllocationMethod {
+  return getAppSetting(DEFAULT_ALLOCATION_METHOD_KEY, client) === "by_qty" ? "by_qty" : "by_value"
+}
+
+export function setDefaultAllocationMethod(value: AllocationMethod, client: Database.Database = db()): void {
+  setAppSetting(DEFAULT_ALLOCATION_METHOD_KEY, value === "by_qty" ? "by_qty" : "by_value", client)
+}
+
 export type OrderSettings = {
   allowOversellOrders: boolean
   recomputeCostOnReceipt: boolean
   trackLotsEnabled: boolean
   inventoryEnabled: boolean
+  defaultAllocationMethod: AllocationMethod
 }
 
 export function getOrderSettings(client: Database.Database = db()): OrderSettings {
@@ -85,5 +100,6 @@ export function getOrderSettings(client: Database.Database = db()): OrderSetting
     recomputeCostOnReceipt: getRecomputeCostOnReceipt(client),
     trackLotsEnabled: getTrackLotsEnabled(client),
     inventoryEnabled: getInventoryEnabled(client),
+    defaultAllocationMethod: getDefaultAllocationMethod(client),
   }
 }

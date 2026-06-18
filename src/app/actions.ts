@@ -84,6 +84,7 @@ import {
   setAllowOversellOrders,
   setRecomputeCostOnReceipt,
   setTrackLotsEnabled,
+  setDefaultAllocationMethod,
   writeOffLot,
   startOrderWork,
   toggleBouquetTemplateActive,
@@ -335,6 +336,9 @@ export async function saveStockCostSettingsAction(formData: FormData) {
     }
     if (formData.has("enableInventoryPresent")) {
       setInventoryEnabled(formData.get("enableInventory") === "on")
+    }
+    if (formData.has("defaultAllocationMethodPresent")) {
+      setDefaultAllocationMethod(formData.get("defaultAllocationMethod") === "by_qty" ? "by_qty" : "by_value")
     }
   }, "Настройки склада сохранены.")
 }

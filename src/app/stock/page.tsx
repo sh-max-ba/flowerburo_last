@@ -3,7 +3,7 @@ import { CrmShell } from "@/components/crm-shell"
 import { StockPage } from "@/components/stock/stock-page"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { buildShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
-import { getDashboardData, listArchivedProducts } from "@/lib/db"
+import { getDashboardData, getOrderSettings, listArchivedProducts } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
 
@@ -15,6 +15,7 @@ export default async function Page() {
 
   const data = getDashboardData()
   const archivedProducts = listArchivedProducts()
+  const defaultAllocationMethod = getOrderSettings().defaultAllocationMethod
 
   return (
     <CrmShell
@@ -29,6 +30,7 @@ export default async function Page() {
         archivedProducts={archivedProducts}
         negativeStockCount={data.stats.negativeStockCount}
         suppliers={data.suppliers}
+        defaultAllocationMethod={defaultAllocationMethod}
       />
     </CrmShell>
   )

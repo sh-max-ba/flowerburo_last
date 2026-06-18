@@ -197,6 +197,8 @@ export {
   setTrackLotsEnabled,
   getInventoryEnabled,
   setInventoryEnabled,
+  getDefaultAllocationMethod,
+  setDefaultAllocationMethod,
   getOrderSettings,
 } from "./db/queries/app-settings"
 export type { OrderSettings } from "./db/queries/app-settings"

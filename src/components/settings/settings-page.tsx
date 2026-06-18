@@ -38,7 +38,8 @@ import {
   testLocalWazzupWebhookAction,
   testWazzupApiKeyAction,
 } from "@/app/actions"
-import type { OrderSettings, Supplier, UserRole } from "@/lib/db"
+import type { AllocationMethod, OrderSettings, Supplier, UserRole } from "@/lib/db"
+import { allocationMethodLabel } from "@/lib/labels"
 import type { WazzupSettingsStatus } from "@/lib/wazzup"
 import { formatInstant } from "@/lib/datetime"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -480,6 +481,7 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
   const [recompute, setRecompute] = useState(orderSettings.recomputeCostOnReceipt)
   const [trackLots, setTrackLots] = useState(orderSettings.trackLotsEnabled)
   const [inventory, setInventory] = useState(orderSettings.inventoryEnabled)
+  const [allocMethod, setAllocMethod] = useState<AllocationMethod>(orderSettings.defaultAllocationMethod)
   const [pending, startTransition] = useTransition()
 
   // Ресинхронизация после router.refresh() (подстройка во время рендера, без эффекта).
@@ -498,11 +500,17 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
     setLastSavedInventory(orderSettings.inventoryEnabled)
     setInventory(orderSettings.inventoryEnabled)
   }
+  const [lastSavedAllocMethod, setLastSavedAllocMethod] = useState(orderSettings.defaultAllocationMethod)
+  if (lastSavedAllocMethod !== orderSettings.defaultAllocationMethod) {
+    setLastSavedAllocMethod(orderSettings.defaultAllocationMethod)
+    setAllocMethod(orderSettings.defaultAllocationMethod)
+  }
 
   const isDirty =
     recompute !== orderSettings.recomputeCostOnReceipt ||
     trackLots !== orderSettings.trackLotsEnabled ||
-    inventory !== orderSettings.inventoryEnabled
+    inventory !== orderSettings.inventoryEnabled ||
+    allocMethod !== orderSettings.defaultAllocationMethod
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -510,6 +518,8 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
     formData.set("recomputeCostOnReceiptPresent", "1")
     formData.set("trackLotsEnabledPresent", "1")
     formData.set("enableInventoryPresent", "1")
+    formData.set("defaultAllocationMethodPresent", "1")
+    formData.set("defaultAllocationMethod", allocMethod)
     if (recompute) {
       formData.set("recomputeCostOnReceipt", "on")
     }
@@ -597,6 +607,30 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
                   выравнивается к факту (разница считается от живого остатка, параллельные продажи не теряются).
                   По умолчанию выключено.
                 </FieldDescription>
+              </FieldContent>
+            </Field>
+            <Field>
+              <FieldContent>
+                <FieldLabel>Метод распределения накладных по умолчанию</FieldLabel>
+                <FieldDescription>
+                  Какой метод подставляется в новый приходный акт. «По стоимости» — расходы делятся
+                  пропорционально стоимости позиции, «По количеству» — пропорционально количеству. На самом
+                  приходе метод можно изменить.
+                </FieldDescription>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {(["by_value", "by_qty"] as AllocationMethod[]).map((value) => (
+                    <Button
+                      key={value}
+                      type="button"
+                      variant={allocMethod === value ? "default" : "outline"}
+                      size="sm"
+                      disabled={pending}
+                      onClick={() => setAllocMethod(value)}
+                    >
+                      {allocationMethodLabel(value)}
+                    </Button>
+                  ))}
+                </div>
               </FieldContent>
             </Field>
           </FieldGroup>

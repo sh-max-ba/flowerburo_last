@@ -39,6 +39,7 @@ import {
   saveProductAction,
 } from "@/app/actions"
 import type {
+  AllocationMethod,
   Product,
   Supplier,
   StockDocumentType,
@@ -204,11 +205,13 @@ export function StockPage({
   archivedProducts,
   negativeStockCount,
   suppliers,
+  defaultAllocationMethod,
 }: {
   products: Product[]
   archivedProducts: Product[]
   negativeStockCount: number
   suppliers: Supplier[]
+  defaultAllocationMethod: AllocationMethod
 }) {
   const router = useRouter()
   // Ссылка со списка актов (/stock?new=stock_in|stock_out) открывает диалог создания —
@@ -374,6 +377,7 @@ export function StockPage({
         products={products}
         suppliers={suppliers.filter((supplier) => supplier.isActive)}
         pending={isPending}
+        defaultAllocationMethod={defaultAllocationMethod}
         onOpenChange={(open) => !open && setStockDocumentType(null)}
         onSubmit={(event, type) =>
           submitForm(event, (formData) => createStockDocumentAction(type, formData), () => setStockDocumentType(null))
@@ -1472,6 +1476,7 @@ function StockDocumentDialog({
   products,
   suppliers,
   pending,
+  defaultAllocationMethod,
   onOpenChange,
   onSubmit,
   onSaveDraft,
@@ -1480,6 +1485,7 @@ function StockDocumentDialog({
   products: Product[]
   suppliers: Supplier[]
   pending: boolean
+  defaultAllocationMethod: AllocationMethod
   onOpenChange: (open: boolean) => void
   onSubmit: (event: React.FormEvent<HTMLFormElement>, type: StockDocumentType) => void
   onSaveDraft: (event: React.FormEvent<HTMLFormElement>, type: StockDocumentType) => void
@@ -1765,7 +1771,7 @@ function StockDocumentDialog({
                     </div>
                   )}
                 </div>
-                {!isWriteOff && <OverheadEditor disabled={pending} />}
+                {!isWriteOff && <OverheadEditor disabled={pending} initialMethod={defaultAllocationMethod} />}
               </div>
             </div>
             <SheetFooter className="sticky bottom-0 flex-row justify-end border-t bg-background px-6 py-4">
