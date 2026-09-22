@@ -2,7 +2,7 @@
 
 import { Fragment, useMemo, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { ChevronDownIcon, Loader2Icon } from "lucide-react"
+import { ChevronDownIcon, Loader2Icon, RotateCcwIcon, SearchIcon } from "lucide-react"
 import { toast } from "sonner"
 import { updatePaymentMethodAction } from "@/app/actions"
 import type { PaymentMethod, SalePaymentMethod, ShiftDetails } from "@/lib/db"
@@ -11,6 +11,7 @@ import { cn, formatMoney } from "@/lib/utils"
 import { formatInstant } from "@/lib/datetime"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -44,9 +45,24 @@ type TimelineRow = {
   // Сторнированная продажа: бейдж «сторнировано», способ оплаты только текстом (selectа нет).
   reversed?: boolean
   customer: string
+  operator: string
+  comment: string
   items: CompositionItem[] | null
   editTarget: { target: "sale" | "transaction"; id: number } | null
+  kind: TimelineKind
 }
+
+// Категория строки для фильтра «Операция» (обобщение над typeLabel).
+type TimelineKind = "sale" | "order_payment" | "refund" | "cash_in" | "cash_out"
+
+const KIND_CHIPS: Array<{ value: TimelineKind | "all"; label: string }> = [
+  { value: "all", label: "Все" },
+  { value: "sale", label: "Продажи" },
+  { value: "order_payment", label: "Оплаты заказов" },
+  { value: "refund", label: "Возвраты" },
+  { value: "cash_in", label: "Внесения" },
+  { value: "cash_out", label: "Изъятия" },
+]
 
 // Единая хронология кассы за смену: продажи, оплаты по заказам, возвраты и ручные
 // внесения/изъятия в одной ленте по времени. Возвраты и изъятия показаны со знаком
@@ -63,9 +79,56 @@ export function ShiftCashTimeline({
 }) {
   const [openKey, setOpenKey] = useState<string | null>(null)
   const rows = useMemo(() => buildTimelineRows(detail), [detail])
+
+  // Фильтры ленты: поиск (номер/клиент/оператор/состав), тип операции, способ оплаты, оператор.
+  const [query, setQuery] = useState("")
+  const [kindFilter, setKindFilter] = useState<TimelineKind | "all">("all")
+  const [methodFilter, setMethodFilter] = useState<string>("all")
+  const [operatorFilter, setOperatorFilter] = useState<string>("all")
+
+  // Способы оплаты и операторы — только реально встречающиеся в этой смене.
+  const methods = useMemo(() => {
+    const set = new Set<string>()
+    for (const row of rows) set.add(row.paymentMethod)
+    return paymentMethodOptions
+      .map((option) => option.value as string)
+      .concat("mixed")
+      .filter((value) => set.has(value))
+  }, [rows])
+  const operators = useMemo(() => {
+    const set = new Set<string>()
+    for (const row of rows) {
+      if (row.operator) set.add(row.operator)
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "ru"))
+  }, [rows])
+
+  const kindCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const row of rows) counts.set(row.kind, (counts.get(row.kind) ?? 0) + 1)
+    return counts
+  }, [rows])
+
+  const filteredRows = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return rows.filter((row) => {
+      if (kindFilter !== "all" && row.kind !== kindFilter) return false
+      if (methodFilter !== "all" && row.paymentMethod !== methodFilter) return false
+      if (operatorFilter !== "all" && row.operator !== operatorFilter) return false
+      if (!q) return true
+      const itemNames = row.items?.map((item) => item.name).join(" ") ?? ""
+      return `${row.reference} ${row.customer} ${row.operator} ${row.typeLabel} ${row.comment} ${itemNames}`
+        .toLowerCase()
+        .includes(q)
+    })
+  }, [rows, query, kindFilter, methodFilter, operatorFilter])
+
+  const hasFilters =
+    query.trim() !== "" || kindFilter !== "all" || methodFilter !== "all" || operatorFilter !== "all"
+
   const totals = useMemo(
     () =>
-      rows.reduce(
+      filteredRows.reduce(
         (acc, row) => {
           if (row.outflow) {
             acc.outflow += row.amount
@@ -76,7 +139,7 @@ export function ShiftCashTimeline({
         },
         { inflow: 0, outflow: 0 }
       ),
-    [rows]
+    [filteredRows]
   )
 
   if (!rows.length) {
@@ -92,8 +155,128 @@ export function ShiftCashTimeline({
     )
   }
 
+  function resetFilters() {
+    setQuery("")
+    setKindFilter("all")
+    setMethodFilter("all")
+    setOperatorFilter("all")
+  }
+
   return (
-    <div className="min-w-0 max-w-full overflow-x-auto rounded-xl border border-zinc-200">
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+        <div className="relative min-w-0 flex-1">
+          <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Поиск по номеру, клиенту, комментарию или составу"
+            className="h-9 w-full pl-9"
+          />
+        </div>
+        <Select
+          items={[
+            { label: "Все способы оплаты", value: "all" },
+            ...methods.map((value) => ({ label: getPaymentMethodLabel(value), value })),
+          ]}
+          value={methodFilter}
+          onValueChange={(next) => setMethodFilter(next ?? "all")}
+        >
+          <SelectTrigger className="h-9 w-full min-w-44 lg:w-52">
+            <SelectValue placeholder="Все способы оплаты">
+              {methodFilter === "all" ? "Все способы оплаты" : getPaymentMethodLabel(methodFilter)}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent align="start">
+            <SelectGroup>
+              <SelectItem value="all">Все способы оплаты</SelectItem>
+              {methods.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {getPaymentMethodLabel(value)}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        {operators.length > 1 && (
+          <Select
+            items={[
+              { label: "Все операторы", value: "all" },
+              ...operators.map((name) => ({ label: name, value: name })),
+            ]}
+            value={operatorFilter}
+            onValueChange={(next) => setOperatorFilter(next ?? "all")}
+          >
+            <SelectTrigger className="h-9 w-full min-w-40 lg:w-48">
+              <SelectValue placeholder="Все операторы">
+                {operatorFilter === "all" ? "Все операторы" : operatorFilter}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent align="start">
+              <SelectGroup>
+                <SelectItem value="all">Все операторы</SelectItem>
+                {operators.map((name) => (
+                  <SelectItem key={name} value={name}>
+                    <span className="max-w-48 truncate">{name}</span>
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        )}
+        <button
+          type="button"
+          disabled={!hasFilters}
+          onClick={resetFilters}
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        >
+          <RotateCcwIcon className="size-4" />
+          Сброс
+        </button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        {KIND_CHIPS.map((chip) => {
+          const count = chip.value === "all" ? rows.length : (kindCounts.get(chip.value) ?? 0)
+          const active = kindFilter === chip.value
+          const disabled = chip.value !== "all" && count === 0
+          return (
+            <button
+              key={chip.value}
+              type="button"
+              disabled={disabled}
+              onClick={() => setKindFilter(chip.value)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm font-medium transition-colors",
+                active
+                  ? "bg-zinc-950 text-white"
+                  : "bg-muted/60 text-foreground hover:bg-muted",
+                disabled && "cursor-not-allowed opacity-50"
+              )}
+            >
+              {chip.label}
+              <span className={cn("text-xs tabular-nums", active ? "text-white/70" : "text-muted-foreground")}>
+                {count}
+              </span>
+            </button>
+          )
+        })}
+        {hasFilters && (
+          <span className="ml-auto text-xs text-muted-foreground">
+            Показано {filteredRows.length} из {rows.length}
+          </span>
+        )}
+      </div>
+
+      {filteredRows.length === 0 ? (
+        <Empty className="min-h-24 py-4">
+          <EmptyHeader>
+            <EmptyTitle>Ничего не найдено</EmptyTitle>
+            <EmptyDescription>По выбранным фильтрам операций нет — измените поиск или сбросьте фильтры.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+    <div className="min-w-0 max-w-full overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow>
@@ -106,7 +289,7 @@ export function ShiftCashTimeline({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((row) => {
+          {filteredRows.map((row) => {
             const expandable = row.items !== null
             const isOpen = openKey === row.key
 
@@ -131,15 +314,29 @@ export function ShiftCashTimeline({
                       <span className="whitespace-nowrap">{dateTime(row.createdAt)}</span>
                     </div>
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    <Badge variant={row.refund ? "destructive" : "outline"}>{row.typeLabel}</Badge>
-                    {row.reversed && (
-                      <Badge variant="outline" className="ml-1 border-red-200 bg-red-50 text-red-700">
-                        сторнировано
-                      </Badge>
-                    )}
+                  <TableCell>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Badge variant={row.refund ? "destructive" : "outline"}>{row.typeLabel}</Badge>
+                      {row.reversed && (
+                        <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
+                          сторнировано
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">{row.reference}</TableCell>
+                  {/* Ссылка на заказ/продажу + комментарий второй строкой (если есть):
+                      отдельная колонка не влезает на ноутбуке, а для изъятий/внесений
+                      комментарий — фактически единственное описание операции. */}
+                  <TableCell>
+                    <div className="max-w-44 min-w-36 lg:max-w-56">
+                      <div className="truncate">{row.reference}</div>
+                      {row.comment && (
+                        <div className="truncate text-xs text-muted-foreground" title={row.comment}>
+                          {row.comment}
+                        </div>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell
                     className={cn(
                       "whitespace-nowrap text-right font-medium tabular-nums",
@@ -162,7 +359,9 @@ export function ShiftCashTimeline({
                       <span className="whitespace-nowrap">{getPaymentMethodLabel(row.paymentMethod)}</span>
                     )}
                   </TableCell>
-                  <TableCell className="max-w-32 truncate">{row.customer || "-"}</TableCell>
+                  <TableCell className="max-w-40 truncate" title={row.customer || undefined}>
+                    {row.customer || "-"}
+                  </TableCell>
                 </TableRow>
                 {expandable && isOpen && (
                   <TableRow>
@@ -178,16 +377,20 @@ export function ShiftCashTimeline({
         <TableFooter>
           <TableRow>
             <TableCell colSpan={3} className="font-medium">
-              Итого за смену
+              {hasFilters ? "Итого по фильтру" : "Итого за смену"}
             </TableCell>
-            <TableCell className="whitespace-nowrap text-right font-medium tabular-nums">
-              +{formatMoney(totals.inflow)}
-              {totals.outflow >= 0.01 && <span className="text-red-600"> · −{formatMoney(totals.outflow)}</span>}
+            <TableCell className="text-right font-medium tabular-nums">
+              <span className="whitespace-nowrap">+{formatMoney(totals.inflow)}</span>
+              {totals.outflow >= 0.01 && (
+                <span className="block whitespace-nowrap text-red-600">−{formatMoney(totals.outflow)}</span>
+              )}
             </TableCell>
             <TableCell colSpan={2} />
           </TableRow>
         </TableFooter>
       </Table>
+    </div>
+      )}
     </div>
   )
 }
@@ -215,11 +418,14 @@ function buildTimelineRows(detail: ShiftDetails | null): TimelineRow[] {
       refund: false,
       reversed,
       customer: sale.customerName,
+      operator: sale.userName ?? "",
+      comment: sale.note,
       items: sale.items,
       // У сторнированной продажи способ оплаты заморожен: возврат повторил исходный метод,
       // правка разбалансирует пару «приход+возврат» (сервер такую правку тоже отклоняет).
       // У смешанной оплаты частей две — единого способа нет, правка тоже заморожена.
       editTarget: reversed || sale.paymentMethod === "mixed" ? null : { target: "sale", id: sale.id },
+      kind: "sale",
     })
   }
 
@@ -238,8 +444,11 @@ function buildTimelineRows(detail: ShiftDetails | null): TimelineRow[] {
       outflow,
       refund,
       customer: order.customer,
+      operator: order.userName ?? "",
+      comment: order.comment,
       items: order.items,
       editTarget: isPayment ? { target: "transaction", id: order.transactionId } : null,
+      kind: refund ? "refund" : order.type === "cash_out" ? "cash_out" : "order_payment",
     })
   }
 
@@ -259,8 +468,11 @@ function buildTimelineRows(detail: ShiftDetails | null): TimelineRow[] {
       outflow: true,
       refund: true,
       customer: "",
+      operator: tx.userName ?? "",
+      comment: tx.comment,
       items: null,
       editTarget: null,
+      kind: "refund",
     })
   }
 
@@ -281,8 +493,11 @@ function buildTimelineRows(detail: ShiftDetails | null): TimelineRow[] {
       outflow: tx.type === "cash_out",
       refund: false,
       customer: "",
+      operator: tx.userName ?? "",
+      comment: tx.comment,
       items: null,
       editTarget: null,
+      kind: tx.type === "cash_in" ? "cash_in" : "cash_out",
     })
   }
 

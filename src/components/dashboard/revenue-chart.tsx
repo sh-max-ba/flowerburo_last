@@ -131,7 +131,7 @@ export function RevenueChart({
 
   return (
     <div className={cn("flex flex-col gap-2", className)}>
-      <div className="relative h-36 w-full sm:h-40">
+      <div className="relative h-32 w-full sm:h-36 2xl:h-40">
         <svg
           viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
           preserveAspectRatio="none"
@@ -194,7 +194,7 @@ export function RevenueChart({
                   className="absolute left-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand opacity-0 ring-4 ring-brand/15 transition-opacity duration-150 group-hover/col:opacity-100"
                   style={{ top: `${topPct}%` }}
                 />
-                <div className="pointer-events-none absolute top-0 left-1/2 z-20 -translate-x-1/2 rounded-lg border border-zinc-200/80 bg-white px-2.5 py-1.5 text-center whitespace-nowrap opacity-0 shadow-md transition-opacity duration-150 group-hover/col:opacity-100">
+                <div className="pointer-events-none absolute top-0 left-1/2 z-20 -translate-x-1/2 rounded-lg bg-background px-2.5 py-1.5 text-center whitespace-nowrap opacity-0 shadow-md transition-opacity duration-150 group-hover/col:opacity-100">
                   <div className="text-[11px] text-muted-foreground">{fullDayLabel(p.day)}</div>
                   <div className="text-xs font-semibold text-zinc-900">
                     <Money value={p.total} />

@@ -97,8 +97,8 @@ export function ShiftReceiptsList({ detail }: { detail: ShiftDetails | null }) {
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-200">
-      <div className="max-h-96 divide-y divide-zinc-100 overflow-y-auto">
+    <div className="overflow-hidden rounded-xl bg-muted/30">
+      <div className="max-h-96 divide-y divide-zinc-100 overflow-y-auto lg:max-h-[34rem]">
         {receipts.map((receipt) => {
           const expandable = receipt.items.length > 0
           const open = openKey === receipt.key
@@ -137,8 +137,12 @@ export function ShiftReceiptsList({ detail }: { detail: ShiftDetails | null }) {
                       </Badge>
                     )}
                   </div>
+                  {/* У оплат по заказу тип (предоплата/доплата) показываем всегда: две строки одного
+                      заказа с одинаковым способом иначе неотличимы. У продаж — только без имени клиента. */}
                   <div className="truncate text-xs text-muted-foreground">
-                    {formatInstant(receipt.createdAt, { date: false, time: true })} · {receipt.customer || receipt.kindLabel}
+                    {formatInstant(receipt.createdAt, { date: false, time: true })}
+                    {receipt.kindLabel !== "Продажа" && ` · ${receipt.kindLabel}`}
+                    {receipt.customer ? ` · ${receipt.customer}` : receipt.kindLabel === "Продажа" ? ` · ${receipt.kindLabel}` : ""}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">

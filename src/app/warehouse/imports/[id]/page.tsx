@@ -81,7 +81,7 @@ export default async function WarehouseImportDetailsPage({ params }: PageProps<"
         <SummaryCard label="Ошибок" value={report.errorCount} highlight={report.errorCount > 0} />
       </div>
 
-      <Card className="rounded-2xl border bg-white">
+      <Card className="rounded-2xl">
         <CardHeader>
           <CardTitle>Отчет изменений</CardTitle>
           <CardDescription>
@@ -157,7 +157,7 @@ function getImportOrNull(importId: number) {
 
 function SummaryCard({ label, value, highlight = false }: { label: string; value: number; highlight?: boolean }) {
   return (
-    <Card className={highlight ? "rounded-2xl border-red-300 bg-destructive/5" : "rounded-2xl border bg-white"}>
+    <Card className={highlight ? "rounded-2xl bg-destructive/5 ring-1 ring-destructive/30" : "rounded-2xl"}>
       <CardHeader>
         <CardDescription>{label}</CardDescription>
         <CardTitle className={highlight ? "text-2xl text-destructive" : "text-2xl"}>{value}</CardTitle>

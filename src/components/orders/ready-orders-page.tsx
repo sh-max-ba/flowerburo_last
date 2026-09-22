@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { AlertTriangleIcon, ChevronDownIcon } from "lucide-react"
+import { AlertTriangleIcon, ArrowDownUpIcon, CalendarDaysIcon, ChevronDownIcon, ListIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
   completePickupOrderAction,
@@ -10,7 +10,7 @@ import {
 } from "@/app/actions"
 import type { DashboardData, Order } from "@/lib/db"
 import { deliveryTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
-import { formatMoney } from "@/lib/utils"
+import { cn, formatMoney } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -19,6 +19,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { SplitPaymentFields } from "@/components/cash/split-payment-fields"
+import { RefundConfirmDialog, RefundSearchSheet, type RefundTarget } from "@/components/orders/order-refund"
 import {
   Select,
   SelectContent,
@@ -35,7 +36,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ScreenBody } from "@/components/screen-body"
+import { HeaderFilter, HeaderSegment, ScreenHeader } from "@/components/screen-header"
+import { SegmentedTabs } from "@/components/ui/segmented-tabs"
 import {
   Info,
   OrderCalendarView,
@@ -44,8 +47,9 @@ import {
   OrdersActivityRefresh,
   OrderSourceBadge,
   OrderStatusBadge,
-  OrderToolbar,
   Spinner,
+  orderMatchesSearch,
+  orderSortOptions,
   type OrderSortMode,
   type OrderViewMode,
   addDays,
@@ -53,6 +57,7 @@ import {
   sortReadyOrders,
   startOfLocalDay,
 } from "@/components/orders/order-shared"
+import { OrderImageStrip } from "@/components/orders/order-images"
 
 type OpenShift = DashboardData["stats"]["openShift"]
 type Result = Awaited<ReturnType<typeof completePickupOrderAction>>
@@ -60,11 +65,25 @@ type Result = Awaited<ReturnType<typeof completePickupOrderAction>>
 type ReadyStatusFilter = "pending" | "Передан курьеру" | "all"
 
 // Принятые оплаты заказа по способам (предоплата + доплаты) — комбинированная оплата явно.
-export type OrderPaymentPart = { paymentMethod: string; amount: number }
+// pending — отложенная предоплата: принята при создании, в кассу проводится при выдаче.
+export type OrderPaymentPart = { paymentMethod: string; amount: number; pending?: boolean }
 
 // «5 000 Наличные + 3 000 Mbank» — чем заказ уже оплачен, одним взглядом.
 function formatPaymentParts(parts: OrderPaymentPart[]) {
   return parts.map((part) => `${formatMoney(part.amount)} ${getPaymentMethodLabel(part.paymentMethod)}`).join(" + ")
+}
+
+// Отложенная предоплата: клиент её уже заплатил, но в кассу она попадёт только сейчас — при
+// выдаче. Одна строка, чтобы кассир не искал эти деньги в прошлой смене.
+function PendingPrepaidNote({ amount, className }: { amount: number; className?: string }) {
+  if (amount <= 0.009) {
+    return null
+  }
+  return (
+    <div className={cn("mt-1 text-xs", className)}>
+      Предоплата {formatMoney(amount)} попадёт в кассу при выдаче — сейчас, в текущую смену.
+    </div>
+  )
 }
 
 export function ReadyOrdersPage({
@@ -77,6 +96,7 @@ export function ReadyOrdersPage({
   paymentsByOrder?: Record<number, OrderPaymentPart[]>
 }) {
   const router = useRouter()
+  const [search, setSearch] = useState("")
   const [sortMode, setSortMode] = useState<OrderSortMode>("default")
   const [viewMode, setViewMode] = useState<OrderViewMode>("list")
   const [statusFilter, setStatusFilter] = useState<ReadyStatusFilter>("pending")
@@ -109,15 +129,17 @@ export function ReadyOrdersPage({
     { value: "all", label: "Все", count: counts.all },
   ]
 
+  const normalizedSearch = search.trim().toLowerCase()
   const orders = useMemo(() => {
-    const filtered =
+    const byStatus =
       statusFilter === "all"
         ? baseOrders
         : statusFilter === "pending"
           ? baseOrders.filter((order) => order.status === "Готов")
           : baseOrders.filter((order) => order.status === "Передан курьеру")
+    const filtered = normalizedSearch ? byStatus.filter((order) => orderMatchesSearch(order, normalizedSearch)) : byStatus
     return sortReadyOrders(filtered, sortMode)
-  }, [baseOrders, statusFilter, sortMode])
+  }, [baseOrders, statusFilter, sortMode, normalizedSearch])
 
   function run(orderId: number, action: () => Promise<Result>, after?: () => void) {
     setPendingOrderId(orderId)
@@ -142,59 +164,93 @@ export function ReadyOrdersPage({
   return (
     <>
       <OrdersActivityRefresh />
-      <div className="flex flex-col gap-5">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <Tabs
+      <ScreenHeader
+        title="Готовые заказы"
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Поиск по заказам: номер, клиент, телефон",
+          inputProps: { "aria-label": "Поиск готовых заказов" },
+        }}
+        actions={
+          <>
+            <RefundSearchSheet hasOpenShift={Boolean(openShift)} trigger="header" />
+            <HeaderFilter
+              icon={ArrowDownUpIcon}
+              label="Сортировка"
+              value={sortMode}
+              allValue="default"
+              options={orderSortOptions}
+              onValueChange={setSortMode}
+            />
+            <HeaderSegment
+              label="Вид"
+              value={viewMode}
+              onValueChange={setViewMode}
+              options={[
+                { value: "list", label: "Список", icon: ListIcon },
+                { value: "calendar", label: "Календарь", icon: CalendarDaysIcon },
+              ]}
+            />
+          </>
+        }
+        tabs={
+          <SegmentedTabs
+            aria-label="Статус заказа"
+            fill
             value={statusFilter}
-            onValueChange={(value) => setStatusFilter((value ?? "pending") as ReadyStatusFilter)}
-          >
-            <TabsList>
-              {filters.map((filter) => (
-                <TabsTrigger key={filter.value} value={filter.value}>
-                  {filter.label}
-                  <span className="ml-1.5 text-muted-foreground">{filter.count}</span>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-          <OrderToolbar
-            sortMode={sortMode}
-            viewMode={viewMode}
-            onSortModeChange={setSortMode}
-            onViewModeChange={setViewMode}
+            onValueChange={setStatusFilter}
+            items={filters.map((filter) => ({ value: filter.value, label: filter.label, count: filter.count }))}
           />
-        </div>
+        }
+      />
 
+      <ScreenBody surface={viewMode === "calendar" || !orders.length}>
         {!orders.length ? (
-          <Empty className="min-h-36 rounded-2xl border bg-white py-6">
+          <Empty className="min-h-56">
             <EmptyHeader>
               <EmptyTitle>
-                {statusFilter === "pending" ? "Нет заказов, ожидающих действия" : "Готовых заказов пока нет"}
+                {normalizedSearch
+                  ? "Ничего не найдено"
+                  : statusFilter === "pending"
+                    ? "Нет заказов, ожидающих действия"
+                    : "Готовых заказов пока нет"}
               </EmptyTitle>
               <EmptyDescription>
-                {statusFilter === "pending"
-                  ? "Здесь появятся заказы со статусом «Готов» — для выдачи или передачи курьеру."
-                  : "Заказы появятся здесь после отметки «Букет готов»."}
+                {normalizedSearch
+                  ? "Измените запрос или сбросьте фильтр."
+                  : statusFilter === "pending"
+                    ? "Здесь появятся заказы со статусом «Готов» — для выдачи или передачи курьеру."
+                    : "Заказы появятся здесь после отметки «Букет готов»."}
               </EmptyDescription>
             </EmptyHeader>
-            {statusFilter !== "all" && counts.all > 0 && (
-              <Button variant="outline" size="sm" onClick={() => setStatusFilter("all")}>
-                Показать все
+            {normalizedSearch ? (
+              <Button variant="ghost" size="sm" onClick={() => setSearch("")}>
+                Очистить поиск
               </Button>
+            ) : (
+              statusFilter !== "all" &&
+              counts.all > 0 && (
+                <Button variant="ghost" size="sm" onClick={() => setStatusFilter("all")}>
+                  Показать все
+                </Button>
+              )
             )}
           </Empty>
         ) : viewMode === "calendar" ? (
-          <OrderCalendarView
-            orders={orders}
-            weekStart={weekStart}
-            showMoney
-            onToday={() => setWeekStart(startOfLocalDay(new Date()))}
-            onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
-            onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
-            onOpenOrder={() => setViewMode("list")}
-          />
+          <div className="p-4">
+            <OrderCalendarView
+              orders={orders}
+              weekStart={weekStart}
+              showMoney
+              onToday={() => setWeekStart(startOfLocalDay(new Date()))}
+              onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
+              onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
+              onOpenOrder={() => setViewMode("list")}
+            />
+          </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(min(360px,100%),1fr))] gap-3 pb-2">
             {orders.map((order) => (
               <ReadyOrderCard
                 key={order.id}
@@ -212,7 +268,7 @@ export function ReadyOrdersPage({
             ))}
           </div>
         )}
-      </div>
+      </ScreenBody>
 
       <CourierSheet
         order={handoverOrder}
@@ -247,9 +303,23 @@ function ReadyOrderCard({
 }) {
   const balance = order.total - order.paid
   const needsPayment = balance > 0
+  const refundTarget: RefundTarget = {
+    kind: "order",
+    id: order.id,
+    label: order.number || `#${order.id}`,
+    customer: order.customer || "Клиент не указан",
+    status: order.status,
+    paid: order.paid,
+    createdAt: order.createdAt,
+    deliveryType: order.deliveryType,
+    courierPayout: order.courierPayout,
+    deliveryPayoutPaid: order.deliveryPayoutPaid,
+    payments,
+    items: order.items.map((item) => ({ name: item.name, qty: item.qty })),
+  }
 
   return (
-    <Card className="min-w-0 rounded-2xl border bg-white">
+    <Card className="min-w-0 rounded-2xl">
       <CardHeader className="gap-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -303,6 +373,7 @@ function ReadyOrderCard({
             {payments.length > 0 && (
               <div className="mt-1 text-xs text-amber-900/70">Уже оплачено: {formatPaymentParts(payments)}</div>
             )}
+            <PendingPrepaidNote amount={order.pendingPrepaid} className="text-amber-900/70" />
           </div>
         ) : (
           <div className="rounded-2xl border bg-muted/30 p-3">
@@ -311,6 +382,7 @@ function ReadyOrderCard({
             {payments.length > 0 && (
               <div className="mt-1 text-xs text-muted-foreground">Оплачено: {formatPaymentParts(payments)}</div>
             )}
+            <PendingPrepaidNote amount={order.pendingPrepaid} className="text-muted-foreground" />
           </div>
         )}
 
@@ -344,6 +416,8 @@ function ReadyOrderCard({
             </div>
           </div>
         </details>
+
+        <OrderImageStrip images={order.images} size="sm" />
 
         <OrderComposition items={order.items} />
 
@@ -406,6 +480,13 @@ function ReadyOrderCard({
               Передан курьеру{order.courierName ? ` · ${order.courierName}` : ""} — заказ завершён
             </div>
           )}
+          <RefundConfirmDialog
+            target={refundTarget}
+            hasOpenShift={shiftOpen}
+            trigger={<Button variant="outline" size="sm" className="w-full" />}
+          >
+            Оформить возврат
+          </RefundConfirmDialog>
         </div>
       </CardContent>
     </Card>
@@ -464,6 +545,7 @@ function CourierSheet({
                   <Info label="Курьеру" value={formatMoney(order.courierPayout)} />
                   <Info label="Оплата" value={balance <= 0 ? "Сумма закрыта" : `Остаток: ${formatMoney(balance)}`} />
                 </div>
+                <PendingPrepaidNote amount={order.pendingPrepaid} className="text-muted-foreground" />
                 {balance > 0 && (
                   <FieldSet>
                     <FieldLegend>Принять доплату</FieldLegend>

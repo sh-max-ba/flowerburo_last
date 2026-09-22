@@ -5,12 +5,12 @@ import { useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
-  AlertOctagonIcon,
   AlertTriangleIcon,
   ArchiveIcon,
   ArchiveRestoreIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
   ChevronsUpDownIcon,
-  ClipboardListIcon,
   DownloadIcon,
   FilterIcon,
   FileSpreadsheetIcon,
@@ -18,9 +18,8 @@ import {
   MinusCircleIcon,
   MoreHorizontalIcon,
   PencilIcon,
-  PlusIcon,
   PlusCircleIcon,
-  SearchIcon,
+  PlusIcon,
   TagsIcon,
   Trash2Icon,
   UploadIcon,
@@ -47,7 +46,10 @@ import type {
   WarehouseImportPreview,
 } from "@/lib/db"
 import { toDatetimeLocalValue } from "@/lib/datetime"
-import { formatMoney } from "@/lib/utils"
+import { cn, formatMoney } from "@/lib/utils"
+import { ScreenBody } from "@/components/screen-body"
+import { HeaderAction, HeaderFilter, HeaderPrimaryAction, ScreenHeader } from "@/components/screen-header"
+import { LineTabs } from "@/components/ui/line-tabs"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -95,16 +97,6 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Separator } from "@/components/ui/separator"
 import {
   Sheet,
   SheetContent,
@@ -113,11 +105,17 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
 import { StockActProductPicker } from "@/components/stock/stock-act-product-picker"
+import {
+  addProductToLines,
+  StockDocumentItemsTable,
+  type DocumentLine,
+} from "@/components/stock/stock-document-items-editor"
 import { OverheadEditor } from "@/components/stock/overhead-editor"
+import { SupplierSelect } from "@/components/stock/supplier-select"
 
 type Result = Awaited<ReturnType<typeof saveProductAction>>
 type StockDocumentDialogType = StockDocumentType | null
@@ -162,6 +160,22 @@ function matchesStockLevelFilter(product: Product, filter: StockLevelFilter) {
   return level === "negative"
 }
 
+type SortField = "name" | "category" | "available" | "price"
+type SortState = { field: SortField; dir: "asc" | "desc" } | null
+
+function compareProducts(a: Product, b: Product, field: SortField): number {
+  switch (field) {
+    case "name":
+      return a.name.localeCompare(b.name, "ru")
+    case "category":
+      return getCategoryLabel(a.categoryPath).localeCompare(getCategoryLabel(b.categoryPath), "ru")
+    case "available":
+      return a.available - b.available
+    case "price":
+      return a.salePrice - b.salePrice
+  }
+}
+
 function normalizeCategoryPath(value: string | null | undefined) {
   return String(value ?? "").trim()
 }
@@ -203,34 +217,33 @@ function buildCategorySummaries(products: Product[]) {
 export function StockPage({
   products,
   archivedProducts,
-  negativeStockCount,
   suppliers,
   defaultAllocationMethod,
 }: {
   products: Product[]
   archivedProducts: Product[]
-  negativeStockCount: number
   suppliers: Supplier[]
   defaultAllocationMethod: AllocationMethod
 }) {
   const router = useRouter()
-  // Ссылка со списка актов (/stock?new=stock_in|stock_out) открывает диалог создания —
-  // читаем параметр при монтировании и инициализируем им состояние диалога (без эффекта).
   const searchParams = useSearchParams()
   const requestedDocType = searchParams.get("new")
   const [view, setView] = useState<"active" | "archived">("active")
   const [query, setQuery] = useState("")
   const [categoryFilter, setCategoryFilter] = useState(allCategoriesValue)
   const [levelFilter, setLevelFilter] = useState<StockLevelFilter>("all")
+  const [sort, setSort] = useState<SortState>(null)
   const [productSheet, setProductSheet] = useState(false)
   const [categoriesOpen, setCategoriesOpen] = useState(false)
   const [clearingCategory, setClearingCategory] = useState<CategorySummary | null>(null)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [archivingProduct, setArchivingProduct] = useState<Product | null>(null)
   const [deletingProduct, setDeletingProduct] = useState<Product | null>(null)
-  const [stockDocumentType, setStockDocumentType] = useState<StockDocumentDialogType>(
+  // Диалог акта живёт в URL (?new=stock_in|stock_out): ссылки «Пополнить/Списать» из полосы
+  // вкладок и меню «Создать» открывают его навигацией, закрытие стирает параметр.
+  const stockDocumentType: StockDocumentDialogType =
     requestedDocType === "stock_in" || requestedDocType === "stock_out" ? requestedDocType : null
-  )
+  const closeStockDocument = () => router.replace("/stock", { scroll: false })
   const [warehouseImportOpen, setWarehouseImportOpen] = useState(false)
   const [warehouseImportPreview, setWarehouseImportPreview] = useState<WarehouseImportPreview | null>(null)
   const [isPending, startTransition] = useTransition()
@@ -278,6 +291,22 @@ export function StockPage({
     })
   }, [activeCategoryFilter, levelFilter, sourceProducts, query])
 
+  // Сортировка по клику на заголовок: третий клик по той же колонке возвращает исходный порядок.
+  const sortedProducts = useMemo(() => {
+    if (!sort) return filteredProducts
+    const { field, dir } = sort
+    const sorted = [...filteredProducts].sort((a, b) => compareProducts(a, b, field))
+    return dir === "desc" ? sorted.reverse() : sorted
+  }, [filteredProducts, sort])
+
+  function toggleSort(field: SortField) {
+    setSort((current) => {
+      if (!current || current.field !== field) return { field, dir: "asc" }
+      if (current.dir === "asc") return { field, dir: "desc" }
+      return null
+    })
+  }
+
   const hasActiveFilters =
     query.trim().length > 0 || activeCategoryFilter !== allCategoriesValue || levelFilter !== "all"
 
@@ -309,8 +338,10 @@ export function StockPage({
   return (
     <>
       <StockSection
-        products={filteredProducts}
+        products={sortedProducts}
         categories={categories}
+        sort={sort}
+        onToggleSort={toggleSort}
         view={view}
         onViewChange={(next) => {
           setView(next)
@@ -318,7 +349,6 @@ export function StockPage({
         }}
         activeCount={products.length}
         archivedCount={archivedProducts.length}
-        negativeStockCount={negativeStockCount}
         levelFilter={levelFilter}
         setLevelFilter={setLevelFilter}
         levelCounts={levelCounts}
@@ -340,7 +370,6 @@ export function StockPage({
           setEditingProduct(product)
           setProductSheet(true)
         }}
-        onStockDocument={(type) => setStockDocumentType(type)}
         onImport={() => setWarehouseImportOpen(true)}
         onOpenCategories={() => setCategoriesOpen(true)}
         pending={isPending}
@@ -378,12 +407,12 @@ export function StockPage({
         suppliers={suppliers.filter((supplier) => supplier.isActive)}
         pending={isPending}
         defaultAllocationMethod={defaultAllocationMethod}
-        onOpenChange={(open) => !open && setStockDocumentType(null)}
+        onOpenChange={(open) => !open && closeStockDocument()}
         onSubmit={(event, type) =>
-          submitForm(event, (formData) => createStockDocumentAction(type, formData), () => setStockDocumentType(null))
+          submitForm(event, (formData) => createStockDocumentAction(type, formData), closeStockDocument)
         }
         onSaveDraft={(event, type) =>
-          submitForm(event, (formData) => saveStockDocumentDraftAction(type, formData), () => setStockDocumentType(null))
+          submitForm(event, (formData) => saveStockDocumentDraftAction(type, formData), closeStockDocument)
         }
       />
       <WarehouseImportDialog
@@ -508,11 +537,12 @@ export function StockPage({
 function StockSection({
   products,
   categories,
+  sort,
+  onToggleSort,
   view,
   onViewChange,
   activeCount,
   archivedCount,
-  negativeStockCount,
   levelFilter,
   setLevelFilter,
   levelCounts,
@@ -524,7 +554,6 @@ function StockSection({
   setCategoryFilter,
   onCreate,
   onEdit,
-  onStockDocument,
   onImport,
   onOpenCategories,
   onArchive,
@@ -534,11 +563,12 @@ function StockSection({
 }: {
   products: Product[]
   categories: CategorySummary[]
+  sort: SortState
+  onToggleSort: (field: SortField) => void
   view: "active" | "archived"
   onViewChange: (next: "active" | "archived") => void
   activeCount: number
   archivedCount: number
-  negativeStockCount: number
   levelFilter: StockLevelFilter
   setLevelFilter: (value: StockLevelFilter) => void
   levelCounts: { all: number; low: number; zero: number; negative: number }
@@ -550,7 +580,6 @@ function StockSection({
   setCategoryFilter: (value: string) => void
   onCreate: () => void
   onEdit: (product: Product) => void
-  onStockDocument: (type: StockDocumentType) => void
   onImport: () => void
   onOpenCategories: () => void
   onArchive: (product: Product) => void
@@ -559,96 +588,56 @@ function StockSection({
   pending: boolean
 }) {
   const isArchiveView = view === "archived"
-  const selectedCategory = categories.find((category) => category.path === categoryFilter)
-  const levelChips: { value: StockLevelFilter; label: string; count: number; icon?: React.ReactNode }[] = [
+  // Сегменты остатков с цветовыми точками (по макету): мало — янтарная, нет — серая, минус — красная.
+  const levelChips: { value: StockLevelFilter; label: string; count: number; dot?: string }[] = [
     { value: "all", label: "Все", count: levelCounts.all },
-    {
-      value: "low",
-      label: "Мало ≤3",
-      count: levelCounts.low,
-      icon: <AlertTriangleIcon data-icon="inline-start" />,
-    },
-    {
-      value: "zero",
-      label: "Нет в наличии",
-      count: levelCounts.zero,
-      icon: <AlertOctagonIcon data-icon="inline-start" />,
-    },
-    {
-      value: "negative",
-      label: "В минусе",
-      count: levelCounts.negative,
-      icon: <AlertOctagonIcon data-icon="inline-start" />,
-    },
+    { value: "low", label: "Мало ≤3", count: levelCounts.low, dot: "bg-amber-500" },
+    { value: "zero", label: "Нет в наличии", count: levelCounts.zero, dot: "bg-zinc-400" },
+    { value: "negative", label: "В минусе", count: levelCounts.negative, dot: "bg-red-500" },
   ]
 
   return (
-    <Card className="min-w-0 rounded-2xl border bg-white">
-      <CardHeader>
-        <div className="flex flex-col gap-2 xl:flex-row xl:flex-wrap xl:items-center">
-          <div className="relative min-w-64 flex-1">
-            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              className="h-10 pl-9"
-              placeholder="Найти товар по названию, коду или артикулу"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
+    <>
+      <ScreenHeader
+        title="Склад"
+        search={{
+          value: query,
+          onChange: setQuery,
+          placeholder: "Найти товар по названию, коду или артикулу",
+          inputProps: { "aria-label": "Поиск товаров" },
+        }}
+        actions={
+          <>
+            <HeaderFilter
+              icon={TagsIcon}
+              label="Категория"
+              value={categoryFilter}
+              allValue={allCategoriesValue}
+              options={[
+                { value: allCategoriesValue, label: "Все категории" },
+                ...categories.map((category) => ({ value: category.path, label: `${category.label} — ${category.count}` })),
+              ]}
+              onValueChange={setCategoryFilter}
             />
-          </div>
-          <Select
-            items={[
-              { label: "Все категории", value: allCategoriesValue },
-              ...categories.map((category) => ({
-                label: `${category.label} — ${category.count}`,
-                value: category.path,
-              })),
-            ]}
-            value={categoryFilter}
-              onValueChange={(value) => setCategoryFilter(value ?? allCategoriesValue)}
-            >
-            <SelectTrigger className="h-10 w-full min-w-56 xl:w-72">
-              <SelectValue placeholder="Все категории">
-                {categoryFilter === allCategoriesValue
-                  ? "Все категории"
-                  : selectedCategory
-                    ? `${selectedCategory.label} — ${selectedCategory.count}`
-                    : "Все категории"}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent align="start">
-              <SelectGroup>
-                <SelectItem value={allCategoriesValue}>Все категории</SelectItem>
-                {categories.map((category) => (
-                  <SelectItem key={category.path} value={category.path}>
-                    <span className="max-w-64 truncate">{category.label}</span>
-                    <span className="ml-auto text-xs text-muted-foreground">{category.count}</span>
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          <div className="flex flex-wrap gap-2 xl:ml-auto">
-            <Button className="h-10" onClick={() => onStockDocument("stock_in")} disabled={pending}>
-              <PlusCircleIcon data-icon="inline-start" />
-              Пополнить
-            </Button>
-            <Button className="h-10" variant="outline" onClick={() => onStockDocument("stock_out")} disabled={pending}>
-              <MinusCircleIcon data-icon="inline-start" />
-              Списать
-            </Button>
             <DropdownMenu>
-              <DropdownMenuTrigger render={<Button className="h-10" variant="outline" disabled={pending} />}>
-                <MoreHorizontalIcon data-icon="inline-start" />
-                Ещё
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-lg"
+                    className="size-10 text-muted-foreground hover:text-foreground"
+                    disabled={pending}
+                    title="Ещё действия"
+                    aria-label="Ещё действия"
+                  />
+                }
+              >
+                <MoreHorizontalIcon className="size-4" />
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuItem onClick={onCreate}>
                   <PlusIcon />
                   Новый товар
-                </DropdownMenuItem>
-                <DropdownMenuItem render={<Link href="/stock/acts" />}>
-                  <ClipboardListIcon />
-                  Акты склада
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={onOpenCategories}>
                   <TagsIcon />
@@ -666,119 +655,271 @@ function StockSection({
                   <HistoryIcon />
                   История импортов
                 </DropdownMenuItem>
-                <DropdownMenuItem render={<Link href="/history/stock" />}>
-                  <HistoryIcon />
-                  Движения склада
-                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="flex min-w-0 flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2 border-b pb-3">
-          <Button
-            type="button"
-            size="sm"
-            variant={!isArchiveView ? "default" : "outline"}
-            onClick={() => onViewChange("active")}
-          >
-            Активные
-            <span className={!isArchiveView ? "opacity-80" : "text-muted-foreground"}>({activeCount})</span>
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={isArchiveView ? "default" : "outline"}
-            onClick={() => onViewChange("archived")}
-          >
-            <ArchiveIcon data-icon="inline-start" />
-            В архиве
-            <span className={isArchiveView ? "opacity-80" : "text-muted-foreground"}>({archivedCount})</span>
-          </Button>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+            <HeaderAction icon={PlusIcon} label="Новый товар" onClick={onCreate} disabled={pending} />
+            <HeaderAction icon={MinusCircleIcon} label="Списать" href="/stock?new=stock_out" />
+          </>
+        }
+        primaryAction={<HeaderPrimaryAction icon={PlusCircleIcon} label="Пополнить" href="/stock?new=stock_in" />}
+      />
+
+      {/* Второй уровень: активные/архив подчёркиванием, остатки — чипами с цветовыми точками. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-5 gap-y-2">
+        <LineTabs
+          aria-label="Товары"
+          value={view}
+          onValueChange={onViewChange}
+          items={[
+            { value: "active", label: "Активные", count: activeCount },
+            { value: "archived", label: "В архиве", count: archivedCount },
+          ]}
+        />
+        <div className="flex min-w-0 flex-wrap items-center gap-1" role="group" aria-label="Остаток">
           {levelChips.map((chip) => {
             const isActive = levelFilter === chip.value
             const isDisabled = chip.value !== "all" && chip.count === 0
             return (
-              <Button
+              <button
                 key={chip.value}
                 type="button"
-                size="sm"
-                variant={isActive ? "default" : "outline"}
                 disabled={isDisabled}
+                aria-pressed={isActive}
                 onClick={() => setLevelFilter(chip.value)}
+                className={cn(
+                  "flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium whitespace-nowrap transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/35 pointer-coarse:h-9",
+                  isActive ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  isDisabled && "cursor-not-allowed opacity-50"
+                )}
               >
-                {chip.icon}
+                {chip.dot && <span className={cn("size-1.5 rounded-full", chip.dot)} aria-hidden />}
                 {chip.label}
-                <span className={isActive ? "opacity-80" : "text-muted-foreground"}>({chip.count})</span>
-              </Button>
+                {chip.count ? <span className="text-xs text-muted-foreground tabular-nums">{chip.count}</span> : null}
+              </button>
             )
           })}
-        </div>
-        <ResponsiveTable
-          emptyTitle={isArchiveView ? "В архиве пусто" : "Склад пуст"}
-          filtered={hasActiveFilters}
-          onResetFilters={onResetFilters}
-          headers={["Товар", "Категория", "Доступно", "Цена", ""]}
-          rows={products.map((product) => [
-            <div key="name" className="flex min-w-56 items-center gap-2">
-              <ProductThumbnail name={product.name} imagePath={product.imagePath} size="md" />
-              <div className="min-w-0">
-                <div className="truncate font-medium">{product.name}</div>
-                <div className="truncate text-xs text-muted-foreground">{product.article || "Артикул не указан"}</div>
-              </div>
-            </div>,
-            <CategoryCell key="category" categoryPath={product.categoryPath} />,
-            <StockBadge key="stock" product={product} />,
-            formatMoney(product.salePrice),
-            <div key="actions" className="flex justify-end gap-1">
-              {isArchiveView ? (
-                <>
-                  <Button variant="outline" size="sm" onClick={() => onRestore(product)} disabled={pending}>
-                    <ArchiveRestoreIcon data-icon="inline-start" />
-                    Восстановить
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => onDelete(product)}
-                    title="Удалить навсегда"
-                  >
-                    <Trash2Icon />
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button variant="outline" size="sm" onClick={() => onEdit(product)}>
-                    <PencilIcon data-icon="inline-start" />
-                    Редактировать
-                  </Button>
-                  <Button variant="ghost" size="icon-sm" onClick={() => onArchive(product)} title="В архив">
-                    <ArchiveIcon />
-                  </Button>
-                </>
-              )}
-            </div>,
-          ])}
-        />
-        {!isArchiveView && negativeStockCount > 0 && (
-          <div className="flex justify-end">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="border-red-300 text-destructive hover:bg-destructive/10"
-              onClick={() => setLevelFilter("negative")}
-            >
-              <AlertOctagonIcon data-icon="inline-start" />
-              В минусе: {negativeStockCount}
+          {hasActiveFilters && (
+            <Button type="button" variant="ghost" size="sm" onClick={onResetFilters}>
+              <FilterIcon data-icon="inline-start" />
+              Сбросить
             </Button>
-          </div>
+          )}
+        </div>
+      </div>
+
+      <ScreenBody>
+        <ProductsTable
+          products={products}
+          sort={sort}
+          onToggleSort={onToggleSort}
+          isArchiveView={isArchiveView}
+          hasActiveFilters={hasActiveFilters}
+          onResetFilters={onResetFilters}
+          onEdit={onEdit}
+          onArchive={onArchive}
+          onRestore={onRestore}
+          onDelete={onDelete}
+          pending={pending}
+        />
+      </ScreenBody>
+    </>
+  )
+}
+
+// Таблица товаров по макету: letter-аватар + артикул, пилюля остатка, цена tabular-nums,
+// иконки действий вместо текстовых кнопок. Заголовки капсом, строка целиком — зона hover.
+function ProductsTable({
+  products,
+  sort,
+  onToggleSort,
+  isArchiveView,
+  hasActiveFilters,
+  onResetFilters,
+  onEdit,
+  onArchive,
+  onRestore,
+  onDelete,
+  pending,
+}: {
+  products: Product[]
+  sort: SortState
+  onToggleSort: (field: SortField) => void
+  isArchiveView: boolean
+  hasActiveFilters: boolean
+  onResetFilters: () => void
+  onEdit: (product: Product) => void
+  onArchive: (product: Product) => void
+  onRestore: (product: Product) => void
+  onDelete: (product: Product) => void
+  pending: boolean
+}) {
+  if (!products.length) {
+    if (hasActiveFilters) {
+      return (
+        <Empty className="min-h-56">
+          <EmptyHeader>
+            <EmptyTitle>Ничего не найдено</EmptyTitle>
+            <EmptyDescription>По выбранным фильтрам нет товаров. Сбросьте фильтры, чтобы увидеть весь список.</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button type="button" variant="ghost" size="sm" onClick={onResetFilters}>
+              <FilterIcon data-icon="inline-start" />
+              Сбросить фильтры
+            </Button>
+          </EmptyContent>
+        </Empty>
+      )
+    }
+
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyTitle>{isArchiveView ? "В архиве пусто" : "Склад пуст"}</EmptyTitle>
+          <EmptyDescription>Данные появятся после первой операции.</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+
+  return (
+    <div className="@container/products min-w-0 max-w-full">
+      <Table>
+        <TableHeader className="sticky top-0 z-10 bg-background">
+          <TableRow className="hover:bg-transparent">
+            <SortableHead label="Товар" field="name" sort={sort} onToggleSort={onToggleSort} />
+            <SortableHead label="Категория" field="category" sort={sort} onToggleSort={onToggleSort} className="hidden @3xl/products:table-cell" />
+            <SortableHead label="Доступно" field="available" sort={sort} onToggleSort={onToggleSort} align="right" />
+            <SortableHead label="Цена" field="price" sort={sort} onToggleSort={onToggleSort} align="right" />
+            <TableHead className="w-28" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {products.map((product) => (
+            <TableRow key={product.code} className="group">
+              <TableCell>
+                <div className="flex min-w-40 items-center gap-2.5">
+                  <ProductThumbnail name={product.name} imagePath={product.imagePath} size="md" />
+                  <div className="min-w-0 max-w-72">
+                    <div className="truncate font-medium" title={product.name}>{product.name}</div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {product.article || "Артикул не указан"}
+                    </div>
+                  </div>
+                </div>
+              </TableCell>
+              <TableCell className="hidden @3xl/products:table-cell">
+                <CategoryCell categoryPath={product.categoryPath} />
+              </TableCell>
+              <TableCell className="text-right">
+                <StockBadge product={product} />
+              </TableCell>
+              <TableCell className="text-right tabular-nums">{formatMoney(product.salePrice)}</TableCell>
+              <TableCell>
+                <div className="flex justify-end gap-0.5 text-muted-foreground">
+                  {isArchiveView ? (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => onRestore(product)}
+                        disabled={pending}
+                        title="Восстановить из архива"
+                        aria-label="Восстановить из архива"
+                      >
+                        <ArchiveRestoreIcon />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => onDelete(product)}
+                        title="Удалить навсегда"
+                        aria-label="Удалить навсегда"
+                      >
+                        <Trash2Icon />
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => onEdit(product)}
+                        title="Редактировать"
+                        aria-label="Редактировать"
+                      >
+                        <PencilIcon />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => onArchive(product)}
+                        title="В архив"
+                        aria-label="В архив"
+                      >
+                        <ArchiveIcon />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => onDelete(product)}
+                        title="Удалить"
+                        aria-label="Удалить"
+                      >
+                        <Trash2Icon />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+// Кликабельный заголовок колонки: 1-й клик — по возрастанию, 2-й — по убыванию, 3-й — исходный порядок.
+function SortableHead({
+  label,
+  field,
+  sort,
+  onToggleSort,
+  align,
+  className,
+}: {
+  label: string
+  field: SortField
+  sort: SortState
+  onToggleSort: (field: SortField) => void
+  align?: "right"
+  className?: string
+}) {
+  const active = sort?.field === field
+  return (
+    <TableHead className={cn("p-0", align === "right" && "text-right", className)}>
+      <button
+        type="button"
+        onClick={() => onToggleSort(field)}
+        title="Сортировать"
+        className={cn(
+          "flex h-full w-full items-center gap-1 px-2 py-2 text-[11px] font-semibold uppercase tracking-wide transition-colors hover:text-foreground",
+          align === "right" && "justify-end",
+          active ? "text-foreground" : "text-muted-foreground"
         )}
-      </CardContent>
-    </Card>
+      >
+        {label}
+        {active ? (
+          sort.dir === "asc" ? (
+            <ArrowUpIcon className="size-3.5 shrink-0" />
+          ) : (
+            <ArrowDownIcon className="size-3.5 shrink-0" />
+          )
+        ) : (
+          <ChevronsUpDownIcon className="size-3.5 shrink-0 opacity-40" />
+        )}
+      </button>
+    </TableHead>
   )
 }
 
@@ -1182,7 +1323,7 @@ function CategoriesDialog({
                 </FieldDescription>
               </Field>
               <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setEditing(null)} disabled={pending}>
+                <Button type="button" variant="ghost" onClick={() => setEditing(null)} disabled={pending}>
                   Отмена
                 </Button>
                 <Button type="submit" disabled={pending}>
@@ -1446,31 +1587,6 @@ function nullableNumber(value: number | null) {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)))
 }
 
-type StockDocumentLine = {
-  product: Product
-  qty: string
-  unitCost: string
-}
-
-function computeStockDocumentTotals(items: StockDocumentLine[], products: Product[], isWriteOff: boolean) {
-  let totalQty = 0
-  let totalValue = 0
-
-  for (const item of items) {
-    const qty = Number(item.qty || 0)
-    if (!Number.isFinite(qty) || qty <= 0) {
-      continue
-    }
-    const product = products.find((candidate) => candidate.code === item.product.code) ?? item.product
-    totalQty += qty
-    // Приход — по введённой цене закупки; списание — по текущей себестоимости товара.
-    const unit = isWriteOff ? product.costPrice || 0 : Number(item.unitCost) || 0
-    totalValue += qty * unit
-  }
-
-  return { positions: items.length, totalQty, totalValue }
-}
-
 function StockDocumentDialog({
   type,
   products,
@@ -1490,44 +1606,27 @@ function StockDocumentDialog({
   onSubmit: (event: React.FormEvent<HTMLFormElement>, type: StockDocumentType) => void
   onSaveDraft: (event: React.FormEvent<HTMLFormElement>, type: StockDocumentType) => void
 }) {
-  const [items, setItems] = useState<StockDocumentLine[]>([])
+  const [items, setItems] = useState<DocumentLine[]>([])
   const [supplierId, setSupplierId] = useState("none")
   const [operationAt, setOperationAt] = useState(() => toDatetimeLocalValue())
+  // Сумма и метод накладных — для живого предпросмотра себестоимости в таблице позиций.
+  const [overheadState, setOverheadState] = useState<{ total: number; method: AllocationMethod }>({
+    total: 0,
+    method: defaultAllocationMethod,
+  })
   const isWriteOff = type === "stock_out"
   const title = isWriteOff ? "Акт списания" : "Акт пополнения"
   const description = "Добавьте товары, проверьте количество и сохраните или проведите акт"
   const operationAtLabel = isWriteOff ? "Дата и время списания" : "Дата и время приемки"
-  const totals = computeStockDocumentTotals(items, products, isWriteOff)
 
   function addProduct(product: Product) {
     const freshProduct = products.find((item) => item.code === product.code) ?? product
-    setItems((current) => {
-      const existing = current.find((item) => item.product.code === freshProduct.code)
-      if (existing) {
-        const updated = {
-          ...existing,
-          product: freshProduct,
-          qty: String(incrementWholeQty(existing.qty)),
-        }
-        return [
-          updated,
-          ...current.filter((item) => item.product.code !== freshProduct.code),
-        ]
-      }
-
-      return [{ product: freshProduct, qty: "1", unitCost: "" }, ...current]
-    })
+    setItems((current) => addProductToLines(current, freshProduct, isWriteOff))
   }
 
-  function updateQty(productCode: string, qty: string) {
+  function updateLine(productCode: string, patch: Partial<DocumentLine>) {
     setItems((current) =>
-      current.map((item) => (item.product.code === productCode ? { ...item, qty } : item))
-    )
-  }
-
-  function updateUnitCost(productCode: string, unitCost: string) {
-    setItems((current) =>
-      current.map((item) => (item.product.code === productCode ? { ...item, unitCost } : item))
+      current.map((item) => (item.product.code === productCode ? { ...item, ...patch } : item))
     )
   }
 
@@ -1574,13 +1673,14 @@ function StockDocumentDialog({
           setItems([])
           setSupplierId("none")
           setOperationAt(toDatetimeLocalValue())
+          setOverheadState({ total: 0, method: defaultAllocationMethod })
         }
         onOpenChange(open)
       }}
     >
       <SheetContent
         side="right"
-        className="!w-screen !max-w-none p-0 sm:!max-w-none md:!max-w-none lg:!max-w-none xl:!max-w-none data-[side=right]:!w-screen data-[side=right]:sm:!w-[90vw] data-[side=right]:md:!w-[860px] data-[side=right]:lg:!w-[1040px] data-[side=right]:xl:!w-[1180px] data-[side=right]:sm:!max-w-none"
+        className="!w-screen !max-w-none p-0 sm:!max-w-none md:!max-w-none lg:!max-w-none xl:!max-w-none data-[side=right]:!w-screen data-[side=right]:sm:!w-[90vw] data-[side=right]:md:!w-[860px] data-[side=right]:lg:!w-[1040px] data-[side=right]:xl:!w-[1200px] data-[side=right]:sm:!max-w-none"
       >
         <div className="flex h-full min-h-0 flex-col">
           <SheetHeader className="border-b px-6 py-4">
@@ -1589,16 +1689,40 @@ function StockDocumentDialog({
           </SheetHeader>
         {type && (
           <form key={type} onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-                <div className="flex min-w-0 flex-col gap-4">
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-4">
+              {/* Главное действие попапа — набить позиции, поэтому поиск и таблица сверху,
+                  а поиск — вплотную над таблицей (как корзина на кассе): добавленная строка
+                  появляется сразу под полем. Реквизиты и накладные — ниже; на ноутбучных
+                  экранах иначе таблица целиком уходит за сгиб и добавление «не видно». */}
+              <StockActProductPicker
+                products={products}
+                disabled={pending}
+                placeholder="Найти товар и добавить в акт"
+                onSelect={addProduct}
+              />
+
+              <StockDocumentItemsTable
+                items={items}
+                products={products}
+                isWriteOff={isWriteOff}
+                pending={pending}
+                overheadTotal={overheadState.total}
+                allocationMethod={overheadState.method}
+                emptyState={
+                  <div className="rounded-lg border bg-background py-10 text-center text-sm text-muted-foreground">
+                    Позиции акта пока не добавлены
+                  </div>
+                }
+                onUpdate={updateLine}
+                onRemove={removeProduct}
+              />
+
+              <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
                 <Card className="rounded-2xl">
                   <CardHeader>
                     <CardTitle className="text-base">Основная информация</CardTitle>
                   </CardHeader>
                   <CardContent className="grid gap-4 md:grid-cols-2">
-                    <Info label="Тип" value={isWriteOff ? "Списание" : "Пополнение"} />
-                    <Info label="Статус" value="Новый акт" />
                     <Field className="md:col-span-2">
                       <FieldLabel htmlFor="stock-document-operation-at">{operationAtLabel}</FieldLabel>
                       <Input
@@ -1613,25 +1737,35 @@ function StockDocumentDialog({
                     {!isWriteOff && (
                       <Field className="md:col-span-2">
                         <FieldLabel htmlFor="stock-document-supplier">Поставщик</FieldLabel>
-                        <input type="hidden" name="supplierId" value={supplierId === "none" ? "" : supplierId} />
-                        <Select value={supplierId} onValueChange={(value) => setSupplierId(value ?? "none")}>
-                          <SelectTrigger id="stock-document-supplier" className="w-full" disabled={pending}>
-                            <SelectValue placeholder="Без поставщика">{(value) => (!value || value === "none" ? "Без поставщика" : suppliers.find((s) => String(s.id) === String(value))?.name ?? "Без поставщика")}</SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectGroup>
-                              <SelectItem value="none">Без поставщика</SelectItem>
-                              {suppliers.map((supplier) => (
-                                <SelectItem key={supplier.id} value={String(supplier.id)}>
-                                  {supplier.name}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
+                        <SupplierSelect
+                          suppliers={suppliers}
+                          value={supplierId}
+                          onValueChange={setSupplierId}
+                          disabled={pending}
+                          triggerId="stock-document-supplier"
+                        />
                         {supplierId === "none" && (
                           <FieldDescription>Поставщик не указан, акт все равно можно сохранить или провести.</FieldDescription>
                         )}
+                      </Field>
+                    )}
+                    {!isWriteOff && (
+                      <Field className="md:col-span-2">
+                        <FieldLabel htmlFor="stock-document-paid">Оплачено поставщику</FieldLabel>
+                        <Input
+                          id="stock-document-paid"
+                          name="paidAmount"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          inputMode="decimal"
+                          placeholder="0"
+                          disabled={pending}
+                          className="tabular-nums"
+                        />
+                        <FieldDescription>
+                          Оставьте пустым, если оплаты ещё не было — в списке актов появится долг поставщику.
+                        </FieldDescription>
                       </Field>
                     )}
                     <Field className="md:col-span-2">
@@ -1643,139 +1777,17 @@ function StockDocumentDialog({
                   </CardContent>
                 </Card>
 
-                <Card className="rounded-2xl">
-                  <CardHeader>
-                    <CardTitle className="text-base">Поиск товара</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <StockActProductPicker
-                      products={products}
-                      disabled={pending}
-                      placeholder="Найти товар и добавить в акт"
-                      onSelect={addProduct}
-                    />
-                  </CardContent>
-                </Card>
-                </div>
-
-                <div className="min-w-0 rounded-lg border bg-background">
-                  {items.length === 0 ? (
-                    <div className="py-10 text-center text-sm text-muted-foreground">Позиции акта пока не добавлены</div>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <ScrollArea style={{ height: Math.min(items.length * 90 + 48, 420) }}>
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead className="min-w-64">Товар</TableHead>
-                              <TableHead className="w-28">Остаток</TableHead>
-                              <TableHead className="w-32">Кол-во</TableHead>
-                              {!isWriteOff && <TableHead className="w-32">Цена закупки</TableHead>}
-                              <TableHead className="w-36">После</TableHead>
-                              <TableHead className="min-w-44">Комментарий</TableHead>
-                              <TableHead className="w-12" />
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {items.map((item) => {
-                              const product = products.find((candidate) => candidate.code === item.product.code) ?? item.product
-                              const qty = Number(item.qty || 0)
-                              const nextStock = product.stock + (isWriteOff ? -qty : qty)
-
-                              return (
-                                <TableRow key={product.code}>
-                                  <TableCell>
-                                    <input type="hidden" name="itemProductCode" value={product.code} />
-                                    <div className="flex min-w-0 items-center gap-2">
-                                      <ProductThumbnail name={product.name} imagePath={product.imagePath} size="sm" />
-                                      <div className="min-w-0">
-                                        <div className="truncate font-medium">{product.name}</div>
-                                        <div className="text-xs text-muted-foreground">{product.code}</div>
-                                      </div>
-                                    </div>
-                                  </TableCell>
-                                  <TableCell>{number(product.stock)}</TableCell>
-                                  <TableCell>
-                                    <Input
-                                      name="itemQty"
-                                      type="number"
-                                      min="1"
-                                      step="1"
-                                      value={item.qty}
-                                      disabled={pending}
-                                      onChange={(event) => updateQty(product.code, event.target.value)}
-                                      required
-                                    />
-                                  </TableCell>
-                                  {!isWriteOff && (
-                                    <TableCell>
-                                      <Input
-                                        name="itemUnitCost"
-                                        type="number"
-                                        min="0"
-                                        step="0.01"
-                                        inputMode="decimal"
-                                        placeholder="0"
-                                        value={item.unitCost}
-                                        disabled={pending}
-                                        onChange={(event) => updateUnitCost(product.code, event.target.value)}
-                                      />
-                                    </TableCell>
-                                  )}
-                                  <TableCell>
-                                    <div className="flex items-center gap-2">
-                                      <span>{number(nextStock)}</span>
-                                      {isWriteOff && nextStock < 0 && (
-                                        <Badge className="border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-50">
-                                          Будет минус
-                                        </Badge>
-                                      )}
-                                    </div>
-                                  </TableCell>
-                                  <TableCell>
-                                    <Input name="itemComment" disabled={pending} placeholder="Комментарий" />
-                                  </TableCell>
-                                  <TableCell className="text-right">
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon-sm"
-                                      disabled={pending}
-                                      onClick={() => removeProduct(product.code)}
-                                    >
-                                      <Trash2Icon />
-                                    </Button>
-                                  </TableCell>
-                                </TableRow>
-                              )
-                            })}
-                          </TableBody>
-                          <TableFooter>
-                            <TableRow>
-                              <TableCell className="font-medium" colSpan={2}>
-                                Позиций: {totals.positions}
-                              </TableCell>
-                              <TableCell className="font-semibold">{number(totals.totalQty)}</TableCell>
-                              {!isWriteOff && <TableCell />}
-                              <TableCell
-                                colSpan={3}
-                                className="text-right font-semibold"
-                                title={isWriteOff ? "Оценочно по текущей себестоимости" : "По введённым ценам закупки"}
-                              >
-                                {isWriteOff ? "Стоимость списания" : "Стоимость прихода"}: {formatMoney(totals.totalValue)}
-                              </TableCell>
-                            </TableRow>
-                          </TableFooter>
-                        </Table>
-                      </ScrollArea>
-                    </div>
-                  )}
-                </div>
-                {!isWriteOff && <OverheadEditor disabled={pending} initialMethod={defaultAllocationMethod} />}
+                {!isWriteOff && (
+                  <OverheadEditor
+                    disabled={pending}
+                    initialMethod={defaultAllocationMethod}
+                    onStateChange={setOverheadState}
+                  />
+                )}
               </div>
             </div>
             <SheetFooter className="sticky bottom-0 flex-row justify-end border-t bg-background px-6 py-4">
-              <Button type="button" variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>
+              <Button type="button" variant="ghost" disabled={pending} onClick={() => onOpenChange(false)}>
                 Отмена
               </Button>
               <Button type="submit" name="intent" value="draft" variant="outline" disabled={pending}>
@@ -1799,138 +1811,42 @@ function StockDocumentDialog({
   )
 }
 
-function ResponsiveTable({
-  headers,
-  rows,
-  emptyTitle,
-  filtered = false,
-  onResetFilters,
-}: {
-  headers: string[]
-  rows: React.ReactNode[][]
-  emptyTitle: string
-  filtered?: boolean
-  onResetFilters?: () => void
-}) {
-  if (!rows.length) {
-    if (filtered) {
-      return (
-        <Empty className="min-h-56">
-          <EmptyHeader>
-            <EmptyTitle>Ничего не найдено</EmptyTitle>
-            <EmptyDescription>По выбранным фильтрам нет товаров. Сбросьте фильтры, чтобы увидеть весь список.</EmptyDescription>
-          </EmptyHeader>
-          {onResetFilters && (
-            <EmptyContent>
-              <Button type="button" variant="outline" size="sm" onClick={onResetFilters}>
-                <FilterIcon data-icon="inline-start" />
-                Сбросить фильтры
-              </Button>
-            </EmptyContent>
-          )}
-        </Empty>
-      )
-    }
-
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>{emptyTitle}</EmptyTitle>
-          <EmptyDescription>Данные появятся после первой операции.</EmptyDescription>
-        </EmptyHeader>
-        <EmptyContent>
-          <Separator />
-        </EmptyContent>
-      </Empty>
-    )
-  }
-
-  return (
-    <div className="min-w-0 max-w-full overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {headers.map((header) => (
-              <TableHead key={header} className={header ? undefined : "text-right"}>
-                {header}
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row, rowIndex) => (
-            <TableRow key={rowIndex}>
-              {row.map((cell, cellIndex) => (
-                <TableCell key={cellIndex} className={cellIndex === row.length - 1 ? "text-right" : undefined}>
-                  {cell}
-                </TableCell>
-              ))}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
-  )
-}
-
+// Пилюля остатка по макету: минус — красная, ноль — серая, мало (≤3) — янтарная,
+// норма — просто число без пилюли.
 function StockBadge({ product }: { product: Product }) {
   const level = stockLevel(product)
+  const qty = `${number(product.available)} шт`
 
   if (level === "negative") {
     return (
-      <Badge variant="destructive" className="font-semibold">
-        <AlertOctagonIcon data-icon="inline-start" />
-        {number(product.available)}
-      </Badge>
+      <span className="inline-flex items-center rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-red-600">
+        {qty}
+      </span>
     )
   }
 
   if (level === "zero") {
     return (
-      <Badge variant="destructive" className="font-semibold">
-        <AlertOctagonIcon data-icon="inline-start" />
-        Нет в наличии
-      </Badge>
+      <span className="inline-flex items-center rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-zinc-500">
+        {qty}
+      </span>
     )
   }
 
   if (level === "low") {
     return (
-      <Badge
-        variant="outline"
-        className="border-amber-300 bg-amber-50 font-semibold text-amber-900 hover:bg-amber-50"
+      <span
+        className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-amber-700"
+        title="Мало на складе (≤3)"
       >
-        <AlertTriangleIcon data-icon="inline-start" />
-        {number(product.available)} · Мало
-      </Badge>
+        {qty}
+      </span>
     )
   }
 
-  return (
-    <Badge variant="secondary" className="text-muted-foreground">
-      {number(product.available)}
-    </Badge>
-  )
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-xs text-zinc-500">{label}</div>
-      <div className="font-semibold text-zinc-950">{value}</div>
-    </div>
-  )
+  return <span className="text-sm font-medium tabular-nums">{qty}</span>
 }
 
 function number(value: number) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value)
-}
-
-function incrementWholeQty(value: string) {
-  const next = Number(value || 0) + 1
-  if (!Number.isFinite(next)) {
-    return 1
-  }
-
-  return Math.max(1, Math.round(next))
 }

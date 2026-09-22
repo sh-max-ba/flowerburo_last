@@ -3,7 +3,7 @@
 import type React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { parseWallClock } from "@/lib/datetime"
+import { parseWallClock, toDatetimeLocalValue } from "@/lib/datetime"
 import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import {
   AlertTriangleIcon,
@@ -28,10 +28,12 @@ import {
 } from "@/app/actions"
 import type { Customer, Deal, DealItem, DealSource, DealStage } from "@/lib/crm"
 import { getBouquetAvailability } from "@/lib/bouquet-availability"
+import { orderImageIdsFieldName } from "@/lib/order-images"
 import { calculateCommercialTotals, calculateLineTotal, type DiscountType } from "@/lib/pricing"
-import type { BouquetTemplate, CurrentUser, Order, PaymentMethod, Product } from "@/lib/db"
+import type { BouquetTemplate, CurrentUser, Order, OrderImage, PaymentMethod, Product } from "@/lib/db"
 import { deliveryTypeLabel, getPaymentMethodLabel, paymentMethodOptions, sourceLabel as getSourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
+import { OrderImageStrip, OrderImagesField } from "@/components/orders/order-images"
 import { WazzupCustomChat } from "@/components/deals/wazzup-custom-chat"
 import { WazzupDealFrame } from "@/components/deals/wazzup-deal-frame"
 import { ProductCombobox } from "@/components/products/product-combobox"
@@ -102,6 +104,8 @@ type CreateOrderDraft = {
   comment: string
   deliveryPrice: string
   courierPayout: string
+  // Фото-референсы к заказу (уже загружены на сервер, в форму уходят id).
+  images: OrderImage[]
 }
 
 // Локальная строка корзины в модалке «Изменить заказ» (правится без автосохранения).
@@ -780,6 +784,7 @@ export function DealDetailPage({
       comment: activeDealOrder.note ?? "",
       deliveryPrice: String(activeDealOrder.deliveryPrice ?? 0),
       courierPayout: String(activeDealOrder.courierPayout ?? 0),
+      images: activeDealOrder.images ?? [],
     })
     setOrderItems(orderLinesFromItems(items))
     setOrderDialogMode("edit")
@@ -879,6 +884,7 @@ export function DealDetailPage({
     formData.set("comment", orderDraft.comment.trim())
     formData.set("deliveryPrice", String(normalizedPrice(orderDraft.deliveryPrice)))
     formData.set("courierPayout", String(normalizedPrice(orderDraft.courierPayout)))
+    formData.set(orderImageIdsFieldName, orderDraft.images.map((image) => image.id).join(","))
     for (const line of orderItems) {
       formData.append("itemProductCode", line.productCode)
       formData.append("itemQty", String(normalizedQty(line.qty)))
@@ -958,7 +964,7 @@ export function DealDetailPage({
               customerId={draft.customerId === noValue ? null : draft.customerId}
               discountPercent={selectedCustomer?.defaultDiscountPercent ?? 0}
             />
-            <div className="min-h-[520px] flex-1 overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+            <div className="min-h-[520px] flex-1 overflow-hidden rounded-2xl bg-background shadow-xs">
               {chatMode === "custom" ? (
                 <WazzupCustomChat key={`custom:${deal.id}`} dealId={deal.id} bouquets={bouquets} />
               ) : (
@@ -986,7 +992,7 @@ export function DealDetailPage({
               discountPercent={selectedCustomer?.defaultDiscountPercent ?? 0}
             />
           )}
-          <div className="sticky top-0 z-20 grid gap-3 overflow-visible rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="sticky top-0 z-20 grid gap-3 overflow-visible rounded-2xl bg-background p-4 shadow-xs">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="text-xs text-muted-foreground">{deal.number || `Сделка #${deal.id}`}</div>
@@ -1018,7 +1024,7 @@ export function DealDetailPage({
             onValueChange={(value) => setActiveTab(value as DealTab)}
             className="min-h-0 flex-1 gap-4 overflow-visible"
           >
-            <div className="overflow-visible rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
+            <div className="overflow-visible rounded-2xl bg-background p-2 shadow-xs">
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="overview" className="min-w-0 px-1">
                   Обзор
@@ -1037,7 +1043,7 @@ export function DealDetailPage({
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-visible xl:overflow-y-auto xl:pr-1">
           <Card
             className={cn(
-              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              "overflow-visible rounded-2xl shadow-xs",
               activeTab !== "overview" && "hidden"
             )}
           >
@@ -1161,7 +1167,7 @@ export function DealDetailPage({
 
           <Card
             className={cn(
-              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              "overflow-visible rounded-2xl shadow-xs",
               activeTab !== "composition" && "hidden"
             )}
           >
@@ -1190,7 +1196,7 @@ export function DealDetailPage({
               )}
               <div className="grid gap-2">
                 {pricedItems.length === 0 && (
-                  <div className="rounded-lg border border-dashed border-zinc-200 p-6 text-center text-sm text-muted-foreground">
+                  <div className="rounded-lg bg-muted/30 p-6 text-center text-sm text-muted-foreground">
                     Состав пуст
                   </div>
                 )}
@@ -1200,7 +1206,7 @@ export function DealDetailPage({
                     const groupTotal = group.items.reduce((sum, item) => sum + item.line.total, 0)
 
                     return (
-                      <div key={group.key} className="rounded-lg border border-zinc-200 p-2">
+                      <div key={group.key} className="rounded-lg bg-muted/30 p-2">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">
@@ -1242,7 +1248,7 @@ export function DealDetailPage({
 
                   const item = group.item
                   return (
-                    <div key={item.id} className="rounded-lg border border-zinc-200 p-2">
+                    <div key={item.id} className="rounded-lg bg-muted/30 p-2">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex min-w-0 items-center gap-2">
                           <ProductThumbnail name={item.productName} imagePath={item.imagePath} size="sm" />
@@ -1342,7 +1348,7 @@ export function DealDetailPage({
 
           <Card
             className={cn(
-              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              "overflow-visible rounded-2xl shadow-xs",
               activeTab !== "composition" && "hidden"
             )}
           >
@@ -1411,7 +1417,7 @@ export function DealDetailPage({
 
           <Card
             className={cn(
-              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              "overflow-visible rounded-2xl shadow-xs",
               activeTab !== "overview" && "hidden"
             )}
           >
@@ -1420,7 +1426,7 @@ export function DealDetailPage({
               <CardDescription>После создания заказа суммы берутся из него</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3 overflow-visible text-sm">
-              <div className="grid grid-cols-3 gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+              <div className="grid grid-cols-3 gap-2 rounded-xl bg-muted/30 p-3">
                 <SummaryBox label="Итого" value={formatMoney(displayTotal)} />
                 <SummaryBox label="Оплачено" value={formatMoney(displayPaid)} />
                 <SummaryBox label="Остаток" value={formatMoney(balance)} strong={balance > 0} />
@@ -1445,12 +1451,15 @@ export function DealDetailPage({
                     <ExternalLinkIcon data-icon="inline-start" />
                     Открыть заказ
                   </Button>
+                  {activeDealOrder.images.length > 0 && (
+                    <OrderImageStrip images={activeDealOrder.images} size="sm" className="basis-full" />
+                  )}
                 </div>
               ) : latestDealOrder ? (
                 <div
                   className={cn(
                     "rounded-lg border p-3",
-                    latestDealOrder.status === "Отменен" ? "border-red-200 bg-red-50" : "border-zinc-200 bg-zinc-50"
+                    latestDealOrder.status === "Отменен" ? "border-red-200 bg-red-50" : "bg-muted/40"
                   )}
                 >
                   <div
@@ -1466,7 +1475,7 @@ export function DealDetailPage({
                   </div>
                 </div>
               ) : (
-                <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-zinc-600">Заказ ещё не создан</div>
+                <div className="rounded-lg bg-muted/30 p-3 text-zinc-600">Заказ ещё не создан</div>
               )}
 
               {dealOrders.length > 0 && (
@@ -1476,7 +1485,7 @@ export function DealDetailPage({
                     {dealOrders.map((order) => (
                       <div
                         key={order.id}
-                        className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white p-2"
+                        className="flex items-center justify-between gap-2 rounded-lg bg-muted/30 p-2"
                       >
                         <div className="min-w-0">
                           <div className="truncate font-medium text-zinc-950">{order.number || `Заказ #${order.id}`}</div>
@@ -1495,7 +1504,7 @@ export function DealDetailPage({
 
           <Card
             className={cn(
-              "overflow-visible rounded-2xl border-zinc-200 bg-white shadow-sm",
+              "overflow-visible rounded-2xl shadow-xs",
               activeTab !== "composition" && "hidden"
             )}
           >
@@ -1514,7 +1523,7 @@ export function DealDetailPage({
           </Tabs>
 
           {!createOrderDialogOpen && !paymentDialogOpen && (
-          <div className="flex gap-2 rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm">
+          <div className="flex gap-2 rounded-2xl bg-background p-3 shadow-xs">
             <div className="flex-1">
               <ActionButton
                 grow
@@ -1614,7 +1623,7 @@ export function DealDetailPage({
               </Field>
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setPaymentDialogOpen(false)}>
+              <Button type="button" variant="ghost" onClick={() => setPaymentDialogOpen(false)}>
                 Отмена
               </Button>
               <Button type="submit" disabled={actionPending || !openShift || balance <= 0}>
@@ -1633,7 +1642,7 @@ export function DealDetailPage({
               <DialogDescription>{deal.number || `Сделка #${deal.id}`}</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
-              <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm sm:grid-cols-5">
+              <div className="grid gap-2 rounded-xl bg-muted/30 p-3 text-sm sm:grid-cols-5">
                 <SummaryBox label="Состав" value={formatMoney(dialogItemsTotal)} />
                 <SummaryBox label="Доставка" value={formatMoney(orderDeliveryPrice)} />
                 <SummaryBox label="Курьеру" value={formatMoney(orderCourierPayout)} />
@@ -1645,7 +1654,7 @@ export function DealDetailPage({
                 <div className="grid gap-4 md:grid-cols-2">
                   <Field>
                     <FieldLabel>Клиент</FieldLabel>
-                    <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm">
+                    <div className="rounded-lg bg-muted/30 px-3 py-2 text-sm">
                       <div className="font-medium text-zinc-950">{deal.customerName || "Клиент сделки"}</div>
                       <div className="text-xs text-zinc-500">{deal.customerPhone || "Телефон не указан"}</div>
                     </div>
@@ -1736,6 +1745,12 @@ export function DealDetailPage({
                   </FieldContent>
                 </Field>
 
+                <OrderImagesField
+                  images={orderDraft.images}
+                  onChange={(update) => setOrderDraft((current) => ({ ...current, images: update(current.images) }))}
+                  disabled={actionPending}
+                />
+
                 <div className="grid gap-4 md:grid-cols-2">
                   <Field>
                     <FieldLabel htmlFor="deal-order-delivery-price">Платит клиент за доставку</FieldLabel>
@@ -1772,7 +1787,7 @@ export function DealDetailPage({
                 </div>
               </FieldGroup>
 
-              <div className="grid gap-2 rounded-xl border border-zinc-200 p-3 text-sm">
+              <div className="grid gap-2 rounded-xl bg-muted/30 p-3 text-sm">
                 <div className="flex items-center justify-between gap-2">
                   <div className="font-medium text-zinc-950">Состав заказа</div>
                   {isEditOrderMode && <span className="text-xs text-zinc-500">Можно править позиции</span>}
@@ -1784,7 +1799,7 @@ export function DealDetailPage({
                       editPricedLines.map((line) => (
                         <div
                           key={line.key}
-                          className="grid gap-2 rounded-lg border border-zinc-200 p-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                          className="grid gap-2 rounded-lg bg-muted/30 p-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
                         >
                           <div className="flex min-w-0 items-center gap-2">
                             <ProductThumbnail name={line.name} imagePath={line.imagePath} size="sm" />
@@ -1881,7 +1896,7 @@ export function DealDetailPage({
                 )}
               </div>
 
-              <div className="grid gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm">
+              <div className="grid gap-2 rounded-xl bg-muted/30 p-3 text-sm">
                 <SummaryRow label="Товары до скидки" value={formatMoney(dialogItemsBreakdown.itemsTotalBeforeDiscount)} />
                 <SummaryRow label="Скидки по позициям" value={formatMoney(dialogItemsBreakdown.itemsDiscountTotal)} />
                 <SummaryRow label="Скидка на чек" value={formatMoney(dialogItemsBreakdown.dealDiscountAmount)} />
@@ -1908,7 +1923,7 @@ export function DealDetailPage({
               )}
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setCreateOrderDialogOpen(false)}>
+              <Button type="button" variant="ghost" onClick={() => setCreateOrderDialogOpen(false)}>
                 Отмена
               </Button>
               <Button
@@ -1991,7 +2006,7 @@ function ClientHeader({
   discountPercent: number
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-zinc-200 bg-white px-4 py-2.5 shadow-sm">
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-background px-4 py-2.5 shadow-xs">
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold text-zinc-950">
           {name || "Без клиента"}
@@ -2054,7 +2069,7 @@ function SaveIndicator({ status, error }: { status: SaveStatus; error: string })
       <Badge
         variant="outline"
         className={cn(
-          "border-zinc-200 bg-white",
+          "bg-background",
           status === "saving" && "text-zinc-600",
           status === "saved" && "border-emerald-200 bg-emerald-50 text-emerald-700",
           status === "error" && "border-red-200 bg-red-50 text-red-700"
@@ -2137,6 +2152,7 @@ function createOrderDraftFromDealDraft(draft: DealDraft): CreateOrderDraft {
     comment: draft.comment ?? "",
     deliveryPrice: "0",
     courierPayout: "0",
+    images: [],
   }
 }
 
@@ -2217,6 +2233,7 @@ function createOrderFromDealFormData(dealId: number, draft: CreateOrderDraft) {
   formData.set("comment", draft.comment.trim())
   formData.set("deliveryPrice", String(normalizedPrice(draft.deliveryPrice)))
   formData.set("courierPayout", String(normalizedPrice(draft.courierPayout)))
+  formData.set(orderImageIdsFieldName, draft.images.map((image) => image.id).join(","))
 
   return formData
 }
@@ -2348,16 +2365,19 @@ function mergeStatus(fieldStatus: SaveStatus, itemStatus: SaveStatus): SaveStatu
   return "saved"
 }
 
+// due_at — «наивное» время магазина уже в формате datetime-local (см. src/lib/datetime.ts),
+// поэтому префилл идентичен: конверсия через Date/toISOString трактовала значение в поясе
+// устройства и сдвигала срок при каждом автосейве. Значения с зоной (легаси) — в пояс магазина.
 function toDatetimeLocal(value: string) {
   if (!value) {
     return ""
   }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
+  const wallClock = value.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/)
+  if (wallClock) {
+    return `${wallClock[1]}T${wallClock[2]}`
   }
 
-  return date.toISOString().slice(0, 16)
+  return toDatetimeLocalValue(value)
 }
 
 // Asks the chat/iframe endpoint only for its status discriminant so the page can decide the layout.

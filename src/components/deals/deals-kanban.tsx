@@ -21,20 +21,27 @@ import {
   AlertTriangleIcon,
   CalendarClockIcon,
   ClockIcon,
+  GripVerticalIcon,
   MoveRightIcon,
   PlusIcon,
+  RadioIcon,
+  UserRoundIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import { createDealAction, updateDealStageAction } from "@/app/actions"
+import { useUrlFlagDialog } from "@/hooks/use-url-flag"
 import type { Customer, Deal, DealBoardData, DealSource, DealStage } from "@/lib/crm"
 import type { CurrentUser } from "@/lib/db"
 import { sourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
+import { ScreenBody } from "@/components/screen-body"
+import { HeaderFilter, HeaderPrimaryAction, ScreenHeader } from "@/components/screen-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -96,8 +103,10 @@ export function DealsKanban({
   currentUser: CurrentUser
 }) {
   const router = useRouter()
-  const [dialogOpen, setDialogOpen] = useState(false)
+  // Диалог открывается кнопкой в шапке и ссылкой /deals?new=1 («+» на строке меню).
+  const [dialogOpen, setDialogOpen] = useUrlFlagDialog("new")
   const [pending, startTransition] = useTransition()
+  const [search, setSearch] = useState("")
   const [optimisticStages, setOptimisticStages] = useState<Record<number, OptimisticStage>>({})
   const [activeDealId, setActiveDealId] = useState<number | null>(null)
   const [overStageId, setOverStageId] = useState<number | null>(null)
@@ -119,6 +128,7 @@ export function DealsKanban({
     [board.deals, optimisticStages]
   )
   const activeDeal = activeDealId ? visibleDeals.find((deal) => deal.id === activeDealId) : null
+  const normalizedSearch = search.trim().toLowerCase()
   const filteredDeals = useMemo(
     () =>
       visibleDeals.filter((deal) => {
@@ -128,9 +138,12 @@ export function DealsKanban({
         if (sourceFilter !== allFilterValue && deal.source !== sourceFilter) {
           return false
         }
+        if (normalizedSearch && !dealMatchesSearch(deal, normalizedSearch)) {
+          return false
+        }
         return true
       }),
-    [visibleDeals, responsibleFilter, sourceFilter]
+    [visibleDeals, responsibleFilter, sourceFilter, normalizedSearch]
   )
 
   useEffect(() => {
@@ -191,6 +204,7 @@ export function DealsKanban({
   function resetFilters() {
     setResponsibleFilter(allFilterValue)
     setSourceFilter(allFilterValue)
+    setSearch("")
   }
 
   function run(action: () => Promise<ActionResult>, after?: () => void) {
@@ -287,43 +301,47 @@ export function DealsKanban({
 
   return (
     <>
-      <div className="-mx-4 -mt-4 -mb-4 flex min-h-[calc(100svh-3.5rem)] min-w-0 flex-col gap-0 md:-mx-5 md:-mt-5 md:-mb-5">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 bg-zinc-50 px-4 py-3 md:px-5">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <Select value={responsibleFilter} onValueChange={(value) => setResponsibleFilter(value ?? allFilterValue)}>
-              <SelectTrigger className="h-9 w-[210px] bg-white text-sm">
-                <SelectValue>{(value) => responsibleFilterLabel(String(value ?? allFilterValue), users)}</SelectValue>
-              </SelectTrigger>
-              <SelectContent align="start">
-                <SelectItem value={allFilterValue}>Все ответственные</SelectItem>
-                {users.map((user) => (
-                  <SelectItem key={user.id} value={String(user.id)}>
-                    {user.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={sourceFilter} onValueChange={(value) => setSourceFilter(value ?? allFilterValue)}>
-              <SelectTrigger className="h-9 w-[170px] bg-white text-sm">
-                <SelectValue>{(value) => sourceFilterLabel(String(value ?? allFilterValue))}</SelectValue>
-              </SelectTrigger>
-              <SelectContent align="start">
-                <SelectItem value={allFilterValue}>Все источники</SelectItem>
-                {sourceOptions.map((source) => (
-                  <SelectItem key={source.value} value={source.value}>
-                    {source.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <Button className="h-9 bg-zinc-950 text-white hover:bg-zinc-800" onClick={() => setDialogOpen(true)}>
-            <PlusIcon data-icon="inline-start" />
-            Новая сделка
-          </Button>
-        </div>
+      <ScreenHeader
+        title="Сделки"
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Поиск по сделкам: название, клиент, телефон, номер",
+          inputProps: { "aria-label": "Поиск сделок" },
+        }}
+        actions={
+          <>
+            <HeaderFilter
+              icon={UserRoundIcon}
+              label="Ответственный"
+              value={responsibleFilter}
+              allValue={allFilterValue}
+              options={[
+                { value: allFilterValue, label: "Все ответственные" },
+                ...users.map((user) => ({ value: String(user.id), label: user.name })),
+              ]}
+              onValueChange={setResponsibleFilter}
+            />
+            <HeaderFilter
+              icon={RadioIcon}
+              label="Источник"
+              value={sourceFilter}
+              allValue={allFilterValue}
+              options={[{ value: allFilterValue, label: "Все источники" }, ...sourceOptions]}
+              onValueChange={setSourceFilter}
+            />
+          </>
+        }
+        primaryAction={
+          <HeaderPrimaryAction icon={PlusIcon} label="Новая сделка" onClick={() => setDialogOpen(true)} />
+        }
+        tabs={null}
+      />
 
+      <ScreenBody surface={false} scroll="none">
         <DndContext
+          // Стабильные id для aria-описаний dnd-kit при SSR — иначе гидрация расходится.
+          id="deals-board"
           sensors={sensors}
           collisionDetection={closestCorners}
           onDragStart={handleDragStart}
@@ -331,12 +349,14 @@ export function DealsKanban({
           onDragCancel={clearDragState}
           onDragEnd={handleDragEnd}
         >
+          {/* Доска от края до края: горизонтальный скролл у доски (scroll-snap по колонкам),
+              вертикальный — внутри каждой колонки. */}
           <div
             data-kanban-board
-            className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden border-y border-zinc-200 bg-white"
+            className="flex min-h-0 min-w-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto overflow-y-hidden overscroll-x-contain pb-1 md:snap-proximity"
           >
             {!hasStages ? (
-              <div className="flex h-full items-center justify-center p-6">
+              <div className="flex w-full items-center justify-center p-6">
                 <Empty className="max-w-md">
                   <EmptyHeader>
                     <EmptyMedia variant="icon">
@@ -350,7 +370,7 @@ export function DealsKanban({
                 </Empty>
               </div>
             ) : boardIsEmpty ? (
-              <div className="flex h-full items-center justify-center p-6">
+              <div className="flex w-full items-center justify-center p-6">
                 <Empty className="max-w-md">
                   <EmptyHeader>
                     <EmptyMedia variant="icon">
@@ -370,7 +390,7 @@ export function DealsKanban({
                 </Empty>
               </div>
             ) : filteredBoardIsEmpty ? (
-              <div className="flex h-full items-center justify-center p-6">
+              <div className="flex w-full items-center justify-center p-6">
                 <Empty className="max-w-md">
                   <EmptyHeader>
                     <EmptyMedia variant="icon">
@@ -382,15 +402,14 @@ export function DealsKanban({
                     </EmptyDescription>
                   </EmptyHeader>
                   <EmptyContent>
-                    <Button variant="outline" onClick={resetFilters}>
+                    <Button variant="ghost" onClick={resetFilters}>
                       Сбросить фильтры
                     </Button>
                   </EmptyContent>
                 </Empty>
               </div>
             ) : (
-            <div className="flex h-full min-w-max">
-              {stages.map((stage) => {
+              stages.map((stage) => {
                 const deals = dealsByStage.get(stage.id) ?? []
                 const total = deals.reduce((sum, deal) => sum + deal.total, 0)
 
@@ -413,10 +432,10 @@ export function DealsKanban({
                         />
                       ))
                     ) : (
-                      <Empty className="mx-3 min-h-28 rounded-lg border border-dashed border-zinc-300 bg-white/70">
+                      <Empty className="min-h-28 flex-none bg-background/50 p-6">
                         <EmptyHeader>
                           <EmptyTitle className="text-sm">Сделок нет</EmptyTitle>
-                          <EmptyDescription className="text-xs text-zinc-600">
+                          <EmptyDescription className="text-xs text-muted-foreground">
                             Перетащите сделку сюда или используйте «Переместить» на карточке
                           </EmptyDescription>
                         </EmptyHeader>
@@ -424,8 +443,7 @@ export function DealsKanban({
                     )}
                   </KanbanColumn>
                 )
-              })}
-            </div>
+              })
             )}
           </div>
           <DragOverlay>
@@ -436,7 +454,7 @@ export function DealsKanban({
             ) : null}
           </DragOverlay>
         </DndContext>
-      </div>
+      </ScreenBody>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
@@ -567,10 +585,10 @@ export function DealsKanban({
               </Field>
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              <Button type="button" variant="ghost" onClick={() => setDialogOpen(false)}>
                 Отмена
               </Button>
-              <Button type="submit" disabled={pending} className="bg-zinc-950 text-white hover:bg-zinc-800">
+              <Button type="submit" disabled={pending}>
                 Создать
               </Button>
             </DialogFooter>
@@ -601,31 +619,25 @@ function KanbanColumn({
   const highlighted = isOver || droppableIsOver
 
   return (
-    <section className="h-full w-[300px] shrink-0 border-r border-zinc-200 last:border-r-0 md:w-[clamp(292px,calc((100vw-16rem)/4),360px)]">
-      <div
-        ref={setNodeRef}
-        className={cn(
-          "flex h-full min-h-[32rem] flex-col bg-zinc-50/70 transition-colors",
-          highlighted && "bg-zinc-100 ring-2 ring-inset ring-zinc-300"
-        )}
-      >
-        <div className="sticky top-0 z-10 border-b border-zinc-200 bg-zinc-50/95 px-3 py-3 backdrop-blur">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
-                <h2 className="truncate text-sm font-semibold text-zinc-950">{stage.name}</h2>
-                <span className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-xs font-medium text-zinc-600">
-                  {deals.length}
-                </span>
-              </div>
-              <div className="mt-1 text-xs text-zinc-600">
-                Сумма: <span className="font-semibold text-zinc-950">{formatMoney(total)}</span>
-              </div>
-            </div>
-          </div>
+    <section
+      ref={setNodeRef}
+      className={cn(
+        "flex h-full w-[300px] shrink-0 snap-start flex-col rounded-2xl bg-muted/30 transition-colors md:w-[clamp(300px,calc((100vw-20rem)/4),360px)]",
+        highlighted && "bg-muted/70 ring-2 ring-inset ring-border"
+      )}
+    >
+      <div className="flex shrink-0 items-baseline justify-between gap-3 px-3 pt-3 pb-2">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <h2 className="truncate text-sm font-semibold text-foreground">{stage.name}</h2>
+          <span className={cn("text-xs tabular-nums", deals.length ? "text-muted-foreground" : "text-muted-foreground/50")}>
+            {deals.length}
+          </span>
         </div>
-        <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto px-3 py-3">{children}</div>
+        <span className={cn("shrink-0 text-xs tabular-nums", total ? "text-muted-foreground" : "text-muted-foreground/50")}>
+          {formatMoney(total)}
+        </span>
       </div>
+      <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-2">{children}</div>
     </section>
   )
 }
@@ -636,7 +648,7 @@ function DraggableDealCard(props: {
   stages: DealStage[]
   onMoveToStage: (deal: Deal, stageId: number) => void
 }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useDraggable({
     id: dealDraggableId(props.deal.id),
     disabled: props.pending,
     data: {
@@ -645,6 +657,29 @@ function DraggableDealCard(props: {
       stageId: props.deal.stageId,
     },
   })
+
+  // Перетаскивание только за хэндл: сама карточка — ссылка, а колонка на планшете
+  // скроллится пальцем; touch-none на хэндле, чтобы браузер не перехватывал жест.
+  const dragHandle = (
+    <button
+      type="button"
+      ref={setActivatorNodeRef}
+      className={cn(
+        "flex size-8 touch-none items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/35 focus-visible:outline-none",
+        props.pending ? "cursor-not-allowed" : "cursor-grab active:cursor-grabbing"
+      )}
+      aria-label="Перетащить сделку"
+      disabled={props.pending}
+      onClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+      {...attributes}
+      {...listeners}
+    >
+      <GripVerticalIcon className="size-4" />
+    </button>
+  )
 
   const moveMenu = (
     <DealStageMenu
@@ -656,20 +691,23 @@ function DraggableDealCard(props: {
   )
 
   return (
-    <div
-      data-deal-card
-      ref={setNodeRef}
-      className={cn("touch-manipulation", props.pending ? "cursor-not-allowed" : "cursor-grab active:cursor-grabbing")}
-      {...attributes}
-      {...listeners}
-    >
+    <div data-deal-card ref={setNodeRef}>
       <a
         data-deal-card
         href={`/deals/${props.deal.id}`}
-        className="block rounded-lg focus-visible:ring-3 focus-visible:ring-zinc-300 focus-visible:outline-none"
-        onClickCapture={(event) => event.stopPropagation()}
+        className="block rounded-xl focus-visible:ring-3 focus-visible:ring-ring/35 focus-visible:outline-none"
       >
-        <DealCard deal={props.deal} pending={props.pending} isDragging={isDragging} headerAction={moveMenu} />
+        <DealCard
+          deal={props.deal}
+          pending={props.pending}
+          isDragging={isDragging}
+          headerAction={
+            <div className="flex items-center">
+              {moveMenu}
+              {dragHandle}
+            </div>
+          }
+        />
       </a>
     </div>
   )
@@ -699,6 +737,7 @@ function DealStageMenu({
           <Button
             variant="ghost"
             size="icon-sm"
+            className="size-8 text-muted-foreground/70 hover:text-foreground"
             disabled={pending}
             aria-label="Переместить сделку в другой этап"
           />
@@ -717,24 +756,26 @@ function DealStageMenu({
         onPointerDown={stopBubble}
         onClick={stopBubble}
       >
-        <DropdownMenuLabel>Переместить в…</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {otherStages.length ? (
-          otherStages.map((stage) => (
-            <DropdownMenuItem
-              key={stage.id}
-              onClick={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                onMoveToStage(deal, stage.id)
-              }}
-            >
-              {stage.name}
-            </DropdownMenuItem>
-          ))
-        ) : (
-          <DropdownMenuItem disabled>Других этапов нет</DropdownMenuItem>
-        )}
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Переместить в…</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {otherStages.length ? (
+            otherStages.map((stage) => (
+              <DropdownMenuItem
+                key={stage.id}
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  onMoveToStage(deal, stage.id)
+                }}
+              >
+                {stage.name}
+              </DropdownMenuItem>
+            ))
+          ) : (
+            <DropdownMenuItem disabled>Других этапов нет</DropdownMenuItem>
+          )}
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -761,45 +802,45 @@ function DealCard({
   return (
     <div
       className={cn(
-        "w-full rounded-lg border border-zinc-200 bg-white p-3 text-left text-sm shadow-xs transition-[border-color,box-shadow,opacity,transform] hover:border-zinc-300 hover:shadow-sm focus-visible:ring-3 focus-visible:ring-zinc-300 focus-visible:outline-none",
+        "w-full rounded-xl bg-background p-3 text-left text-sm shadow-xs transition-[box-shadow,opacity,transform] hover:shadow-sm",
         pending && !dragOverlay && "pointer-events-none opacity-60",
         isDragging && "scale-[0.99] opacity-45",
-        dragOverlay && "shadow-xl ring-2 ring-zinc-300",
-        due.level === "overdue" && "border-destructive/40"
+        dragOverlay && "shadow-xl ring-2 ring-border",
+        due.level === "overdue" && "ring-1 ring-destructive/30"
       )}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <DueDateBadge due={due} />
-        {headerAction ? <div className="-mr-1 -my-1 shrink-0">{headerAction}</div> : null}
+        {headerAction ? <div className="-my-1.5 -mr-1.5 shrink-0">{headerAction}</div> : null}
       </div>
 
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="truncate font-semibold text-zinc-950">{deal.title || deal.customerName || "Без названия"}</div>
-          <div className="mt-0.5 truncate text-xs text-zinc-500">
+          <div className="truncate font-semibold text-foreground">{deal.title || deal.customerName || "Без названия"}</div>
+          <div className="mt-0.5 truncate text-xs text-muted-foreground tabular-nums">
             {deal.number || `#${deal.id}`}
             {deal.customerName ? ` · ${deal.customerName}` : ""}
           </div>
         </div>
-        <span className="shrink-0 text-xs font-medium text-zinc-500">{sourceLabel(deal.source)}</span>
+        <span className="shrink-0 text-xs font-medium text-muted-foreground">{sourceLabel(deal.source)}</span>
       </div>
 
-      <div className="mt-3 grid gap-1.5 text-xs text-zinc-600">
+      <div className="mt-3 grid gap-1.5 text-xs text-muted-foreground">
         <div className="flex items-center justify-between gap-3">
           <span className="truncate">Ответственный</span>
-          <span className="truncate font-medium text-zinc-900">{deal.responsibleUserName || "Не назначен"}</span>
+          <span className="truncate font-medium text-foreground">{deal.responsibleUserName || "Не назначен"}</span>
         </div>
         <div className="flex items-center justify-between gap-3">
           <span className="truncate">Следующее действие</span>
-          <span className="truncate font-medium text-zinc-900">{nextAction}</span>
+          <span className="truncate font-medium text-foreground">{nextAction}</span>
         </div>
         <div className="flex items-center justify-between gap-3">
           <span className="truncate">Статус</span>
-          <span className="truncate font-medium text-zinc-900">{status}</span>
+          <span className="truncate font-medium text-foreground">{status}</span>
         </div>
       </div>
 
-      {note ? <div className="mt-3 line-clamp-2 border-t border-zinc-100 pt-2 text-xs text-zinc-600">{note}</div> : null}
+      {note ? <div className="mt-3 line-clamp-2 border-t border-border/40 pt-2 text-xs text-muted-foreground">{note}</div> : null}
     </div>
   )
 }
@@ -825,7 +866,7 @@ function DueDateBadge({ due }: { due: DueStatus }) {
 
   if (due.level === "soon") {
     return (
-      <Badge variant="outline" className="min-w-0 text-zinc-600">
+        <Badge variant="outline" className="min-w-0 text-muted-foreground">
         <CalendarClockIcon data-icon="inline-start" />
         <span className="truncate">{due.pillLabel}</span>
       </Badge>
@@ -833,27 +874,30 @@ function DueDateBadge({ due }: { due: DueStatus }) {
   }
 
   return (
-    <Badge variant="outline" className="min-w-0 border-dashed text-zinc-500">
+    <Badge variant="outline" className="min-w-0 bg-transparent text-muted-foreground/70">
       <CalendarClockIcon data-icon="inline-start" />
       <span className="truncate">{due.pillLabel}</span>
     </Badge>
   )
 }
 
-function responsibleFilterLabel(value: string, users: CurrentUser[]) {
-  if (value === allFilterValue) {
-    return "Все ответственные"
-  }
-
-  return users.find((user) => String(user.id) === value)?.name ?? "Ответственный"
-}
-
-function sourceFilterLabel(value: string) {
-  if (value === allFilterValue) {
-    return "Все источники"
-  }
-
-  return sourceLabel(value)
+// Поиск по доске: название, клиент, телефон(ы), номер, комментарий, адрес.
+function dealMatchesSearch(deal: Deal, query: string) {
+  return [
+    deal.title,
+    deal.customerName,
+    deal.customerPhone,
+    deal.recipientPhone,
+    deal.number,
+    String(deal.id),
+    deal.comment,
+    deal.address,
+    deal.responsibleUserName,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .includes(query)
 }
 
 function getDealIdFromDndId(id: unknown) {

@@ -1,8 +1,8 @@
 "use client"
 
-import { useMemo, useState, useTransition } from "react"
+import { useEffect, useMemo, useState, useTransition } from "react"
 import { AlertTriangleIcon, PencilIcon, PlusIcon, PowerIcon, Trash2Icon, UploadIcon } from "lucide-react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import { uploadImageFile } from "@/lib/image-upload"
 import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
@@ -17,7 +17,9 @@ import { cn, formatMoney } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { ScreenBody } from "@/components/screen-body"
+import { HeaderPrimaryAction, ScreenHeader } from "@/components/screen-header"
+import { SegmentedTabs } from "@/components/ui/segmented-tabs"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldSet, FieldLegend } from "@/components/ui/field"
@@ -25,7 +27,6 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { BouquetThumbnail } from "@/components/bouquets/bouquet-thumbnail"
 import { ProductCombobox } from "@/components/products/product-combobox"
@@ -49,6 +50,8 @@ export function BouquetsPage({
   const router = useRouter()
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editing, setEditing] = useState<BouquetTemplate | null>(null)
+  const [search, setSearch] = useState("")
+  const [view, setView] = useState<"active" | "inactive">("active")
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [price, setPrice] = useState(0)
@@ -60,8 +63,29 @@ export function BouquetsPage({
   const [imageVersion, setImageVersion] = useState(0)
   const [pending, startTransition] = useTransition()
   const productByCode = useMemo(() => new Map(products.map((product) => [product.code, product])), [products])
+  const normalizedSearch = search.trim().toLowerCase()
+  const matchesSearch = (bouquet: BouquetTemplate) =>
+    !normalizedSearch ||
+    [bouquet.name, bouquet.description, ...bouquet.items.map((item) => item.productName)]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedSearch)
   const activeBouquets = useMemo(() => bouquets.filter((bouquet) => bouquet.isActive), [bouquets])
   const inactiveBouquets = useMemo(() => bouquets.filter((bouquet) => !bouquet.isActive), [bouquets])
+  const visibleBouquets = (view === "active" ? activeBouquets : inactiveBouquets).filter(matchesSearch)
+
+  // Ссылка /bouquets?new=1 («+» на строке меню) открывает форму нового букета один раз и стирает флаг.
+  const searchParams = useSearchParams()
+  const newRequested = searchParams.get("new") === "1"
+  useEffect(() => {
+    if (newRequested) {
+      openCreate()
+      router.replace("/bouquets", { scroll: false })
+    }
+    // openCreate — стабильная по смыслу функция компонента; реагируем только на флаг.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newRequested])
   const draftAvailability = useMemo(() => getBouquetAvailability({ items }), [items])
 
   function openCreate() {
@@ -213,58 +237,48 @@ export function BouquetsPage({
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex justify-end">
-        <Button type="button" onClick={openCreate}>
-          <PlusIcon data-icon="inline-start" />
-          Новый букет
-        </Button>
-      </div>
+    <>
+      <ScreenHeader
+        title="Букеты"
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Поиск по названию, описанию или составу",
+          inputProps: { "aria-label": "Поиск букетов" },
+        }}
+        primaryAction={<HeaderPrimaryAction icon={PlusIcon} label="Новый букет" onClick={openCreate} />}
+        tabs={
+          <SegmentedTabs
+            aria-label="Букеты"
+            fill
+            value={view}
+            onValueChange={setView}
+            items={[
+              { value: "active", label: "Активные", count: activeBouquets.length },
+              { value: "inactive", label: "Неактивные", count: inactiveBouquets.length },
+            ]}
+          />
+        }
+      />
 
-      <Card className="rounded-2xl border bg-white">
-        <CardHeader className="pb-3">
-          <CardTitle>Список букетов</CardTitle>
-          <CardDescription>Букет хранит состав и цену, но не является складской позицией.</CardDescription>
-        </CardHeader>
-        <CardContent className="pt-0">
-          <Tabs defaultValue="active" className="gap-3">
-            <TabsList className="h-10 w-full justify-start rounded-xl bg-muted p-1 sm:w-fit">
-              <TabsTrigger value="active">
-                Активные
-                <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-200/80 px-1 text-[11px] font-medium tabular-nums text-zinc-700">
-                  {activeBouquets.length}
-                </span>
-              </TabsTrigger>
-              <TabsTrigger value="inactive">
-                Неактивные
-                <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-200/80 px-1 text-[11px] font-medium tabular-nums text-zinc-700">
-                  {inactiveBouquets.length}
-                </span>
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="active">
-              <BouquetsTable
-                bouquets={activeBouquets}
-                emptyTitle="Активных букетов пока нет"
-                emptyDescription="Включите существующий букет или создайте новый шаблон."
-                pending={pending}
-                onEdit={openEdit}
-                onToggleActive={toggleActive}
-              />
-            </TabsContent>
-            <TabsContent value="inactive">
-              <BouquetsTable
-                bouquets={inactiveBouquets}
-                emptyTitle="Неактивных букетов пока нет"
-                emptyDescription="Выключенные букеты будут появляться здесь."
-                pending={pending}
-                onEdit={openEdit}
-                onToggleActive={toggleActive}
-              />
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
+      <ScreenBody>
+        <BouquetsTable
+          bouquets={visibleBouquets}
+          emptyTitle={
+            normalizedSearch ? "Ничего не найдено" : view === "active" ? "Активных букетов пока нет" : "Неактивных букетов пока нет"
+          }
+          emptyDescription={
+            normalizedSearch
+              ? "Измените запрос или очистите поиск."
+              : view === "active"
+                ? "Букет хранит состав и цену, но не является складской позицией. Включите существующий букет или создайте новый шаблон."
+                : "Выключенные букеты будут появляться здесь."
+          }
+          pending={pending}
+          onEdit={openEdit}
+          onToggleActive={toggleActive}
+        />
+      </ScreenBody>
 
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
         <SheetContent className="w-full sm:max-w-4xl">
@@ -454,7 +468,7 @@ export function BouquetsPage({
           </form>
         </SheetContent>
       </Sheet>
-    </div>
+    </>
   )
 }
 
@@ -475,7 +489,7 @@ function BouquetsTable({
 }) {
   if (!bouquets.length) {
     return (
-      <Empty className="min-h-36 rounded-lg border py-6">
+      <Empty className="min-h-56">
         <EmptyHeader>
           <EmptyTitle>{emptyTitle}</EmptyTitle>
           <EmptyDescription>{emptyDescription}</EmptyDescription>
@@ -485,9 +499,9 @@ function BouquetsTable({
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <div className="overflow-x-auto">
       <Table className="min-w-[960px]">
-        <TableHeader>
+        <TableHeader className="sticky top-0 z-10 bg-background">
           <TableRow>
             <TableHead className="w-16">Фото</TableHead>
             <TableHead>Название</TableHead>

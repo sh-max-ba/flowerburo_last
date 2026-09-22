@@ -1,10 +1,12 @@
 "use client"
 
 import { useRouter } from "next/navigation"
-import { useEffect, useMemo, useState, useTransition } from "react"
+import { Fragment, useEffect, useMemo, useState, useTransition } from "react"
 import { SearchIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
+  addInventoryItemAction,
+  autosaveInventoryDraftAction,
   cancelInventoryAction,
   postInventoryAction,
   recalcInventoryExpectedAction,
@@ -15,9 +17,16 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { StockActProductPicker } from "@/components/stock/stock-act-product-picker"
 import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
-import type { StockDocument } from "@/lib/db"
+import type { Product, StockDocument } from "@/lib/db"
 import { stockDocumentStatusLabel, stockVarianceReasonLabel } from "@/lib/labels"
+
+const UNCATEGORIZED_LABEL = "Без категории"
+
+function categoryLabelOf(item: StockDocument["items"][number]) {
+  return (item.currentCategory ?? "").trim() || UNCATEGORIZED_LABEL
+}
 
 const REASONS = ["spoilage", "shrinkage", "admin_error", "other"] as const
 
@@ -36,7 +45,29 @@ function formatDateTime(value: string | null) {
 
 type RowState = { counted: string; reason: string }
 
-export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
+// Нормализуем ввод факта: запятая → точка (рус. раскладка), оставляем только цифры и одну точку.
+// Поле факта — type="text", а не number: иначе колесо мыши и стрелки меняют уже введённое число при
+// прокрутке длинного списка (частая причина жалобы «цифры поменялись сами при переходе на другое поле»).
+function sanitizeCount(value: string): string {
+  const normalized = value.replace(/,/g, ".").replace(/[^\d.]/g, "")
+  const dot = normalized.indexOf(".")
+  if (dot === -1) return normalized
+  return normalized.slice(0, dot + 1) + normalized.slice(dot + 1).replace(/\./g, "")
+}
+
+function isCountValid(raw: string): boolean {
+  const trimmed = raw.trim()
+  if (trimmed === "") return true
+  const n = Number(trimmed)
+  return Number.isFinite(n) && n >= 0
+}
+
+// Сигнатура строки для сравнения с уже сохранённым на сервере (счёт по тримленному факту + причине).
+function rowSignature(row: RowState | undefined): string {
+  return `${(row?.counted ?? "").trim()}|${row?.reason ?? ""}`
+}
+
+export function InventoryDetailClient({ doc, products }: { doc: StockDocument; products: Product[] }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
   const isDraft = doc.status === "draft"
@@ -61,6 +92,21 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
     setRows((current) => ({ ...current, [id]: { ...current[id], ...patch } }))
   }
 
+  // Тихий автосейв факта на сервер (без ревалидации страницы). syncState — для индикатора, autosavedSig —
+  // снимок того, что уже доехало до сервера (сверяемся с ним, а не с props doc.items: автосейв их не
+  // обновляет намеренно). Изначально — серверные значения.
+  const [syncState, setSyncState] = useState<"saving" | "saved" | "error" | null>(null)
+  const [autosavedSig, setAutosavedSig] = useState<Record<number, string>>(() => {
+    const init: Record<number, string> = {}
+    for (const item of doc.items) {
+      init[item.id] = rowSignature({
+        counted: item.countedQty == null ? "" : String(item.countedQty),
+        reason: item.varianceReason ?? "",
+      })
+    }
+    return init
+  })
+
   const [query, setQuery] = useState("")
   const [filter, setFilter] = useState<"all" | "uncounted" | "variance" | "counted">("all")
 
@@ -81,6 +127,56 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
       return item.applied && item.qty !== 0
     })
   }, [doc.items, query, filter, isDraft])
+
+  // Группировка видимых позиций по категории: внутри группы — по названию, группы — по алфавиту
+  // (ru), «Без категории» в конце. Перед каждой группой рисуем строку-заголовок.
+  const groups = useMemo(() => {
+    const map = new Map<string, StockDocument["items"]>()
+    for (const item of visibleItems) {
+      const label = categoryLabelOf(item)
+      const bucket = map.get(label)
+      if (bucket) {
+        bucket.push(item)
+      } else {
+        map.set(label, [item])
+      }
+    }
+    return Array.from(map.entries())
+      .map(([label, items]) => ({
+        label,
+        items: [...items].sort((a, b) =>
+          (a.productName || a.productCode).localeCompare(b.productName || b.productCode, "ru")
+        ),
+      }))
+      .sort((a, b) => {
+        if (a.label === UNCATEGORIZED_LABEL) return 1
+        if (b.label === UNCATEGORIZED_LABEL) return -1
+        return a.label.localeCompare(b.label, "ru")
+      })
+  }, [visibleItems])
+
+  // Товары для добавления «по надобности»: активные, ещё не входящие в документ (пикер сам ищет
+  // только активные; дубль также отсекается на сервере).
+  const presentCodes = useMemo(() => new Set(doc.items.map((item) => item.productCode)), [doc.items])
+  const addableProducts = useMemo(
+    () => products.filter((product) => !presentCodes.has(product.code)),
+    [products, presentCodes]
+  )
+
+  function addProduct(product: Product) {
+    const formData = new FormData()
+    formData.set("documentId", String(doc.id))
+    formData.set("productCode", product.code)
+    startTransition(async () => {
+      const result = await addInventoryItemAction(formData)
+      if (result.ok) {
+        toast.success(`«${product.name}» добавлен в список`)
+        router.refresh()
+      } else {
+        toast.error(result.message)
+      }
+    })
+  }
 
   // Быстрое «факт = расчётному» для одной строки. Для отрицательного учётного остатка кнопка
   // отключена (см. рендер): физический факт не бывает отрицательным, сервер такой ввод отклонит.
@@ -202,13 +298,68 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
     }
   }, [rows, doc.items, isDraft, storageKey])
 
+  // Строки, отличающиеся от уже сохранённого на сервере (для индикатора «несохранённые»).
+  const dirtyVsServerCount = useMemo(() => {
+    if (!isDraft) return 0
+    return doc.items.filter((item) => rowSignature(rows[item.id]) !== (autosavedSig[item.id] ?? "|")).length
+  }, [isDraft, doc.items, rows, autosavedSig])
+
+  // Из них — те, что валидны и готовы к тихой отправке (транзиентный «.»/незаконченный ввод не шлём,
+  // иначе автосейв зациклится: снимок не обновится, строка останется «грязной»).
+  const autosaveIds = useMemo(() => {
+    if (!isDraft) return [] as number[]
+    return doc.items
+      .filter(
+        (item) =>
+          rowSignature(rows[item.id]) !== (autosavedSig[item.id] ?? "|") && isCountValid(rows[item.id]?.counted ?? "")
+      )
+      .map((item) => item.id)
+  }, [isDraft, doc.items, rows, autosavedSig])
+
+  // Дебаунс-автосейв: 1.5с после последнего ввода шлём «грязные» валидные строки на сервер БЕЗ
+  // ревалидации (страница не дёргается, фокус/значения не сбрасываются). Снимок обновляем только на
+  // успех. Во время ручного действия (pending) автосейв молчит, чтобы не гонять параллельные записи.
+  useEffect(() => {
+    if (!isDraft || pending || autosaveIds.length === 0) return
+    const ids = autosaveIds
+    const snapshot = rows
+    const timer = setTimeout(() => {
+      const formData = new FormData()
+      formData.set("documentId", String(doc.id))
+      for (const id of ids) {
+        formData.append("itemId", String(id))
+        formData.append("countedQty", snapshot[id]?.counted ?? "")
+        formData.append("varianceReason", snapshot[id]?.reason ?? "")
+      }
+      setSyncState("saving")
+      autosaveInventoryDraftAction(formData)
+        .then((result) => {
+          if (result.ok) {
+            setAutosavedSig((current) => {
+              const next = { ...current }
+              for (const id of ids) next[id] = rowSignature(snapshot[id])
+              return next
+            })
+            setSyncState("saved")
+          } else {
+            setSyncState("error")
+          }
+        })
+        .catch(() => setSyncState("error"))
+    }, 1500)
+    return () => clearTimeout(timer)
+  }, [autosaveIds, rows, isDraft, pending, doc.id])
+
   // Проверка до отправки: сервер откатывает сохранение целиком, поэтому называем виновную строку сразу.
   function findInvalidRow(): string | null {
     for (const item of doc.items) {
       const raw = rows[item.id]?.counted ?? ""
       if (raw.trim() === "") continue
       const value = Number(raw)
-      if (!Number.isFinite(value) || value < 0) {
+      if (!Number.isFinite(value)) {
+        return `«${item.productName || item.productCode}»: в поле «Факт» некорректное число.`
+      }
+      if (value < 0) {
         return `«${item.productName || item.productCode}»: фактическое количество не может быть отрицательным.`
       }
     }
@@ -238,6 +389,13 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
       const result = await saveInventoryDraftAction(buildSaveFormData())
       if (result.ok) {
         toast.success(result.message)
+        // Весь текущий ввод ушёл на сервер — синхронизируем снимок автосейва, чтобы он не пересохранял.
+        setAutosavedSig(() => {
+          const snap: Record<number, string> = {}
+          for (const item of doc.items) snap[item.id] = rowSignature(rows[item.id])
+          return snap
+        })
+        setSyncState("saved")
         router.refresh()
       } else {
         toast.error(result.message)
@@ -280,9 +438,12 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
     })
   }
 
+  // Число колонок таблицы (для colSpan заголовков категорий и пустой строки).
+  const colSpan = isDraft ? 6 : 7
+
   return (
     <div className="flex flex-col gap-4">
-      <Card className="rounded-2xl border bg-white">
+      <Card className="rounded-2xl">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -311,9 +472,25 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border bg-white">
+      <Card className="rounded-2xl">
         <CardContent>
           <div className="mb-4 flex flex-col gap-3">
+            {isDraft && (
+              <div className="flex flex-col gap-2 rounded-lg border bg-muted/20 p-3 sm:flex-row sm:items-center sm:gap-3">
+                <span className="shrink-0 text-sm font-medium">Добавить товар</span>
+                <div className="w-full sm:max-w-md">
+                  <StockActProductPicker
+                    products={addableProducts}
+                    disabled={pending}
+                    placeholder="Найти товар из любой категории и добавить"
+                    onSelect={addProduct}
+                  />
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  Можно добавить позицию из категории, не вошедшей в охват.
+                </span>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative w-full sm:max-w-xs">
                 <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -380,14 +557,25 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
             <TableBody>
               {visibleItems.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={colSpan} className="py-8 text-center text-muted-foreground">
                     Ничего не найдено
                   </TableCell>
                 </TableRow>
               )}
-              {visibleItems.map((item) => {
-                const expected = item.expectedQty ?? 0
-                if (isDraft) {
+              {groups.map((group) => (
+                <Fragment key={group.label}>
+                  <TableRow className="bg-muted/50 hover:bg-muted/50">
+                    <TableCell
+                      colSpan={colSpan}
+                      className="py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    >
+                      {group.label}
+                      <span className="ml-2 font-normal normal-case">· {group.items.length}</span>
+                    </TableCell>
+                  </TableRow>
+                  {group.items.map((item) => {
+                    const expected = item.expectedQty ?? 0
+                    if (isDraft) {
                   const row = rows[item.id] ?? { counted: "", reason: "" }
                   const hasFact = row.counted.trim() !== ""
                   const diff = hasFact ? Number(row.counted) - expected : null
@@ -399,12 +587,11 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Input
-                            type="number"
-                            min={0}
-                            step={1}
+                            type="text"
+                            inputMode="decimal"
                             value={row.counted}
-                            onChange={(event) => setRow(item.id, { counted: event.target.value })}
-                            className="h-8 w-20 text-right"
+                            onChange={(event) => setRow(item.id, { counted: sanitizeCount(event.target.value) })}
+                            className="h-8 w-20 text-right tabular-nums"
                             disabled={pending}
                           />
                           <Button
@@ -465,7 +652,9 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
                     <TableCell>{item.varianceReason ? stockVarianceReasonLabel(item.varianceReason) : "—"}</TableCell>
                   </TableRow>
                 )
-              })}
+                  })}
+                </Fragment>
+              ))}
             </TableBody>
           </Table>
         </CardContent>
@@ -501,6 +690,26 @@ export function InventoryDetailClient({ doc }: { doc: StockDocument }) {
           >
             Отменить
           </Button>
+          <span
+            className={`ml-auto text-xs ${
+              syncState === "error"
+                ? "text-red-600"
+                : syncState === "saving" || dirtyVsServerCount > 0
+                  ? "text-amber-600"
+                  : "text-emerald-600"
+            }`}
+            aria-live="polite"
+          >
+            {syncState === "saving"
+              ? "Автосохранение…"
+              : syncState === "error"
+                ? "Не сохранено — нажмите «Сохранить»"
+                : dirtyVsServerCount > 0
+                  ? `Несохранённых изменений: ${dirtyVsServerCount}`
+                  : syncState === "saved"
+                    ? "Все изменения сохранены"
+                    : ""}
+          </span>
         </div>
       )}
     </div>

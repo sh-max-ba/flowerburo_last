@@ -4,6 +4,7 @@ import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { StockDocumentActions } from "@/components/stock/stock-document-actions"
 import { CreateStockCorrectionButton } from "@/components/stock/create-stock-correction-button"
+import { StockDocumentStatusBadge } from "@/components/stock/document-badges"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,10 +13,9 @@ import { formatMoney } from "@/lib/utils"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
-import { getStockDocument, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
+import { getDraftCorrectionId, getStockDocument, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
 import {
   allocationMethodLabel,
-  stockDocumentStatusLabel,
   stockDocumentTypeLabel,
   stockOverheadKindLabel,
 } from "@/lib/labels"
@@ -40,6 +40,12 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
   }
   const quantityHeaders = stockDocumentQuantityHeaders(document.status)
   const isStockIn = document.type === "stock_in"
+  // Уже начатая корректировка этого акта: кнопка «Редактировать» ведёт в неё, а не создаёт вторую.
+  const draftCorrectionId =
+    document.status === "posted" && document.type !== "count" ? getDraftCorrectionId(document.id) : null
+  // Для черновика корректировки предпросмотр «Сейчас/Ожидается» считает от остатка с учётом отката
+  // исходного акта — именно так проведение и пересчитает склад.
+  const revertDeltas = getCorrectionRevertDeltas(document)
 
   return (
     <CrmShell
@@ -55,7 +61,7 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
         </Link>
       </div>
 
-        <Card className="rounded-2xl border bg-white">
+        <Card className="rounded-2xl">
           <CardHeader>
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
@@ -87,33 +93,46 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
               <Link href={`/stock/acts/${document.correctsDocumentId}`} className="font-medium underline">
                 исходного акта
               </Link>
-              . Проведение откатит исходный приход и применит исправленные позиции.
+              . Проведение откатит {isStockIn ? "исходный приход" : "исходное списание"} и применит
+              исправленные позиции.
             </CardContent>
           </Card>
         )}
 
-        {document.status === "posted" && isStockIn && document.correctedByDocumentId == null && (
-          <Card className="rounded-2xl border bg-white">
+        {document.status === "posted" && document.type !== "count" && document.correctedByDocumentId == null && (
+          <Card className="rounded-2xl">
             <CardContent className="flex flex-col items-start gap-3 pt-6">
               <p className="text-sm text-muted-foreground">
-                Проведённый акт нельзя редактировать. Создайте корректировку — она откатит этот приход и
-                применит исправленные позиции. Себестоимость при корректировке не пересчитывается автоматически.
+                Изменения проведённого акта оформляются корректировкой: она откатит{" "}
+                {isStockIn ? "этот приход" : "это списание"} и применит исправленные позиции, а исходный акт
+                останется в истории со статусом «Скорректирован».
+                {isStockIn ? " Себестоимость при корректировке не пересчитывается автоматически." : ""}
               </p>
-              <CreateStockCorrectionButton documentId={document.id} />
+              {draftCorrectionId != null ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Link href={`/stock/acts/${draftCorrectionId}/edit`} className={buttonVariants()}>
+                    Продолжить редактирование
+                  </Link>
+                  <span className="text-xs text-muted-foreground">Черновик корректировки уже создан.</span>
+                </div>
+              ) : (
+                <CreateStockCorrectionButton documentId={document.id} />
+              )}
             </CardContent>
           </Card>
         )}
 
-        {document.status === "posted" && !isStockIn && (
-          <Card className="rounded-2xl border bg-white">
+        {document.status === "posted" && document.type === "count" && (
+          <Card className="rounded-2xl">
             <CardContent className="pt-6 text-sm text-muted-foreground">
-              Проведенный акт нельзя редактировать. Для исправления создайте обратный акт.
+              Проведённую инвентаризацию нельзя редактировать. Если остатки посчитаны неверно — проведите
+              новую инвентаризацию.
             </CardContent>
           </Card>
         )}
 
         {document.status === "corrected" && (
-          <Card className="rounded-2xl border bg-white">
+          <Card className="rounded-2xl">
             <CardContent className="pt-6 text-sm text-muted-foreground">
               Акт скорректирован.
               {document.correctedByDocumentId != null && (
@@ -150,7 +169,7 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
           </div>
         )}
 
-        <Card className="rounded-2xl border bg-white">
+        <Card className="rounded-2xl">
           <CardHeader>
             <CardTitle>Позиции</CardTitle>
             <CardDescription>{stockDocumentItemsDescription(document.status)}</CardDescription>
@@ -171,7 +190,7 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
                 </TableHeader>
                 <TableBody>
                   {document.items.map((item) => {
-                    const row = stockDocumentItemDisplay(document, item)
+                    const row = stockDocumentItemDisplay(document, item, revertDeltas.get(item.productCode) ?? 0)
 
                     return (
                       <TableRow key={item.id}>
@@ -179,7 +198,12 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
                           <div className="font-medium">{item.productName}</div>
                           <div className="text-xs text-muted-foreground">{item.productCode}</div>
                         </TableCell>
-                        <TableCell>{formatNumber(item.qty)}</TableCell>
+                        <TableCell>
+                          {formatNumber(item.qty)}
+                          {isStockIn && item.defectQty > 0 && (
+                            <div className="text-xs text-amber-700">брак: {formatNumber(item.defectQty)}</div>
+                          )}
+                        </TableCell>
                         {isStockIn && (
                           <TableCell>
                             {item.unitCost > 0 ? formatMoney(item.unitCost) : "—"}
@@ -188,9 +212,15 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
                                 + накл.: {formatMoney(item.allocatedOverhead)}
                               </div>
                             )}
+                            {/* Себестоимость единицы годного (с браком и накладными) — если отличается от цены. */}
+                            {item.landedUnitCost != null && formatMoney(item.landedUnitCost) !== formatMoney(item.unitCost) && (
+                              <div className="text-xs font-medium text-amber-700">
+                                себест. ед.: {formatMoney(item.landedUnitCost)}
+                              </div>
+                            )}
                             {item.costAfter != null && (
                               <div className="text-xs text-muted-foreground">
-                                себест.: {formatMoney(item.costAfter)}
+                                себест. остатка: {formatMoney(item.costAfter)}
                               </div>
                             )}
                           </TableCell>
@@ -218,7 +248,7 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
         </Card>
 
         {isStockIn && document.overheadTotal > 0 && (
-          <Card className="rounded-2xl border bg-white">
+          <Card className="rounded-2xl">
             <CardHeader>
               <CardTitle>Накладные расходы</CardTitle>
               <CardDescription>Распределение: {allocationMethodLabel(document.allocationMethod)}</CardDescription>
@@ -252,6 +282,40 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
             </CardContent>
           </Card>
         )}
+
+        {isStockIn && (
+          <Card className="rounded-2xl">
+            <CardHeader>
+              <CardTitle>Расчёты с поставщиком</CardTitle>
+              <CardDescription>
+                Долг считается только по проведённому приходу: стоимость товаров минус оплаченное.
+                Накладные расходы в долг не входят.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col gap-1 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Стоимость товаров</span>
+                  <span className="tabular-nums">{formatMoney(document.goodsTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Оплачено поставщику</span>
+                  <span className="tabular-nums">{formatMoney(document.paidAmount)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Сумма доставки</span>
+                  <span className="tabular-nums">{formatMoney(document.deliveryTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between border-t pt-2 font-semibold">
+                  <span>Долг поставщику</span>
+                  <span className={document.supplierDebt > 0 ? "tabular-nums text-orange-600" : "tabular-nums"}>
+                    {formatMoney(document.supplierDebt)}
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
     </CrmShell>
   )
 }
@@ -262,6 +326,26 @@ function getStockDocumentOrNull(documentId: number) {
   } catch {
     return null
   }
+}
+
+// Дельта отката исходного акта по товарам (для черновика корректировки): приход заносил годное
+// (qty − брак) → откат его снимет; списание уводило qty → откат вернёт. Пустая карта — не корректировка
+// или исходный уже не проведён (тогда и проведение не пройдёт, показываем без поправки).
+function getCorrectionRevertDeltas(document: ReturnType<typeof getStockDocument>): Map<string, number> {
+  const deltas = new Map<string, number>()
+  if (document.status !== "draft" || document.correctsDocumentId == null) {
+    return deltas
+  }
+  const original = getStockDocumentOrNull(document.correctsDocumentId)
+  if (!original || original.status !== "posted") {
+    return deltas
+  }
+  for (const item of original.items) {
+    const delta = original.type === "stock_in" ? -(item.qty - item.defectQty) : item.qty
+    deltas.set(item.productCode, (deltas.get(item.productCode) ?? 0) + delta)
+  }
+
+  return deltas
 }
 
 function stockDocumentOperationDateLabel(type: StockDocumentType) {
@@ -276,6 +360,10 @@ function stockDocumentItemsDescription(status: StockDocumentStatus) {
     return "Остатки зафиксированы на момент проведения акта."
   }
 
+  if (status === "corrected") {
+    return "Остатки зафиксированы на момент проведения. Акт скорректирован — действующие позиции смотрите в корректировке."
+  }
+
   if (status === "cancelled") {
     return "Акт отменен, склад не менялся. Значения рассчитаны по текущему остатку."
   }
@@ -284,7 +372,7 @@ function stockDocumentItemsDescription(status: StockDocumentStatus) {
 }
 
 function stockDocumentQuantityHeaders(status: StockDocumentStatus) {
-  if (status === "posted") {
+  if (status === "posted" || status === "corrected") {
     return { before: "Было", after: "Стало" }
   }
 
@@ -293,13 +381,22 @@ function stockDocumentQuantityHeaders(status: StockDocumentStatus) {
 
 function stockDocumentItemDisplay(
   document: ReturnType<typeof getStockDocument>,
-  item: ReturnType<typeof getStockDocument>["items"][number]
+  item: ReturnType<typeof getStockDocument>["items"][number],
+  revertDelta = 0
 ) {
   // У инвентаризации qty — УЖЕ подписанная дельта проведения (+излишек/−недостача),
   // негирование переворачивало знак: излишек +3 показывался красным «−3».
-  const delta = document.type === "stock_in" || document.type === "count" ? item.qty : -item.qty
+  // Приход: на склад заходит только годное (qty − брак) — дельта без брака.
+  const delta =
+    document.type === "stock_in"
+      ? item.qty - (item.defectQty > 0 ? item.defectQty : 0)
+      : document.type === "count"
+        ? item.qty
+        : -item.qty
 
-  if (document.status === "posted") {
+  // Скорректированный акт был проведён — показываем его зафиксированные снимки, а не «предпросмотр»
+  // от текущего остатка (тот пугал бы ложным «Будет минус» на историческом документе).
+  if (document.status === "posted" || document.status === "corrected") {
     return {
       delta,
       before: formatPostedNumber(item.beforeStock),
@@ -309,7 +406,7 @@ function stockDocumentItemDisplay(
     }
   }
 
-  const currentStock = item.currentStock
+  const currentStock = item.currentStock === null ? null : item.currentStock + revertDelta
   const expectedAfterStock = currentStock === null ? null : currentStock + delta
   const willBeNegative = document.type === "stock_out" && expectedAfterStock !== null && expectedAfterStock < 0
 
@@ -333,23 +430,6 @@ function DeltaBadge({ value }: { value: number }) {
   return (
     <Badge variant="outline" className={className}>
       {value > 0 ? `+${formatNumber(value)}` : formatNumber(value)}
-    </Badge>
-  )
-}
-
-function StockDocumentStatusBadge({ status }: { status: StockDocumentStatus }) {
-  const className =
-    status === "posted"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-50"
-      : status === "draft"
-        ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-50"
-        : status === "corrected"
-          ? "border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-50"
-          : ""
-
-  return (
-    <Badge variant={status === "cancelled" ? "destructive" : "outline"} className={className}>
-      {stockDocumentStatusLabel(status)}
     </Badge>
   )
 }

@@ -22,6 +22,8 @@ export default async function Page() {
       title="Букеты"
       shiftContext={buildShiftShellContext(user, data)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
+      layout="fill"
     >
       <BouquetsPage products={data.products} bouquets={data.bouquetTemplates} />
     </CrmShell>

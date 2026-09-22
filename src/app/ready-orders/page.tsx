@@ -30,6 +30,8 @@ export default async function Page() {
       title="Готовые заказы"
       shiftContext={buildShiftShellContext(user, data)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
+      layout="fill"
     >
       <ReadyOrdersPage orders={data.orders} openShift={data.stats.openShift} paymentsByOrder={paymentsByOrder} />
     </CrmShell>

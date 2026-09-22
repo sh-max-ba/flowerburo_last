@@ -18,9 +18,11 @@ export default async function Page() {
   }
 
   const data = getDashboardData()
-  // Черновики живут на /orders/drafts (owner/manager); здесь — только счётчик для бейджа-ссылки.
-  const canManageDrafts = user.role === "owner" || user.role === "manager"
-  const draftsCount = canManageDrafts ? countOrderDrafts() : 0
+  // Счётчики вкладок раздела: заказы в работе / черновики (черновики видят все роли).
+  const workOrdersCount = data.orders.filter((order) =>
+    order.status === "Новый" || order.status === "В работе" || order.status === "Готов"
+  ).length
+  const draftsCount = countOrderDrafts()
 
   return (
     <CrmShell
@@ -30,14 +32,16 @@ export default async function Page() {
       shiftContext={buildShiftShellContext(user, data)}
       canAccessCash={canAccessCash}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
+      layout="fill"
+      subnavCounts={{ orders: workOrdersCount, "order-drafts": draftsCount }}
     >
       <OrdersPage
         orders={data.orders}
         products={data.products}
         bouquets={data.bouquetTemplates}
         hasOpenShift={Boolean(data.stats.openShift)}
-        draftsCount={draftsCount}
-        canManageDrafts={canManageDrafts}
+        canCreateOrder={canAccessSection("sales", user.role, canAccessCash)}
       />
     </CrmShell>
   )

@@ -6,24 +6,22 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
 import {
-  AlertTriangleIcon,
-  ArrowDownIcon,
-  ArrowUpDownIcon,
-  ExternalLinkIcon,
   AtSignIcon,
+  ChevronRightIcon,
+  FunnelIcon,
   PhoneIcon,
   PlusIcon,
-  SearchIcon,
-  XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import { createCustomerAction } from "@/app/actions"
+import { useUrlFlagDialog } from "@/hooks/use-url-flag"
 import type { Customer } from "@/lib/crm"
 import { sourceLabel, sourceOptions } from "@/lib/labels"
 import { cn } from "@/lib/utils"
+import { DataView, type DataViewColumn } from "@/components/data-view"
+import { ScreenBody } from "@/components/screen-body"
+import { HeaderFilter, HeaderPrimaryAction, ScreenHeader } from "@/components/screen-header"
 import { Button, buttonVariants } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -42,7 +40,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
@@ -51,13 +48,9 @@ type ActionResult = Awaited<ReturnType<typeof createCustomerAction>>
 const LIST_LIMIT = 200
 const NO_SOURCE = "__all__"
 
-type SortKey = "recent" | "name" | "activity" | "discount"
-
-const sortOptions: Array<{ value: SortKey; label: string }> = [
-  { value: "recent", label: "Сначала новые" },
-  { value: "name", label: "По имени" },
-  { value: "activity", label: "По активности" },
-  { value: "discount", label: "По скидке" },
+const sourceFilterOptions = [
+  { value: NO_SOURCE, label: "Все источники" },
+  ...sourceOptions.map((option) => ({ value: option.value, label: option.label })),
 ]
 
 export function CustomersPage({
@@ -68,7 +61,8 @@ export function CustomersPage({
   search: string
 }) {
   const router = useRouter()
-  const [dialogOpen, setDialogOpen] = useState(false)
+  // Диалог открывается кнопкой в шапке и ссылкой /clients?new=1 («+» на строке меню).
+  const [dialogOpen, setDialogOpen] = useUrlFlagDialog("new")
   const [pending, startTransition] = useTransition()
 
   // Search is server-driven (the page reads ?search=). We mirror it locally for the
@@ -76,9 +70,8 @@ export function CustomersPage({
   const [searchInput, setSearchInput] = useState(search)
   const [searchPending, startSearchTransition] = useTransition()
 
-  // Filter/sort run fully client-side over the already-fetched rows.
+  // Фильтр по источнику — клиентский, поверх уже загруженных строк; сортировка — в таблице.
   const [sourceFilter, setSourceFilter] = useState<string>(NO_SOURCE)
-  const [sortKey, setSortKey] = useState<SortKey>("recent")
 
   // Keep the input in sync if the server search changes (e.g. browser navigation).
   // Render-time adjustment instead of an effect (avoids a cascading re-render).
@@ -102,30 +95,13 @@ export function CustomersPage({
     return () => clearTimeout(handle)
   }, [searchInput, search, router])
 
-  const visibleCustomers = useMemo(() => {
-    const filtered =
+  const visibleCustomers = useMemo(
+    () =>
       sourceFilter === NO_SOURCE
         ? customers
-        : customers.filter((customer) => customer.source === sourceFilter)
-
-    const sorted = [...filtered]
-    switch (sortKey) {
-      case "name":
-        sorted.sort((a, b) => a.name.localeCompare(b.name, "ru"))
-        break
-      case "activity":
-        sorted.sort((a, b) => activityScore(b) - activityScore(a))
-        break
-      case "discount":
-        sorted.sort((a, b) => b.defaultDiscountPercent - a.defaultDiscountPercent)
-        break
-      case "recent":
-      default:
-        // Already created_at DESC from the server.
-        break
-    }
-    return sorted
-  }, [customers, sourceFilter, sortKey])
+        : customers.filter((customer) => customer.source === sourceFilter),
+    [customers, sourceFilter]
+  )
 
   const isCapped = customers.length >= LIST_LIMIT
   const isFiltered = sourceFilter !== NO_SOURCE
@@ -134,13 +110,6 @@ export function CustomersPage({
     : isCapped
       ? `показано ${visibleCustomers.length} из ${LIST_LIMIT}+`
       : `${visibleCustomers.length} в списке`
-
-  function clearSearch() {
-    setSearchInput("")
-    startSearchTransition(() => {
-      router.push("/clients")
-    })
-  }
 
   function submitCustomer(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -163,126 +132,41 @@ export function CustomersPage({
 
   return (
     <>
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center">
-          <div className="relative max-w-md flex-1">
-            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              name="search"
-              value={searchInput}
-              onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Поиск по имени или телефону"
-              className="h-10 pl-9 pr-9"
-              aria-label="Поиск клиентов"
-            />
-            {searchInput ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={clearSearch}
-                className="absolute right-1 top-1/2 size-7 -translate-y-1/2 text-muted-foreground"
-              >
-                <XIcon className="size-4" />
-                <span className="sr-only">Очистить поиск</span>
-              </Button>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-2">
-            <Select value={sourceFilter} onValueChange={(value) => setSourceFilter(value ?? NO_SOURCE)}>
-              <SelectTrigger className="h-10 w-[150px]" aria-label="Фильтр по источнику">
-                <SelectValue placeholder="Источник">{(value) => (value === NO_SOURCE ? "Все источники" : sourceLabel(String(value ?? "")))}</SelectValue>
-              </SelectTrigger>
-              <SelectContent align="start">
-                <SelectGroup>
-                  <SelectItem value={NO_SOURCE}>Все источники</SelectItem>
-                  {sourceOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Select value={sortKey} onValueChange={(value) => setSortKey((value ?? "recent") as SortKey)}>
-              <SelectTrigger className="h-10 w-[160px]" aria-label="Сортировка">
-                <SelectValue placeholder="Сортировка">{(value) => sortOptions.find((o) => o.value === value)?.label ?? "Сортировка"}</SelectValue>
-              </SelectTrigger>
-              <SelectContent align="start">
-                <SelectGroup>
-                  {sortOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={searchPending ? "secondary" : "outline"}>
-            {searchPending ? "Поиск…" : countLabel}
-          </Badge>
-          <Button className="h-10" onClick={() => setDialogOpen(true)}>
-            <PlusIcon data-icon="inline-start" />
-            Новый клиент
-          </Button>
-        </div>
-      </div>
+      <ScreenHeader
+        title="Клиенты"
+        search={{
+          value: searchInput,
+          onChange: setSearchInput,
+          placeholder: "Поиск по имени или телефону",
+          pending: searchPending,
+          inputProps: { "aria-label": "Поиск клиентов" },
+        }}
+        meta={countLabel}
+        actions={
+          <HeaderFilter
+            icon={FunnelIcon}
+            label="Источник"
+            value={sourceFilter}
+            allValue={NO_SOURCE}
+            options={sourceFilterOptions}
+            onValueChange={setSourceFilter}
+          />
+        }
+        primaryAction={
+          <HeaderPrimaryAction icon={PlusIcon} label="Новый клиент" onClick={() => setDialogOpen(true)} />
+        }
+        tabs={null}
+      />
 
-      {isCapped && !search ? (
-        <p className="text-xs text-muted-foreground">
-          Показаны первые {LIST_LIMIT} клиентов. Чтобы найти остальных, уточните поиск по имени или телефону.
-        </p>
-      ) : null}
-
-      <Card className="rounded-2xl border-zinc-200 bg-white">
-        <CardContent className="px-2 py-1 sm:px-4 sm:py-2">
-          {visibleCustomers.length ? (
-            <>
-              {/* Desktop / tablet wide: table */}
-              <div className="hidden overflow-x-auto md:block">
-                <Table className="min-w-[820px]">
-                  <TableHeader>
-                    <TableRow>
-                      <SortableHead label="Имя" active={sortKey === "name"} onClick={() => setSortKey("name")} />
-                      <TableHead>Телефон</TableHead>
-                      <SortableHead
-                        label="Скидка"
-                        active={sortKey === "discount"}
-                        onClick={() => setSortKey("discount")}
-                      />
-                      <SortableHead
-                        label="Активность"
-                        active={sortKey === "activity"}
-                        onClick={() => setSortKey("activity")}
-                      />
-                      <TableHead>Источник</TableHead>
-                      <SortableHead
-                        label="Создан"
-                        active={sortKey === "recent"}
-                        onClick={() => setSortKey("recent")}
-                      />
-                      <TableHead className="text-right">Связь</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {visibleCustomers.map((customer) => (
-                      <CustomerRow key={customer.id} customer={customer} router={router} />
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {/* Narrow: card list */}
-              <div className="flex flex-col divide-y divide-zinc-200 md:hidden">
-                {visibleCustomers.map((customer) => (
-                  <CustomerCardRow key={customer.id} customer={customer} />
-                ))}
-              </div>
-            </>
-          ) : (
+      <ScreenBody>
+        <DataView
+          rows={visibleCustomers}
+          columns={customerColumns}
+          getRowKey={(customer) => customer.id}
+          onRowSelect={(customer) => router.push(`/clients/${customer.id}`)}
+          rowActions={(customer) => <CustomerRowActions customer={customer} />}
+          renderCard={(customer) => <CustomerCardRow customer={customer} />}
+          empty={
             <Empty className="min-h-56">
               <EmptyHeader>
                 <EmptyTitle>Клиенты не найдены</EmptyTitle>
@@ -293,9 +177,14 @@ export function CustomersPage({
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
-          )}
-        </CardContent>
-      </Card>
+          }
+        />
+        {isCapped && !search ? (
+          <p className="px-4 py-3 text-xs text-muted-foreground">
+            Показаны первые {LIST_LIMIT} клиентов. Чтобы найти остальных, уточните поиск по имени или телефону.
+          </p>
+        ) : null}
+      </ScreenBody>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
@@ -305,7 +194,7 @@ export function CustomersPage({
             </DialogHeader>
             <CustomerFields />
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              <Button type="button" variant="ghost" onClick={() => setDialogOpen(false)}>
                 Отмена
               </Button>
               <Button type="submit" disabled={pending}>
@@ -319,125 +208,160 @@ export function CustomersPage({
   )
 }
 
-function CustomerRow({
-  customer,
-  router,
-}: {
-  customer: Customer
-  router: ReturnType<typeof useRouter>
-}) {
+// Колонки таблицы: сортировка кликом по заголовку; телефон/дата/скидка — tabular-nums;
+// источник и дата — второстепенные (скрыты до lg). Счётчики активности — обычный текст,
+// нули приглушены; бейджи не используем — цвет здесь ничего не значит.
+const customerColumns: DataViewColumn<Customer>[] = [
+  {
+    key: "name",
+    header: "Имя",
+    grow: true,
+    sortValue: (customer) => customer.name,
+    cell: (customer) => (
+      <Link
+        href={`/clients/${customer.id}`}
+        className="block truncate font-medium text-foreground hover:underline"
+      >
+        {customer.name}
+      </Link>
+    ),
+  },
+  {
+    key: "phone",
+    header: "Телефон",
+    className: "tabular-nums",
+    cell: (customer) => {
+      const telHref = telLink(customer.phone)
+      if (!customer.phone) {
+        return <span className="text-muted-foreground">—</span>
+      }
+      return telHref ? (
+        <a href={telHref} className="text-foreground hover:underline">
+          {customer.phone}
+        </a>
+      ) : (
+        customer.phone
+      )
+    },
+  },
+  {
+    key: "discount",
+    header: "Скидка",
+    align: "right",
+    className: "w-24 tabular-nums",
+    sortValue: (customer) => customer.defaultDiscountPercent,
+    defaultDirection: "desc",
+    cell: (customer) => <MutedZero value={customer.defaultDiscountPercent} suffix="%" />,
+  },
+  {
+    key: "activity",
+    header: "Активность",
+    hideBelow: "3xl",
+    className: "tabular-nums",
+    sortValue: activityScore,
+    defaultDirection: "desc",
+    cell: (customer) => <ActivityCell customer={customer} />,
+  },
+  {
+    key: "source",
+    header: "Источник",
+    secondary: true,
+    sortValue: (customer) => sourceLabel(customer.source),
+    cell: (customer) => <span className="text-muted-foreground">{sourceLabel(customer.source)}</span>,
+  },
+  {
+    key: "created",
+    header: "Создан",
+    secondary: true,
+    className: "w-28 tabular-nums",
+    sortValue: (customer) => customer.createdAt,
+    defaultDirection: "desc",
+    cell: (customer) => <span className="text-muted-foreground">{dateShort(customer.createdAt)}</span>,
+  },
+]
+
+function MutedZero({ value, suffix = "" }: { value: number; suffix?: string }) {
+  if (!value) {
+    return <span className="text-muted-foreground/60">0{suffix}</span>
+  }
+  return (
+    <span>
+      {value}
+      {suffix}
+    </span>
+  )
+}
+
+// «2 сделки · 0 заказов · 1 продажа» одной строкой: нули приглушены, без бейджей.
+function ActivityCell({ customer }: { customer: Customer }) {
+  const parts: Array<[number, PluralForms]> = [
+    [customer.dealsCount ?? 0, dealForms],
+    [customer.ordersCount ?? 0, orderForms],
+    [customer.salesCount ?? 0, saleForms],
+  ]
+  return (
+    <span className="inline-flex gap-x-1.5 whitespace-nowrap">
+      {parts.map(([count, forms], index) => (
+        <span key={forms[0]} className={cn(count === 0 ? "text-muted-foreground/60" : "text-foreground")}>
+          {pluralize(count, forms)}
+          {index < parts.length - 1 ? <span className="text-muted-foreground/40"> ·</span> : null}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+// Действия строки видны всегда: позвонить, Instagram, открыть карточку.
+function CustomerRowActions({ customer }: { customer: Customer }) {
   const href = `/clients/${customer.id}`
   const telHref = telLink(customer.phone)
   const igHref = instagramLink(customer.instagram)
 
-  function navigate() {
-    router.push(href)
-  }
-
   return (
-    <TableRow
-      className="cursor-pointer"
-      role="link"
-      tabIndex={0}
-      onClick={navigate}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          navigate()
-        }
-      }}
-    >
-      <TableCell className="font-medium text-zinc-950">
-        <Link
-          href={href}
-          className="hover:underline"
-          onClick={(event) => event.stopPropagation()}
+    <>
+      {telHref ? (
+        <IconLink href={telHref} label="Позвонить">
+          <PhoneIcon className="size-4" />
+        </IconLink>
+      ) : null}
+      {igHref ? (
+        <IconLink href={igHref} label="Открыть Instagram" external>
+          <AtSignIcon className="size-4" />
+        </IconLink>
+      ) : null}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Link
+              href={href}
+              className={cn(buttonVariants({ variant: "ghost", size: "icon-lg" }), "size-9 text-muted-foreground")}
+            />
+          }
         >
-          {customer.name}
-        </Link>
-      </TableCell>
-      <TableCell onClick={(event) => event.stopPropagation()}>
-        {customer.phone ? (
-          telHref ? (
-            <a href={telHref} className="font-medium text-zinc-950 hover:underline">
-              {customer.phone}
-            </a>
-          ) : (
-            customer.phone
-          )
-        ) : (
-          <Badge variant="outline" className="text-muted-foreground">
-            <AlertTriangleIcon />
-            Нет телефона
-          </Badge>
-        )}
-      </TableCell>
-      <TableCell>
-        {customer.defaultDiscountPercent > 0 ? (
-          <Badge variant="secondary">{customer.defaultDiscountPercent}%</Badge>
-        ) : (
-          <span className="text-muted-foreground">—</span>
-        )}
-      </TableCell>
-      <TableCell>
-        <div className="flex flex-wrap gap-1.5">
-          <Badge variant="outline">{pluralize(customer.dealsCount ?? 0, dealForms)}</Badge>
-          <Badge variant="outline">{pluralize(customer.ordersCount ?? 0, orderForms)}</Badge>
-          <Badge variant="outline">{pluralize(customer.salesCount ?? 0, saleForms)}</Badge>
-        </div>
-      </TableCell>
-      <TableCell>{sourceLabel(customer.source)}</TableCell>
-      <TableCell>{dateShort(customer.createdAt)}</TableCell>
-      <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-end gap-1">
-          {telHref ? (
-            <IconLink href={telHref} label="Позвонить">
-              <PhoneIcon className="size-4" />
-            </IconLink>
-          ) : null}
-          {igHref ? (
-            <IconLink href={igHref} label="Открыть Instagram" external>
-              <AtSignIcon className="size-4" />
-            </IconLink>
-          ) : null}
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Link
-                  href={href}
-                  className={cn(buttonVariants({ variant: "outline", size: "icon" }), "size-8")}
-                  onClick={(event) => event.stopPropagation()}
-                />
-              }
-            >
-              <ExternalLinkIcon className="size-4" />
-              <span className="sr-only">Открыть карточку</span>
-            </TooltipTrigger>
-            <TooltipContent>Открыть карточку</TooltipContent>
-          </Tooltip>
-        </div>
-      </TableCell>
-    </TableRow>
+          <ChevronRightIcon className="size-4" />
+          <span className="sr-only">Открыть карточку</span>
+        </TooltipTrigger>
+        <TooltipContent>Открыть карточку</TooltipContent>
+      </Tooltip>
+    </>
   )
 }
 
+// Карточка строки до md: имя, телефон, активность; действия справа.
 function CustomerCardRow({ customer }: { customer: Customer }) {
   const href = `/clients/${customer.id}`
   const telHref = telLink(customer.phone)
 
   return (
-    <div className="flex items-start justify-between gap-3 p-4">
+    <div className="flex items-start justify-between gap-3 px-4 py-3">
       <Link href={href} className="min-w-0 flex-1">
-        <div className="truncate font-medium text-zinc-950">{customer.name}</div>
-        <div className="mt-0.5 truncate text-sm text-muted-foreground">
+        <div className="truncate font-medium text-foreground">{customer.name}</div>
+        <div className="mt-0.5 truncate text-sm text-muted-foreground tabular-nums">
           {customer.phone || "Телефон не указан"}
+          {customer.defaultDiscountPercent > 0 ? ` · скидка ${customer.defaultDiscountPercent}%` : ""}
         </div>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {customer.defaultDiscountPercent > 0 ? (
-            <Badge variant="secondary">{customer.defaultDiscountPercent}%</Badge>
-          ) : null}
-          <Badge variant="outline">{pluralize(customer.dealsCount ?? 0, dealForms)}</Badge>
-          <Badge variant="outline">{pluralize(customer.ordersCount ?? 0, orderForms)}</Badge>
+        <div className="mt-1 text-xs">
+          <ActivityCell customer={customer} />
         </div>
       </Link>
       <div className="flex shrink-0 items-center gap-1">
@@ -446,8 +370,8 @@ function CustomerCardRow({ customer }: { customer: Customer }) {
             <PhoneIcon className="size-4" />
           </IconLink>
         ) : null}
-        <Button variant="outline" size="icon" className="size-9" render={<Link href={href} />}>
-          <ExternalLinkIcon className="size-4" />
+        <Button variant="ghost" size="icon" className="text-muted-foreground" render={<Link href={href} />}>
+          <ChevronRightIcon className="size-4" />
           <span className="sr-only">Открыть карточку</span>
         </Button>
       </div>
@@ -474,8 +398,7 @@ function IconLink({
             href={href}
             target={external ? "_blank" : undefined}
             rel={external ? "noopener noreferrer" : undefined}
-            className={cn(buttonVariants({ variant: "outline", size: "icon" }), "size-8")}
-            onClick={(event) => event.stopPropagation()}
+            className={cn(buttonVariants({ variant: "ghost", size: "icon-lg" }), "size-9 text-muted-foreground")}
           />
         }
       >
@@ -484,32 +407,6 @@ function IconLink({
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
-  )
-}
-
-function SortableHead({
-  label,
-  active,
-  onClick,
-}: {
-  label: string
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <TableHead>
-      <button
-        type="button"
-        onClick={onClick}
-        className={cn(
-          "inline-flex items-center gap-1 transition-colors hover:text-zinc-950",
-          active ? "font-semibold text-zinc-950" : "text-muted-foreground"
-        )}
-      >
-        {label}
-        {active ? <ArrowDownIcon className="size-3.5" /> : <ArrowUpDownIcon className="size-3.5 opacity-50" />}
-      </button>
-    </TableHead>
   )
 }
 

@@ -26,9 +26,9 @@ type StatCardProps = {
 }
 
 const TONE: Record<StatCardTone, { border: string; bg: string }> = {
-  default: { border: "border-zinc-200/80", bg: "bg-card" },
-  warning: { border: "border-amber-200/70", bg: "bg-amber-50/30" },
-  danger: { border: "border-red-200/70", bg: "bg-red-50/30" },
+  default: { border: "", bg: "bg-card" },
+  warning: { border: "ring-1 ring-amber-200/70", bg: "bg-amber-50/30" },
+  danger: { border: "ring-1 ring-red-200/70", bg: "bg-red-50/30" },
 }
 
 /**
@@ -52,12 +52,12 @@ export function StatCard({
   const body = (
     <div
       className={cn(
-        "group/stat relative flex flex-col gap-4 rounded-xl border p-5 shadow-sm transition-all duration-200",
+        "group/stat relative flex flex-col gap-4 rounded-xl p-5 shadow-xs transition-all duration-200",
         fill && "h-full",
         t.border,
         t.bg,
         href &&
-          "hover:-translate-y-px hover:border-zinc-300 hover:shadow-md motion-reduce:transform-none",
+          "hover:-translate-y-px hover:shadow-md motion-reduce:transform-none",
         // Когда карточка — ссылка, grid-элементом является <Link>, поэтому
         // позиционирующий className (col-span и т.п.) вешаем на него, а не сюда.
         !href && className

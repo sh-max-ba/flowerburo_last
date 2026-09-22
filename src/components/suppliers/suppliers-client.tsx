@@ -4,10 +4,11 @@ import type React from "react"
 import { useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { PencilIcon, PlusIcon, SearchIcon, UserCheckIcon, UserXIcon } from "lucide-react"
+import { ChevronRightIcon, PencilIcon, PlusIcon, RotateCcwIcon, UserCheckIcon, UserXIcon } from "lucide-react"
 import { toast } from "sonner"
 import { saveSupplierAction, setSupplierActiveAction } from "@/app/actions"
 import type { Supplier } from "@/lib/db"
+import { cn } from "@/lib/utils"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,9 +19,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import {
   Field,
@@ -41,8 +40,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
+import { DataView, type DataViewColumn } from "@/components/data-view"
+import { ScreenBody } from "@/components/screen-body"
+import { FilterChips, HeaderAction, HeaderPrimaryAction, ScreenHeader } from "@/components/screen-header"
 
 type Result = Awaited<ReturnType<typeof saveSupplierAction>>
 
@@ -53,6 +54,7 @@ export function SuppliersClient({ suppliers }: { suppliers: Supplier[] }) {
   const newParam = searchParams.get("new")
 
   const [query, setQuery] = useState("")
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "archived">("all")
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(
     editParam ? suppliers.find((supplier) => String(supplier.id) === editParam) ?? null : null
   )
@@ -62,13 +64,23 @@ export function SuppliersClient({ suppliers }: { suppliers: Supplier[] }) {
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase()
-    if (!normalized) return suppliers
-    return suppliers.filter((supplier) =>
-      `${supplier.name} ${supplier.inn} ${supplier.phone} ${supplier.email} ${supplier.legalName}`
+    return suppliers.filter((supplier) => {
+      if (statusFilter === "active" && !supplier.isActive) return false
+      if (statusFilter === "archived" && supplier.isActive) return false
+      if (!normalized) return true
+      return `${supplier.name} ${supplier.inn} ${supplier.phone} ${supplier.email} ${supplier.legalName} ${supplier.contactName}`
         .toLowerCase()
         .includes(normalized)
-    )
-  }, [query, suppliers])
+    })
+  }, [query, statusFilter, suppliers])
+
+  const activeCount = useMemo(() => suppliers.filter((supplier) => supplier.isActive).length, [suppliers])
+  const statusChips = [
+    { value: "all" as const, label: "Все", count: suppliers.length },
+    { value: "active" as const, label: "Активные", count: activeCount },
+    { value: "archived" as const, label: "В архиве", count: suppliers.length - activeCount },
+  ]
+  const hasFilters = query.trim() !== "" || statusFilter !== "all"
 
   function run(action: () => Promise<Result>, after?: () => void) {
     startTransition(async () => {
@@ -101,112 +113,148 @@ export function SuppliersClient({ suppliers }: { suppliers: Supplier[] }) {
     setSupplierSheet(true)
   }
 
+  const columns: DataViewColumn<Supplier>[] = [
+    {
+      key: "name",
+      header: "Название",
+      grow: true,
+      sortValue: (supplier) => supplier.name,
+      cell: (supplier) => (
+        <div className="min-w-0">
+          <Link href={`/suppliers/${supplier.id}`} className="block truncate font-medium hover:underline">
+            {supplier.name}
+          </Link>
+          {supplier.legalName && <div className="truncate text-xs text-muted-foreground">{supplier.legalName}</div>}
+        </div>
+      ),
+    },
+    {
+      key: "inn",
+      header: "ИНН",
+      secondary: true,
+      className: "tabular-nums",
+      sortValue: (supplier) => supplier.inn,
+      cell: (supplier) => supplier.inn || <span className="text-muted-foreground">—</span>,
+    },
+    {
+      key: "contacts",
+      header: "Контакты",
+      className: "tabular-nums",
+      cell: (supplier) => (
+        <div className="min-w-0">
+          <div className="truncate text-sm">{supplier.phone || supplier.email || "—"}</div>
+          {supplier.contactName && <div className="truncate text-xs text-muted-foreground">{supplier.contactName}</div>}
+        </div>
+      ),
+    },
+    {
+      key: "terms",
+      header: "Условия оплаты",
+      secondary: true,
+      cell: (supplier) => (
+        <span className="text-muted-foreground">
+          {supplier.paymentTerms || (supplier.paymentDelayDays != null ? `Отсрочка ${supplier.paymentDelayDays} дн.` : "—")}
+        </span>
+      ),
+    },
+    {
+      key: "status",
+      header: "Статус",
+      className: "w-28",
+      sortValue: (supplier) => (supplier.isActive ? 0 : 1),
+      cell: (supplier) => (
+        <span className={supplier.isActive ? "text-foreground" : "text-muted-foreground"}>
+          {supplier.isActive ? "Активен" : "В архиве"}
+        </span>
+      ),
+    },
+  ]
+
+  function rowActions(supplier: Supplier) {
+    return (
+      <>
+        <Button variant="ghost" size="icon-lg" className="size-9 text-muted-foreground" onClick={() => openEdit(supplier)} disabled={isPending} aria-label="Редактировать" title="Редактировать">
+          <PencilIcon className="size-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-lg"
+          className="size-9 text-muted-foreground"
+          onClick={() => setActiveToggleSupplier(supplier)}
+          disabled={isPending}
+          aria-label={supplier.isActive ? "В архив" : "Вернуть из архива"}
+          title={supplier.isActive ? "В архив" : "Вернуть из архива"}
+        >
+          {supplier.isActive ? <UserXIcon className="size-4" /> : <UserCheckIcon className="size-4" />}
+        </Button>
+        <Link
+          href={`/suppliers/${supplier.id}`}
+          className={cn(buttonVariants({ variant: "ghost", size: "icon-lg" }), "size-9 text-muted-foreground")}
+          aria-label="Открыть"
+          title="Открыть"
+        >
+          <ChevronRightIcon className="size-4" />
+        </Link>
+      </>
+    )
+  }
+
   return (
     <>
-      <Card className="rounded-2xl border bg-white">
-        <CardContent className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <div className="relative min-w-64 flex-1">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="h-10 pl-9"
-                placeholder="Поиск по названию, ИНН, телефону, почте"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </div>
-            <Button className="h-10" onClick={openCreate} disabled={isPending}>
-              <PlusIcon data-icon="inline-start" />
-              Добавить поставщика
-            </Button>
-          </div>
+      <ScreenHeader
+        title="Поставщики"
+        search={{
+          value: query,
+          onChange: setQuery,
+          placeholder: "Поиск по названию, ИНН, телефону, почте",
+          inputProps: { "aria-label": "Поиск поставщиков" },
+        }}
+        actions={
+          hasFilters ? (
+            <HeaderAction
+              icon={RotateCcwIcon}
+              label="Сброс"
+              onClick={() => {
+                setQuery("")
+                setStatusFilter("all")
+              }}
+            />
+          ) : undefined
+        }
+        primaryAction={<HeaderPrimaryAction icon={PlusIcon} label="Добавить поставщика" onClick={openCreate} disabled={isPending} />}
+      />
 
-          {filtered.length ? (
-            <div className="overflow-x-auto rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Название</TableHead>
-                    <TableHead>ИНН</TableHead>
-                    <TableHead>Контакты</TableHead>
-                    <TableHead>Условия оплаты</TableHead>
-                    <TableHead>Статус</TableHead>
-                    <TableHead className="text-right">Действия</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.map((supplier) => (
-                    <TableRow key={supplier.id}>
-                      <TableCell className="font-medium">
-                        <Link href={`/suppliers/${supplier.id}`} className="hover:underline">
-                          {supplier.name}
-                        </Link>
-                        {supplier.legalName && (
-                          <div className="text-xs text-muted-foreground">{supplier.legalName}</div>
-                        )}
-                      </TableCell>
-                      <TableCell>{supplier.inn || "-"}</TableCell>
-                      <TableCell>
-                        <div className="text-sm">{supplier.phone || supplier.email || "-"}</div>
-                        {supplier.contactName && (
-                          <div className="text-xs text-muted-foreground">{supplier.contactName}</div>
-                        )}
-                      </TableCell>
-                      <TableCell className="min-w-40">
-                        {supplier.paymentTerms ||
-                          (supplier.paymentDelayDays != null ? `Отсрочка ${supplier.paymentDelayDays} дн.` : "-")}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={supplier.isActive ? "secondary" : "outline"}>
-                          {supplier.isActive ? "Активен" : "В архиве"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-2">
-                          <Link
-                            href={`/suppliers/${supplier.id}`}
-                            className="inline-flex h-8 items-center rounded-md border px-3 text-sm hover:bg-accent"
-                          >
-                            Открыть
-                          </Link>
-                          <Button
-                            variant="outline"
-                            size="icon-sm"
-                            onClick={() => openEdit(supplier)}
-                            disabled={isPending}
-                          >
-                            <PencilIcon />
-                            <span className="sr-only">Редактировать</span>
-                          </Button>
-                          <Button
-                            variant={supplier.isActive ? "outline" : "default"}
-                            size="sm"
-                            onClick={() => setActiveToggleSupplier(supplier)}
-                            disabled={isPending}
-                          >
-                            {supplier.isActive ? (
-                              <UserXIcon data-icon="inline-start" />
-                            ) : (
-                              <UserCheckIcon data-icon="inline-start" />
-                            )}
-                            {supplier.isActive ? "В архив" : "Вернуть"}
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+      <FilterChips className="shrink-0" label="Статус" value={statusFilter} options={statusChips} onValueChange={setStatusFilter} />
+
+      <ScreenBody>
+        <DataView
+          rows={filtered}
+          columns={columns}
+          getRowKey={(supplier) => supplier.id}
+          onRowSelect={(supplier) => router.push(`/suppliers/${supplier.id}`)}
+          rowActions={rowActions}
+          renderCard={(supplier) => (
+            <div className="flex items-start justify-between gap-3 px-4 py-3">
+              <Link href={`/suppliers/${supplier.id}`} className="min-w-0 flex-1">
+                <div className="truncate font-medium">{supplier.name}</div>
+                <div className="mt-0.5 truncate text-sm text-muted-foreground tabular-nums">
+                  {supplier.phone || supplier.email || "—"}
+                  {supplier.inn ? ` · ИНН ${supplier.inn}` : ""}
+                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{supplier.isActive ? "Активен" : "В архиве"}</div>
+              </Link>
+              <div className="flex shrink-0 items-center gap-1">{rowActions(supplier)}</div>
             </div>
-          ) : (
+          )}
+          empty={
             <Empty className="min-h-56">
               <EmptyHeader>
-                <EmptyTitle>{query ? "Ничего не найдено" : "Поставщиков нет"}</EmptyTitle>
+                <EmptyTitle>{hasFilters ? "Ничего не найдено" : "Поставщиков нет"}</EmptyTitle>
                 <EmptyDescription>
-                  {query ? "Измените запрос." : "Добавьте поставщика для актов пополнения склада."}
+                  {hasFilters ? "Измените запрос или фильтр." : "Добавьте поставщика для актов пополнения склада."}
                 </EmptyDescription>
               </EmptyHeader>
-              {!query && (
+              {!hasFilters && (
                 <EmptyContent>
                   <Button onClick={openCreate}>
                     <PlusIcon data-icon="inline-start" />
@@ -215,9 +263,9 @@ export function SuppliersClient({ suppliers }: { suppliers: Supplier[] }) {
                 </EmptyContent>
               )}
             </Empty>
-          )}
-        </CardContent>
-      </Card>
+          }
+        />
+      </ScreenBody>
 
       <SupplierSheet
         key={editingSupplier ? `edit-${editingSupplier.id}` : "create"}

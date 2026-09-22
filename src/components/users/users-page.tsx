@@ -21,9 +21,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { ScreenBody } from "@/components/screen-body"
+import { HeaderPrimaryAction, ScreenHeader } from "@/components/screen-header"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
@@ -203,71 +203,83 @@ function UsersSection({
   onPassword: (user: CurrentUser) => void
   onToggleActive: (user: CurrentUser) => void
 }) {
+  const [search, setSearch] = useState("")
+  const normalized = search.trim().toLowerCase()
+  const visible = normalized
+    ? users.filter((targetUser) => `${targetUser.name} ${targetUser.login}`.toLowerCase().includes(normalized))
+    : users
+
   return (
-    <Card className="rounded-2xl border bg-white">
-      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <CardTitle>Пользователи</CardTitle>
-          <CardDescription>Доступ, роли и активность учетных записей</CardDescription>
-        </div>
-        <Button onClick={onCreate} disabled={pending}>
-          <PlusIcon data-icon="inline-start" />
-          Добавить
-        </Button>
-      </CardHeader>
-      <CardContent>
-        {users.length ? (
-          <div className="overflow-x-auto rounded-lg border">
+    <>
+      <ScreenHeader
+        title="Пользователи"
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Поиск по имени или логину",
+          inputProps: { "aria-label": "Поиск пользователей" },
+        }}
+        primaryAction={<HeaderPrimaryAction icon={PlusIcon} label="Добавить" onClick={onCreate} disabled={pending} />}
+      />
+      <ScreenBody>
+        {visible.length ? (
+          <div className="overflow-x-auto">
             <Table>
-              <TableHeader>
+              <TableHeader className="sticky top-0 z-10 bg-background">
                 <TableRow>
                   <TableHead>Имя</TableHead>
                   <TableHead>Логин</TableHead>
                   <TableHead>Роль</TableHead>
                   <TableHead>Статус</TableHead>
-                  <TableHead className="text-right">Действия</TableHead>
+                  <TableHead className="text-right">
+                    <span className="sr-only">Действия</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {users.map((targetUser) => (
+                {visible.map((targetUser) => (
                   <TableRow key={targetUser.id}>
                     <TableCell className="font-medium">
                       <div className="flex flex-col">
                         <span>{targetUser.name}</span>
                         {targetUser.id === currentUserId && (
-                          <span className="text-xs text-muted-foreground">Текущий пользователь</span>
+                          <span className="text-xs font-normal text-muted-foreground">Текущий пользователь</span>
                         )}
                       </div>
                     </TableCell>
-                    <TableCell>{targetUser.login}</TableCell>
-                    <TableCell>
-                      <Badge variant={targetUser.role === "owner" ? "default" : "secondary"}>
-                        {roleLabels[targetUser.role]}
-                      </Badge>
+                    <TableCell className="text-muted-foreground">{targetUser.login}</TableCell>
+                    <TableCell>{roleLabels[targetUser.role]}</TableCell>
+                    <TableCell className={targetUser.isActive ? "" : "text-muted-foreground"}>
+                      {targetUser.isActive ? "Активен" : "Отключен"}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={targetUser.isActive ? "secondary" : "outline"}>
-                        {targetUser.isActive ? "Активен" : "Отключен"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-2">
-                        <Button variant="outline" size="icon-sm" onClick={() => onEdit(targetUser)} disabled={pending}>
-                          <PencilIcon />
-                          <span className="sr-only">Редактировать</span>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon-lg"
+                          className="size-9 text-muted-foreground"
+                          onClick={() => onEdit(targetUser)}
+                          disabled={pending}
+                          aria-label="Редактировать"
+                          title="Редактировать"
+                        >
+                          <PencilIcon className="size-4" />
                         </Button>
                         <Button
-                          variant="outline"
-                          size="icon-sm"
+                          variant="ghost"
+                          size="icon-lg"
+                          className="size-9 text-muted-foreground"
                           onClick={() => onPassword(targetUser)}
                           disabled={pending}
+                          aria-label="Сменить пароль"
+                          title="Сменить пароль"
                         >
-                          <KeyRoundIcon />
-                          <span className="sr-only">Сменить пароль</span>
+                          <KeyRoundIcon className="size-4" />
                         </Button>
                         <Button
-                          variant={targetUser.isActive ? "outline" : "default"}
+                          variant="ghost"
                           size="sm"
+                          className={targetUser.isActive ? "text-muted-foreground" : ""}
                           onClick={() => onToggleActive(targetUser)}
                           disabled={pending}
                         >
@@ -286,23 +298,28 @@ function UsersSection({
             </Table>
           </div>
         ) : (
-          <Empty>
+          <Empty className="min-h-56">
             <EmptyHeader>
-              <EmptyTitle>Пользователей нет</EmptyTitle>
-              <EmptyDescription>Создайте первую учетную запись для доступа к системе.</EmptyDescription>
+              <EmptyTitle>{normalized ? "Ничего не найдено" : "Пользователей нет"}</EmptyTitle>
+              <EmptyDescription>
+                {normalized ? "Измените запрос или очистите поиск." : "Создайте первую учетную запись для доступа к системе."}
+              </EmptyDescription>
             </EmptyHeader>
-            <EmptyContent>
-              <Button onClick={onCreate}>
-                <PlusIcon data-icon="inline-start" />
-                Добавить пользователя
-              </Button>
-            </EmptyContent>
+            {!normalized && (
+              <EmptyContent>
+                <Button onClick={onCreate}>
+                  <PlusIcon data-icon="inline-start" />
+                  Добавить пользователя
+                </Button>
+              </EmptyContent>
+            )}
           </Empty>
         )}
-      </CardContent>
-    </Card>
+      </ScreenBody>
+    </>
   )
 }
+
 
 function UserSheet({
   open,

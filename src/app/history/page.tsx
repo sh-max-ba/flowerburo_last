@@ -1,8 +1,6 @@
-import Link from "next/link"
 import { AccessDenied } from "@/components/access-denied"
 import { CrmShell } from "@/components/crm-shell"
 import { CashLedger } from "@/components/history/cash-ledger"
-import { buttonVariants } from "@/components/ui/button"
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getCashLedger } from "@/lib/db"
@@ -24,16 +22,10 @@ export default async function CashHistoryPage() {
       title="История кассы"
       shiftContext={getShiftShellContext(user)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
+      layout="fill"
     >
-      {user.role === "owner" ? (
-        <div className="flex justify-end">
-          <Link href="/history/stock" className={buttonVariants({ variant: "outline", size: "sm" })}>
-            История склада
-          </Link>
-        </div>
-      ) : null}
-
-      <CashLedger entries={entries} />
+      <CashLedger entries={entries} showStockHistoryLink={user.role === "owner"} />
     </CrmShell>
   )
 }

@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { XIcon } from "lucide-react"
+import { PlusIcon, XIcon } from "lucide-react"
 import { getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import { formatMoney } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -55,19 +55,20 @@ export function SplitPaymentFields({
     return (
       <Button
         type="button"
-        variant="ghost"
+        variant="outline"
         size="sm"
-        className="self-start px-2 text-xs text-muted-foreground"
+        className="self-start"
         disabled={disabled || total < 0.02}
         onClick={() => setEnabled(true)}
       >
-        + Второй способ оплаты
+        <PlusIcon data-icon="inline-start" />
+        Оплата двумя способами
       </Button>
     )
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-3">
+    <div className="flex flex-col gap-2 rounded-xl bg-muted/30 p-3">
       <input type="hidden" name="paymentMethod2" value={method2} />
       <input type="hidden" name="paymentAmount2" value={amount2Input} />
       <div className="flex items-center justify-between gap-2">

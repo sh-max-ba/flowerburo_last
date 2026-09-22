@@ -22,6 +22,8 @@ export default async function SuppliersPage() {
       title="Поставщики"
       shiftContext={getShiftShellContext(user)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
+      layout="fill"
     >
       <SuppliersClient suppliers={suppliers} />
     </CrmShell>

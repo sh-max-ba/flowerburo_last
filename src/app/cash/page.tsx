@@ -31,8 +31,10 @@ export default async function Page() {
       shiftContext={buildShiftShellContext(user, data, activeFlorists)}
       canAccessCash={canAccessCash}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
+      layout="fill"
     >
-      <CashPage data={data} />
+      <CashPage data={data} canRefund={user.role === "owner" || user.role === "manager"} />
     </CrmShell>
   )
 }

@@ -1,13 +1,15 @@
 "use client"
 
-import { useMemo, useState } from "react"
-import { ChevronDownIcon, ChevronRightIcon, SearchIcon } from "lucide-react"
+import { useMemo, useState, useTransition } from "react"
+import { useRouter } from "next/navigation"
+import { CalendarClockIcon, ChevronDownIcon, ChevronRightIcon, DownloadIcon, EyeOffIcon, MinusCircleIcon, PlusCircleIcon, RotateCcwIcon } from "lucide-react"
 import type { Product } from "@/lib/db"
 import { cn, formatMoney } from "@/lib/utils"
+import { ScreenBody } from "@/components/screen-body"
+import { FilterChips, HeaderAction, HeaderPopover, HeaderPrimaryAction, ScreenHeader } from "@/components/screen-header"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import { Input } from "@/components/ui/input"
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 
 const UNCATEGORIZED = "Без категории"
 
@@ -31,6 +33,11 @@ function formatQty(value: number): string {
   return value.toLocaleString("ru-RU", { maximumFractionDigits: 2 })
 }
 
+function formatReportDate(iso: string): string {
+  const [y, m, d] = iso.split("-")
+  return `${d}.${m}.${y}`
+}
+
 type Totals = { positions: number; stock: number; costSum: number; saleSum: number }
 
 function emptyTotals(): Totals {
@@ -44,11 +51,28 @@ function addToTotals(totals: Totals, product: Product) {
   totals.saleSum += product.stock * product.salePrice
 }
 
-export function StockReportClient({ products }: { products: Product[] }) {
+export function StockReportClient({
+  products,
+  asOfDate,
+  todayISO,
+}: {
+  products: Product[]
+  asOfDate: string
+  todayISO: string
+}) {
+  const router = useRouter()
+  const [, startTransition] = useTransition()
   const [query, setQuery] = useState("")
   const [categoryFilter, setCategoryFilter] = useState<string>("all")
   const [hideZero, setHideZero] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  // Дата отчёта живёт в URL (?date=) — остатки на прошлую дату сервер реконструирует
+  // по журналу движений. Пустая дата или сегодня = текущие остатки.
+  function pushDate(next: string) {
+    const target = next && next < todayISO ? `/stock/report?date=${next}` : "/stock/report"
+    startTransition(() => router.push(target))
+  }
 
   // Список топ-категорий (для фильтра-пилюль) — по всем активным товарам, независимо от поиска.
   const allCategories = useMemo(() => {
@@ -119,10 +143,81 @@ export function StockReportClient({ products }: { products: Product[] }) {
     setExpanded(allExpanded ? new Set() : new Set(groups.map((group) => group.category)))
   }
 
-  const filtersActive = query.trim() !== "" || categoryFilter !== "all" || hideZero
+  const filtersActive = query.trim() !== "" || categoryFilter !== "all" || hideZero || Boolean(asOfDate)
 
   return (
-    <div className="flex flex-col gap-4">
+    <>
+      <ScreenHeader
+        title="Остатки"
+        search={{
+          value: query,
+          onChange: setQuery,
+          placeholder: "Поиск по названию, артикулу или коду",
+          inputProps: { "aria-label": "Поиск по остаткам" },
+        }}
+        actions={
+          <>
+            <HeaderPopover icon={CalendarClockIcon} label={asOfDate ? `На ${formatReportDate(asOfDate)}` : "На дату"} active={Boolean(asOfDate)}>
+              <Field>
+                <FieldLabel>Остатки на конец дня</FieldLabel>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="date"
+                    aria-label="Дата отчёта"
+                    value={asOfDate || todayISO}
+                    max={todayISO}
+                    onChange={(event) => pushDate(event.target.value)}
+                    className="h-10 min-w-0 flex-1 rounded-lg bg-muted/55 px-2.5 text-sm text-foreground tabular-nums outline-none focus-visible:bg-background focus-visible:ring-3 focus-visible:ring-ring/15"
+                  />
+                  {asOfDate && (
+                    <Button type="button" variant="ghost" size="sm" onClick={() => pushDate("")}>
+                      Сегодня
+                    </Button>
+                  )}
+                </div>
+                <FieldDescription>
+                  Прошлая дата восстанавливается по истории движений; себестоимость и цены — текущие, суммы приблизительны.
+                </FieldDescription>
+              </Field>
+            </HeaderPopover>
+            <HeaderAction
+              icon={EyeOffIcon}
+              label={hideZero ? "Нулевые скрыты" : "Скрыть нулевые"}
+              active={hideZero}
+              onClick={() => setHideZero((value) => !value)}
+            />
+            {filtersActive && (
+              <HeaderAction
+                icon={RotateCcwIcon}
+                label="Сброс"
+                onClick={() => {
+                  setQuery("")
+                  setCategoryFilter("all")
+                  setHideZero(false)
+                  if (asOfDate) pushDate("")
+                }}
+              />
+            )}
+            <HeaderAction icon={DownloadIcon} label="Excel" href="/warehouse/export" />
+            <HeaderAction icon={MinusCircleIcon} label="Списать" href="/stock?new=stock_out" />
+          </>
+        }
+        primaryAction={<HeaderPrimaryAction icon={PlusCircleIcon} label="Пополнить" href="/stock?new=stock_in" />}
+      />
+
+      {/* Второй уровень — категории чипами. */}
+      <FilterChips
+        className="shrink-0"
+        value={categoryFilter}
+        options={[
+          { value: "all", label: "Все категории" },
+          { value: "flowers", label: "Только цветы" },
+          ...allCategories.map((category) => ({ value: category, label: category })),
+        ]}
+        onValueChange={setCategoryFilter}
+      />
+
+      <ScreenBody className="gap-4 p-4">
       {/* Карточки-итоги */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <SummaryCard label="Позиций" value={formatQty(grand.positions)} />
@@ -131,113 +226,73 @@ export function StockReportClient({ products }: { products: Product[] }) {
         <SummaryCard label="Σ продажи" value={formatMoney(grand.saleSum)} />
       </div>
 
-      <Card className="rounded-2xl border bg-white">
-        <CardContent className="flex flex-col gap-4">
-          {/* Поиск + быстрые фильтры */}
-          <div className="flex flex-col gap-3">
-            <div className="relative w-full sm:max-w-xs">
-              <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Поиск по названию, артикулу или коду"
-                className="h-9 pl-8"
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <FilterPill active={categoryFilter === "all"} onClick={() => setCategoryFilter("all")}>
-                Все категории
-              </FilterPill>
-              <FilterPill active={categoryFilter === "flowers"} onClick={() => setCategoryFilter("flowers")}>
-                Только цветы
-              </FilterPill>
-              {allCategories.map((category) => (
-                <FilterPill
-                  key={category}
-                  active={categoryFilter === category}
-                  onClick={() => setCategoryFilter(category)}
-                >
-                  {category}
-                </FilterPill>
-              ))}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => setHideZero((value) => !value)}>
-                {hideZero ? "Показать нулевые" : "Скрыть нулевые"}
-              </Button>
-              {groups.length > 0 && (
-                <Button type="button" variant="ghost" size="sm" onClick={toggleAll}>
-                  {allExpanded ? "Свернуть всё" : "Развернуть всё"}
-                </Button>
-              )}
-              {filtersActive && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setQuery("")
-                    setCategoryFilter("all")
-                    setHideZero(false)
-                  }}
-                >
-                  Сбросить
-                </Button>
-              )}
-            </div>
+      <div className="flex flex-col gap-4">
+        {asOfDate && (
+          <div className="rounded-lg bg-violet-50 px-3 py-2 text-sm text-violet-900">
+            Показаны остатки на конец дня <span className="font-semibold">{formatReportDate(asOfDate)}</span> —
+            восстановлены по истории движений. Себестоимость и цены — текущие, поэтому суммы на прошлую дату
+            приблизительны.
           </div>
+        )}
+        {groups.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={toggleAll}>
+              {allExpanded ? "Свернуть всё" : "Развернуть всё"}
+            </Button>
+          </div>
+        )}
 
-          {groups.length === 0 ? (
-            <Empty className="min-h-40">
-              <EmptyHeader>
-                <EmptyTitle>Ничего не найдено</EmptyTitle>
-                <EmptyDescription>Измените поиск или фильтры.</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          ) : (
-            <div className="min-w-0 max-w-full overflow-x-auto rounded-xl border border-zinc-200">
-              <table className="w-full border-collapse text-sm">
-                <thead>
-                  <tr className="border-b border-zinc-200 text-xs text-muted-foreground">
-                    <th className="px-3 py-2 text-left font-normal">Наименование</th>
-                    <th className="px-3 py-2 text-right font-normal">Остаток</th>
-                    <th className="px-3 py-2 text-right font-normal">Себест.</th>
-                    <th className="px-3 py-2 text-right font-normal">Σ себест.</th>
-                    <th className="px-3 py-2 text-right font-normal">Цена</th>
-                    <th className="px-3 py-2 text-right font-normal">Σ продажи</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {groups.map((group) => {
-                    const open = expanded.has(group.category)
-                    return (
-                      <CategoryBlock
-                        key={group.category}
-                        category={group.category}
-                        products={group.products}
-                        totals={group.totals}
-                        open={open}
-                        onToggle={() => toggleCategory(group.category)}
-                      />
-                    )
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t-2 border-zinc-300 bg-zinc-100 font-medium">
-                    <td className="px-3 py-2.5">Итого по складу · {formatQty(grand.positions)} поз.</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">{formatQty(grand.stock)}</td>
-                    <td className="px-3 py-2.5" />
-                    <td className="px-3 py-2.5 text-right tabular-nums">{formatMoney(grand.costSum)}</td>
-                    <td className="px-3 py-2.5" />
-                    <td className="px-3 py-2.5 text-right tabular-nums">{formatMoney(grand.saleSum)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+        {groups.length === 0 ? (
+          <Empty className="min-h-40">
+            <EmptyHeader>
+              <EmptyTitle>Ничего не найдено</EmptyTitle>
+              <EmptyDescription>Измените поиск или фильтры.</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <div className="min-w-0 max-w-full overflow-x-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-border/40 text-xs text-muted-foreground">
+                  <th className="px-3 py-2 text-left font-normal">Наименование</th>
+                  <th className="px-3 py-2 text-right font-normal">Остаток</th>
+                  <th className="px-3 py-2 text-right font-normal">Себест.</th>
+                  <th className="px-3 py-2 text-right font-normal">Σ себест.</th>
+                  <th className="px-3 py-2 text-right font-normal">Цена</th>
+                  <th className="px-3 py-2 text-right font-normal">Σ продажи</th>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map((group) => {
+                  const open = expanded.has(group.category)
+                  return (
+                    <CategoryBlock
+                      key={group.category}
+                      category={group.category}
+                      products={group.products}
+                      totals={group.totals}
+                      open={open}
+                      onToggle={() => toggleCategory(group.category)}
+                    />
+                  )
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-border/40 bg-muted/30 font-medium">
+                  <td className="px-3 py-2.5">Итого по складу · {formatQty(grand.positions)} поз.</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">{formatQty(grand.stock)}</td>
+                  <td className="px-3 py-2.5" />
+                  <td className="px-3 py-2.5 text-right tabular-nums">{formatMoney(grand.costSum)}</td>
+                  <td className="px-3 py-2.5" />
+                  <td className="px-3 py-2.5 text-right tabular-nums">{formatMoney(grand.saleSum)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </div>
+      </ScreenBody>
+    </>
   )
 }
 
@@ -257,7 +312,7 @@ function CategoryBlock({
   return (
     <>
       <tr
-        className="cursor-pointer border-b border-zinc-200 bg-zinc-50 font-medium hover:bg-zinc-100"
+        className="cursor-pointer border-b border-border/40 bg-muted/30 font-medium hover:bg-muted/60"
         onClick={onToggle}
       >
         <td className="px-3 py-2">
@@ -304,25 +359,10 @@ function CategoryBlock({
 
 function SummaryCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-3">
+    <div className="rounded-xl bg-muted/30 p-3">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-lg font-semibold tabular-nums text-zinc-950">{value}</div>
+      <div className="mt-1 text-lg font-semibold tabular-nums text-foreground">{value}</div>
     </div>
   )
 }
 
-function FilterPill({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <Button type="button" variant={active ? "default" : "outline"} size="sm" onClick={onClick}>
-      {children}
-    </Button>
-  )
-}

@@ -7,9 +7,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-cal-sans-ui);
+  --font-sans: var(--font-golos);
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --font-heading: var(--font-cal-sans);
+  --font-heading: var(--font-golos);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -156,7 +156,7 @@
   }
 
   select:not([data-slot]) {
-    @apply rounded-lg border border-zinc-300 bg-white text-zinc-900 outline-none transition-colors focus-visible:border-zinc-600 focus-visible:ring-3 focus-visible:ring-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500 disabled:opacity-80;
+    @apply rounded-lg border border-transparent bg-muted/55 text-foreground outline-none transition-colors hover:bg-muted/80 focus-visible:border-ring/60 focus-visible:bg-background focus-visible:ring-3 focus-visible:ring-ring/15 disabled:cursor-not-allowed disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-80;
   }
 
   input[type="number"]::-webkit-outer-spin-button,
@@ -167,5 +167,12 @@
 
   input[type="number"] {
     -moz-appearance: textfield;
+  }
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
   }
 }

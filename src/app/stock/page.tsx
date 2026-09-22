@@ -24,11 +24,13 @@ export default async function Page() {
       title="Склад"
       shiftContext={buildShiftShellContext(user, data)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      subnavCounts={{ stock: data.products.length }}
+      header="page"
+      layout="fill"
     >
       <StockPage
         products={data.products}
         archivedProducts={archivedProducts}
-        negativeStockCount={data.stats.negativeStockCount}
         suppliers={data.suppliers}
         defaultAllocationMethod={defaultAllocationMethod}
       />

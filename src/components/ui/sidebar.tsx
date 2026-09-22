@@ -74,6 +74,27 @@ function getStoredSidebarOpen(defaultOpen: boolean) {
   return defaultOpen
 }
 
+const WIDE_BREAKPOINT = 1024
+
+// Планшет (md, 768–1023) — рельс иконок, lg+ — полный сайдбар. До первого layout-эффекта
+// считаем «широко» и на сервере, и на клиенте — иначе гидрация расходится, React не
+// патчит атрибуты и сайдбар остаётся раскрытым. Ниже lg ручное раскрытие не сохраняется.
+function useIsWide() {
+  const [isWide, setIsWide] = React.useState<boolean | undefined>(undefined)
+
+  React.useLayoutEffect(() => {
+    const mql = window.matchMedia(`(min-width: ${WIDE_BREAKPOINT}px)`)
+    const onChange = () => {
+      setIsWide(mql.matches)
+    }
+    onChange()
+    mql.addEventListener("change", onChange)
+    return () => mql.removeEventListener("change", onChange)
+  }, [])
+
+  return isWide ?? true
+}
+
 function SidebarProvider({
   defaultOpen = true,
   open: openProp,
@@ -88,12 +109,14 @@ function SidebarProvider({
   onOpenChange?: (open: boolean) => void
 }) {
   const isMobile = useIsMobile()
+  const isWide = useIsWide()
   const [openMobile, setOpenMobile] = React.useState(false)
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
   const [_open, _setOpen] = React.useState(() => getStoredSidebarOpen(defaultOpen))
-  const open = openProp ?? _open
+  // На планшете (md) сайдбар всегда рельс иконок — сохранённое «раскрыто» действует только с lg.
+  const open = (openProp ?? _open) && (isWide || isMobile)
 
   React.useLayoutEffect(() => {
     if (openProp !== undefined) {
@@ -518,18 +541,20 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
   )
 }
 
+// Строка меню: заливка на активной/наведённой, иконка приглушена (opacity-65), никаких рамок.
+// Высота 40px (44 на тач), в рельсе — квадрат 40×40 по центру.
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button group/menu-button flex w-full items-center gap-2 overflow-hidden rounded-lg p-2 text-left text-sm text-zinc-800 ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-2! group-data-[collapsible=icon]:[&_svg]:size-5 group-data-[collapsible=icon]:[&>span:last-child]:hidden hover:bg-sidebar-accent hover:text-zinc-950 focus-visible:ring-2 active:bg-sidebar-accent active:text-zinc-950 disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-zinc-950 data-active:bg-zinc-950 data-active:font-semibold data-active:text-white data-active:[&_svg]:text-white data-active:hover:bg-zinc-900 data-active:hover:text-white data-active:hover:[&_svg]:text-white data-active:active:bg-zinc-900 data-active:active:text-white [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate",
+  "peer/menu-button group/menu-button flex w-full items-center gap-2.5 overflow-hidden rounded-lg px-2.5 text-left text-sm text-foreground/85 ring-sidebar-ring outline-hidden transition-[width,height,padding,background-color,color] group-has-data-[sidebar=menu-action]/menu-item:pr-9 group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:[&_svg]:size-5 group-data-[collapsible=icon]:[&>span:last-child]:hidden hover:bg-sidebar-accent/70 hover:text-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-foreground data-active:[&_svg]:opacity-100 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:opacity-65 [&>span:last-child]:truncate",
   {
     variants: {
       variant: {
-        default: "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        default: "",
         outline:
           "bg-background shadow-[0_0_0_1px_hsl(var(--sidebar-border))] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground hover:shadow-[0_0_0_1px_hsl(var(--sidebar-accent))]",
       },
       size: {
-        default: "h-9 text-sm",
-        sm: "h-7 text-xs",
+        default: "h-10 text-sm pointer-coarse:h-11 pointer-coarse:group-data-[collapsible=icon]:size-11!",
+        sm: "h-8 text-xs",
         lg: "h-12 text-sm group-data-[collapsible=icon]:p-0!",
       },
     },
@@ -608,9 +633,9 @@ function SidebarMenuAction({
     props: mergeProps<"button">(
       {
         className: cn(
-          "absolute top-1.5 right-1 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground ring-sidebar-ring outline-hidden transition-transform group-data-[collapsible=icon]:hidden peer-hover/menu-button:text-sidebar-accent-foreground peer-data-[size=default]/menu-button:top-1.5 peer-data-[size=lg]/menu-button:top-2.5 peer-data-[size=sm]/menu-button:top-1 after:absolute after:-inset-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 md:after:hidden [&>svg]:size-4 [&>svg]:shrink-0",
+          "absolute top-1/2 right-1 flex size-8 -translate-y-1/2 items-center justify-center rounded-md p-0 text-muted-foreground ring-sidebar-ring outline-hidden transition-[opacity,background-color,color] group-data-[collapsible=icon]:hidden hover:bg-background hover:text-foreground hover:shadow-xs focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
           showOnHover &&
-            "group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 peer-data-active/menu-button:text-white aria-expanded:opacity-100 md:opacity-0",
+            "group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 aria-expanded:opacity-100 pointer-coarse:opacity-100 md:opacity-0",
           className
         ),
       },
@@ -633,7 +658,7 @@ function SidebarMenuBadge({
       data-slot="sidebar-menu-badge"
       data-sidebar="menu-badge"
       className={cn(
-        "pointer-events-none absolute right-1 flex h-5 min-w-5 items-center justify-center rounded-md border border-zinc-300 bg-white px-1 text-xs font-semibold text-zinc-900 tabular-nums select-none group-data-[collapsible=icon]:hidden peer-hover/menu-button:text-zinc-950 peer-data-[size=default]/menu-button:top-1.5 peer-data-[size=lg]/menu-button:top-2.5 peer-data-[size=sm]/menu-button:top-1 peer-data-active/menu-button:border-white/30 peer-data-active/menu-button:bg-white/15 peer-data-active/menu-button:text-white",
+        "pointer-events-none absolute top-1/2 right-2.5 flex h-5 min-w-5 -translate-y-1/2 items-center justify-end text-xs font-medium text-muted-foreground tabular-nums select-none group-data-[collapsible=icon]:hidden group-has-data-[sidebar=menu-action]/menu-item:right-10 peer-data-active/menu-button:text-foreground",
         className
       )}
       {...props}

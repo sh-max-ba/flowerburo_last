@@ -27,6 +27,7 @@ export default async function Page() {
       title="Настройки"
       shiftContext={getShiftShellContext(user)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
     >
       <SettingsPage suppliers={suppliers} wazzupStatus={wazzupStatus} orderSettings={orderSettings} />
     </CrmShell>

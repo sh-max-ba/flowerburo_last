@@ -8,24 +8,28 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "border-zinc-950 bg-primary text-primary-foreground shadow-sm [a]:hover:bg-primary/85",
+        // Одна залитая кнопка на экран — главное действие. Остальные — ghost/secondary.
+        default: "bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 [a]:hover:bg-primary/85",
+        // «outline» оставлен как имя для обратной совместимости, но рамок нет:
+        // вторичное действие читается заливкой, не обводкой.
         outline:
-          "border-zinc-300 bg-white text-zinc-950 shadow-xs hover:border-zinc-400 hover:bg-zinc-100 hover:text-zinc-950 aria-expanded:border-zinc-400 aria-expanded:bg-zinc-100 aria-expanded:text-zinc-950 dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+          "bg-muted/60 text-foreground hover:bg-muted aria-expanded:bg-muted dark:bg-input/30 dark:hover:bg-input/50",
         secondary:
-          "border-zinc-300 bg-secondary text-secondary-foreground hover:bg-zinc-200 aria-expanded:bg-zinc-200 aria-expanded:text-secondary-foreground",
+          "bg-secondary text-secondary-foreground hover:bg-zinc-200 aria-expanded:bg-zinc-200 aria-expanded:text-secondary-foreground",
         ghost:
-          "hover:bg-zinc-100 hover:text-zinc-950 aria-expanded:bg-zinc-100 aria-expanded:text-zinc-950 dark:hover:bg-muted/50",
+          "text-foreground/80 hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
+        // Деструктивное — красный текст на ghost, без заливки и рамки («Отменить»).
         destructive:
-          "border-red-300 bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
+          "text-destructive hover:bg-destructive/10 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 aria-expanded:bg-destructive/10 dark:hover:bg-destructive/20 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
         default:
-          "h-10 gap-1.5 px-3 has-data-[icon=inline-end]:pr-2.5 has-data-[icon=inline-start]:pl-2.5",
+          "h-10 gap-1.5 px-3 pointer-coarse:min-h-11 has-data-[icon=inline-end]:pr-2.5 has-data-[icon=inline-start]:pl-2.5",
         xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
         sm: "h-8 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-11 gap-1.5 px-4 has-data-[icon=inline-end]:pr-3 has-data-[icon=inline-start]:pl-3",
-        icon: "size-10",
+        icon: "size-10 pointer-coarse:size-11",
         "icon-xs":
           "size-6 rounded-[min(var(--radius-md),10px)] in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",
         "icon-sm":

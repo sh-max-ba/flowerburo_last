@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic"
 
 export default async function Page() {
   const user = await requireUser()
-  // Черновики заказов: owner + manager (флористы их не видят — серверная граница в actions.ts).
+  // Черновики заказов доступны всем ролям, включая флориста, — и на просмотр, и на изменение.
   const canAccessCash = await canUseCash(user)
   if (!canAccessSection("order-drafts", user.role, canAccessCash)) {
     return <AccessDenied homeHref={getDefaultPathForRole(user.role)} />
@@ -18,6 +18,9 @@ export default async function Page() {
 
   const data = getDashboardData()
   const drafts = listOrderDrafts()
+  const workOrdersCount = data.orders.filter((order) =>
+    order.status === "Новый" || order.status === "В работе" || order.status === "Готов"
+  ).length
 
   return (
     <CrmShell
@@ -27,12 +30,14 @@ export default async function Page() {
       shiftContext={buildShiftShellContext(user, data)}
       canAccessCash={canAccessCash}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
+      layout="fill"
+      subnavCounts={{ orders: workOrdersCount, "order-drafts": drafts.length }}
     >
       <DraftsPage
         drafts={drafts}
         products={data.products}
         bouquets={data.bouquetTemplates}
-        hasOpenShift={Boolean(data.stats.openShift)}
       />
     </CrmShell>
   )

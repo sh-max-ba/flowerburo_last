@@ -34,7 +34,7 @@ export default async function WarehouseImportsPage() {
         </Link>
       </div>
 
-      <Card className="rounded-2xl border bg-white">
+      <Card className="rounded-2xl">
         <CardHeader>
           <CardTitle>Импорты</CardTitle>
           <CardDescription>Отчеты сохраняются при предпросмотре и после применения.</CardDescription>

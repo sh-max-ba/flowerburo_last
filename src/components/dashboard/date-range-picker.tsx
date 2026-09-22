@@ -72,14 +72,14 @@ export function DateRangePicker({ range }: { range: OwnerDashboardRange }) {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:outline-none">
+      <PopoverTrigger className="inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted aria-expanded:bg-muted focus-visible:ring-3 focus-visible:ring-ring/35 focus-visible:outline-none">
       <CalendarIcon className="size-4 text-muted-foreground" />
         {rangeLabel(range)}
         <ChevronDownIcon className="size-4 text-muted-foreground" />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-auto p-0">
         <div className="flex flex-col sm:flex-row">
-          <div className="flex flex-row gap-1 border-b border-zinc-100 p-2 sm:flex-col sm:border-r sm:border-b-0">
+          <div className="flex flex-row gap-1 border-b border-border/40 p-2 sm:flex-col sm:border-r sm:border-b-0">
             {PRESETS.map((preset) => (
               <button
                 key={preset.key}

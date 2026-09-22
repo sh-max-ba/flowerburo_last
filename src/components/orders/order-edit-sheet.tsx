@@ -5,9 +5,9 @@ import { useRouter } from "next/navigation"
 import { CalendarIcon, ClockIcon, Loader2Icon } from "lucide-react"
 import { toast } from "sonner"
 import { updateOrderAction, updateOrderDraftAction } from "@/app/actions"
-import type { BouquetTemplate, Order, OrderItem, Product } from "@/lib/db"
-import { deliveryTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
-import { calculateCommercialTotals } from "@/lib/pricing"
+import type { BouquetTemplate, Order, OrderImage, OrderItem, Product } from "@/lib/db"
+import { deliveryTypeLabel, discountTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
+import { calculateCommercialTotals, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
 import { formatMoney } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
@@ -28,6 +28,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
+import { OrderImagesField } from "@/components/orders/order-images"
 import { ProductCombobox } from "@/components/products/product-combobox"
 import {
   ProductLineItems,
@@ -84,6 +85,8 @@ export function OrderEditSheet({
   const [pending, startTransition] = useTransition()
   const initialDue = splitDueAt(order.dueAt)
   const [items, setItems] = useState<ProductLineItem[]>(() => orderItemsToLineItems(order.items))
+  // Имя клиента редактируем только у черновика — у заказа в работе оно уже зафиксировано в кассе/сделке.
+  const [customer, setCustomer] = useState(order.customer ?? "")
   const [dueDate, setDueDate] = useState(initialDue.date)
   const [dueTime, setDueTime] = useState(initialDue.time)
   const [deliveryType, setDeliveryType] = useState<"pickup" | "delivery">(
@@ -92,19 +95,26 @@ export function OrderEditSheet({
   const [address, setAddress] = useState(order.address ?? "")
   const [recipientPhone, setRecipientPhone] = useState(order.recipientPhone ?? "")
   const [note, setNote] = useState(order.note ?? "")
+  const [images, setImages] = useState<OrderImage[]>(() => order.images ?? [])
   const [deliveryPrice, setDeliveryPrice] = useState(order.deliveryPrice ?? 0)
   const [courierPayout, setCourierPayout] = useState(order.courierPayout ?? 0)
-  // Предоплата-намерение черновика: сумма и способ хранятся в черновике, в кассу проводятся
-  // только при отправке в работу. У обычного заказа этот блок не показывается.
+  // Предоплата-намерение черновика: сумма и способ хранятся в черновике; при отправке в работу
+  // становится отложенной предоплатой и проводится в кассу при выдаче. У обычного заказа блок скрыт.
   const [prepaid, setPrepaid] = useState(order.prepaid ?? 0)
   const [prepaidMethod, setPrepaidMethod] = useState(order.draftPrepaidMethod || "cash")
+  // Скидку на чек редактируем ТОЛЬКО у черновика (у заказа в работе она зафиксирована).
+  const isDraft = order.status === "Черновик"
+  const [orderDiscountType, setOrderDiscountType] = useState<DiscountType>(
+    normalizeDiscountType(order.orderDiscountType)
+  )
+  const [orderDiscountValue, setOrderDiscountValue] = useState(order.orderDiscountValue ?? 0)
 
   const isDelivery = deliveryType === "delivery"
-  // Итог считаем со скидкой на чек, сохранённой у заказа (на столе её не меняем).
+  // Итог со скидкой на чек: у черновика — из редактируемых полей, у заказа — сохранённая.
   const totals = calculateCommercialTotals(
     getProductLineItemsForTotals(items),
-    order.orderDiscountType,
-    order.orderDiscountValue
+    isDraft ? orderDiscountType : order.orderDiscountType,
+    isDraft ? orderDiscountValue : order.orderDiscountValue
   )
   const total = totals.total + (isDelivery ? deliveryPrice : 0)
   const dueAt = dueDate ? `${dueDate}T${dueTime || "00:00"}` : ""
@@ -117,8 +127,6 @@ export function OrderEditSheet({
   function addBouquet(bouquet: BouquetTemplate) {
     setItems((current) => addBouquetToLineItems(current, bouquet))
   }
-
-  const isDraft = order.status === "Черновик"
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -154,11 +162,23 @@ export function OrderEditSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-3xl">
-        <SheetHeader className="border-b border-zinc-200">
-          <SheetTitle>Редактировать заказ {order.number || `#${order.id}`}</SheetTitle>
+      {/* Базовый SheetContent задаёт ширину как `data-[side=right]:w-3/4` и
+          `data-[side=right]:sm:max-w-xl`. Селектор с data-атрибутом специфичнее обычного класса, а
+          tailwind-merge их не схлопывает (разные модификаторы), поэтому простые `w-full` /
+          `sm:max-w-3xl` проигрывают — состав заказа и обрезался. Перебиваем ОБА свойства
+          вариантами с тем же префиксом `data-[side=right]:`. */}
+      <SheetContent
+        side="right"
+        className="flex flex-col gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-3xl data-[side=right]:lg:max-w-[72rem]"
+      >
+        <SheetHeader className="border-b border-border/40">
+          <SheetTitle>
+            {isDraft ? "Черновик" : "Редактировать заказ"} {order.number || `#${order.id}`}
+          </SheetTitle>
           <SheetDescription>
-            Состав, срок и доставку можно менять, пока заказ не собран. Склад спишется по новому составу при отметке «Букет готов».
+            {isDraft
+              ? "Черновик: меняйте состав и суммы свободно. Склад и касса не затрагиваются — резерв проведётся при «Отправить в работу», предоплата попадёт в кассу при выдаче заказа."
+              : "Состав, срок и доставку можно менять, пока заказ не собран. Склад спишется по новому составу при отметке «Букет готов»."}
           </SheetDescription>
         </SheetHeader>
 
@@ -169,6 +189,25 @@ export function OrderEditSheet({
             <input type="hidden" name="deliveryType" value={deliveryType} />
 
             <FieldGroup>
+              {isDraft && (
+                <>
+                  <input
+                    type="hidden"
+                    name="customerId"
+                    value={order.customerId != null ? String(order.customerId) : ""}
+                  />
+                  <Field>
+                    <FieldLabel htmlFor="order-edit-customer">Имя клиента</FieldLabel>
+                    <Input
+                      id="order-edit-customer"
+                      name="customer"
+                      value={customer}
+                      disabled={pending}
+                      onChange={(event) => setCustomer(event.target.value)}
+                    />
+                  </Field>
+                </>
+              )}
               <div className="grid gap-4 md:grid-cols-2">
                 <Field>
                   <FieldLabel>Дата и время</FieldLabel>
@@ -252,6 +291,8 @@ export function OrderEditSheet({
                 />
               </Field>
 
+              <OrderImagesField images={images} onChange={setImages} disabled={pending} />
+
               {isDelivery ? (
                 <div className="grid gap-4 md:grid-cols-2">
                   <Field>
@@ -307,7 +348,7 @@ export function OrderEditSheet({
                       onChange={(event) => setPrepaid(Math.max(0, Number(event.target.value) || 0))}
                     />
                     <FieldDescription>
-                      Не проведена — уйдёт в кассу при отправке в работу.
+                      Попадёт в кассу в день выдачи заказа.
                     </FieldDescription>
                   </Field>
                   <Field>
@@ -325,6 +366,42 @@ export function OrderEditSheet({
                         ))}
                       </SelectContent>
                     </Select>
+                  </Field>
+                </div>
+              )}
+
+              {isDraft && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="order-edit-discount-type">Скидка на чек</FieldLabel>
+                    <input type="hidden" name="orderDiscountType" value={orderDiscountType} />
+                    <Select
+                      value={orderDiscountType}
+                      onValueChange={(value) => setOrderDiscountType(normalizeDiscountType(String(value ?? "none")))}
+                    >
+                      <SelectTrigger id="order-edit-discount-type" className="w-full" disabled={pending}>
+                        <SelectValue>{(value) => discountTypeLabel(String(value ?? "none"))}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent align="start">
+                        <SelectItem value="none">Без скидки</SelectItem>
+                        <SelectItem value="percent">Процент</SelectItem>
+                        <SelectItem value="amount">Сумма</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="order-edit-discount-value">Размер скидки</FieldLabel>
+                    <Input
+                      id="order-edit-discount-value"
+                      name="orderDiscountValue"
+                      type="number"
+                      step="1"
+                      min="0"
+                      className="tabular-nums"
+                      value={orderDiscountValue}
+                      disabled={pending || orderDiscountType === "none"}
+                      onChange={(event) => setOrderDiscountValue(Math.max(0, Number(event.target.value) || 0))}
+                    />
                   </Field>
                 </div>
               )}
@@ -351,7 +428,7 @@ export function OrderEditSheet({
             </FieldGroup>
           </div>
 
-          <SheetFooter className="border-t border-zinc-200">
+          <SheetFooter className="border-t border-border/40">
             {paidExceeds && (
               <div className="text-sm text-destructive">
                 Итог ({formatMoney(total)}) меньше уже принятой оплаты ({formatMoney(order.paid)}). Увеличьте состав или уменьшите скидку.

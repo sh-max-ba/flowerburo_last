@@ -197,6 +197,24 @@ function readyOrderStatusRank(status: OrderStatus) {
   return ranks[status] ?? 99
 }
 
+// Поиск по заказам в шапке: номер, клиент, телефоны, адрес, комментарий, состав.
+export function orderMatchesSearch(order: Order, query: string) {
+  return [
+    order.number,
+    String(order.id),
+    order.customer,
+    order.phone,
+    order.recipientPhone,
+    order.address,
+    order.note,
+    ...order.items.map((item) => item.name),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .includes(query)
+}
+
 export function sortWorkOrders(orders: Order[], sortMode: OrderSortMode) {
   return [...orders].sort((left, right) => {
     if (sortMode === "new") {
@@ -439,7 +457,7 @@ function OrderCalendarCard({
   const balance = order.total - order.paid
 
   return (
-    <div className={cn("flex flex-col gap-2 rounded-lg border bg-white p-3 text-xs", orderUrgencyClass(order))}>
+    <div className={cn("flex flex-col gap-2 rounded-lg bg-background p-3 text-xs shadow-xs", orderUrgencyClass(order))}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="truncate font-medium">{order.number || `#${order.id}`}</div>
@@ -499,7 +517,7 @@ export function orderUrgency(order: Order, now: Date = new Date()): OrderUrgency
     return {
       level: "overdue",
       label: "Просрочено",
-      cardClass: "border-destructive bg-destructive/5 ring-1 ring-destructive/40",
+      cardClass: "bg-destructive/5 ring-1 ring-destructive/30",
     }
   }
 
@@ -508,7 +526,7 @@ export function orderUrgency(order: Order, now: Date = new Date()): OrderUrgency
     return {
       level: "today",
       label: hoursLeft <= 6 ? `Через ${hoursLeft} ч` : "Сегодня",
-      cardClass: "border-amber-300 bg-amber-50",
+      cardClass: "bg-amber-50/70",
     }
   }
 

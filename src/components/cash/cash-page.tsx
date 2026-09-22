@@ -1,6 +1,6 @@
 "use client"
 
-import { Fragment, useCallback, useMemo, useRef, useState, useTransition } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import {
   AlertTriangleIcon,
@@ -14,12 +14,14 @@ import {
   PlusCircleIcon,
   PlusIcon,
   ReceiptTextIcon,
+  Trash2Icon,
   TruckIcon,
   UserPlusIcon,
   WalletIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { useUrlFlagDialog } from "@/hooks/use-url-flag"
 import {
   cashInAction,
   cashOutAction,
@@ -31,6 +33,7 @@ import {
 import type {
   CustomerOption,
   DashboardData,
+  OrderImage,
   PaymentMethod,
   Product,
   BouquetTemplate,
@@ -91,6 +94,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { ScreenBody } from "@/components/screen-body"
+import { HeaderAction, ScreenHeader } from "@/components/screen-header"
 import { ProductCombobox } from "@/components/products/product-combobox"
 import { CustomerCombobox } from "@/components/customers/customer-combobox"
 import {
@@ -105,6 +110,8 @@ import {
   Info,
   OrdersActivityRefresh,
 } from "@/components/orders/order-shared"
+import { OrderImagesField } from "@/components/orders/order-images"
+import { RefundSearchSheet } from "@/components/orders/order-refund"
 import { ShiftCashTimeline } from "@/components/cash/shift-cash-timeline"
 import { ShiftReceiptsList } from "@/components/cash/shift-receipts-list"
 import { SplitPaymentFields, type SplitPaymentState } from "@/components/cash/split-payment-fields"
@@ -123,32 +130,78 @@ function phoneForSubmit(value: string) {
   return trimmed === PHONE_PREFIX.trim() ? "" : trimmed
 }
 
+// Ключ localStorage для корзины продажи — чтобы набранный состав не терялся при переходе на другой
+// раздел или перезагрузке (F5). Один на браузер; очищается, когда корзина пуста (после продажи).
+const CART_STORAGE_KEY = "fb-cash-cart"
+
 // Касса (продажа) — единый экран walk-in без табов. Оформление заказа с доставкой
 // вынесено в модалку («Создать заказ»), показатели смены и кассовые операции —
 // в боковую панель «Касса за смену» (кнопка в верхней зоне). Открытие/закрытие смены
 // живут в CrmShell (shiftContext + ShiftSheet).
-export function CashPage({ data }: { data: DashboardData }) {
+export function CashPage({ data, canRefund = false }: { data: DashboardData; canRefund?: boolean }) {
   const router = useRouter()
   const [cashOperation, setCashOperation] = useState<CashOperation | null>(null)
-  const [orderOpen, setOrderOpen] = useState(false)
+  // Окно заказа открывается кнопкой на кассе и ссылкой /cash?order=new («+ Новый заказ»
+  // со стола заказов и «+» на строке меню).
+  const [orderOpen, setOrderOpen] = useUrlFlagDialog("order", "new")
   const [shiftDetailsOpen, setShiftDetailsOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
   // Единая корзина: walk-in продажа и оформление заказа работают с одним составом —
   // «Создать заказ» наследует уже набранные позиции.
   const [items, setItems] = useState<ProductLineItem[]>([])
 
+  // Корзина переживает переход между разделами и F5: восстанавливаем состав при возврате на кассу…
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      const raw = window.localStorage.getItem(CART_STORAGE_KEY)
+      if (!raw) return
+      const stored = JSON.parse(raw) as ProductLineItem[]
+      if (Array.isArray(stored) && stored.length) {
+        // Регидрация из внешнего хранилища после монтирования (в инициализаторе useState нельзя —
+        // рассинхрон гидрации SSR↔клиент).
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setItems(stored)
+      }
+    } catch {
+      // повреждённое хранилище игнорируем
+    }
+    // восстановление одноразовое, только при монтировании
+  }, [])
+
+  // …и зеркалим любое изменение состава. Пустая корзина (после продажи resetForm) — ключ самоочищается.
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      if (items.length) {
+        window.localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(items))
+      } else {
+        window.localStorage.removeItem(CART_STORAGE_KEY)
+      }
+    } catch {
+      // недоступность/переполнение localStorage игнорируем
+    }
+  }, [items])
+
   const openShift = data.stats.openShift
   const activeShiftDetail = openShift
     ? data.shiftDetails.find((detail) => detail.shift.id === openShift.id) ?? null
     : data.shiftDetails[0] ?? null
 
-  function run(action: () => Promise<Result>, after?: () => void) {
+  function run(action: () => Promise<Result>, after?: () => void, successLink?: { label: string; href: string }) {
     startTransition(async () => {
       const result = await action()
       if (result.ok) {
-        for (const message of result.messages ?? [result.message]) {
-          toast.success(message)
-        }
+        const messages = result.messages ?? [result.message]
+        messages.forEach((message, index) => {
+          const withLink = successLink && index === messages.length - 1
+          toast.success(
+            message,
+            withLink
+              ? { action: { label: successLink.label, onClick: () => router.push(successLink.href) } }
+              : undefined
+          )
+        })
         after?.()
         router.refresh()
       } else {
@@ -160,43 +213,60 @@ export function CashPage({ data }: { data: DashboardData }) {
   function submitForm(
     event: React.FormEvent<HTMLFormElement>,
     action: (formData: FormData) => Promise<Result>,
-    after?: () => void
+    after?: () => void,
+    successLink?: { label: string; href: string }
   ) {
     event.preventDefault()
     const formData = new FormData(event.currentTarget)
-    run(() => action(formData), after)
+    run(() => action(formData), after, successLink)
   }
 
   return (
     <>
       <OrdersActivityRefresh />
-      <div className="flex flex-col gap-4">
-        {!openShift && (
-          <Alert className="border-amber-200 bg-amber-50 text-amber-950">
-            <AlertTriangleIcon />
-            <AlertTitle>Откройте смену для кассовых операций</AlertTitle>
-            <AlertDescription>
-              Продажа, предоплата, доплата и выдача денег курьеру доступны только при открытой смене.
-            </AlertDescription>
-          </Alert>
-        )}
+      {/* Поле шапки — поиск товара (автофокус: позиции набивают руками); справа — возврат и
+          «Касса за смену». Главное действие экрана — «Провести продажу» в панели оплаты. */}
+      <ScreenHeader
+        title="Касса"
+        searchSlot={
+          <ProductCombobox
+            products={data.products}
+            bouquets={data.bouquetTemplates}
+            includeBouquets
+            portalDropdown
+            autoFocus
+            bare
+            className="h-full flex-1"
+            inputClassName="text-base"
+            placeholder="Найти товар — название, код или артикул"
+            disabled={isPending}
+            onSelect={(product) => setItems((current) => addProductToLineItems(current, product))}
+            onSelectBouquet={(bouquet) => setItems((current) => addBouquetToLineItems(current, bouquet))}
+          />
+        }
+        actions={
+          <>
+            {canRefund && <RefundSearchSheet hasOpenShift={Boolean(openShift)} trigger="header" />}
+            <HeaderAction icon={WalletIcon} label="Касса за смену" onClick={() => setShiftDetailsOpen(true)} />
+          </>
+        }
+        tabs={null}
+      />
 
-        {/* Верхняя зона: заголовок + «Касса за смену» (панель смены). */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="font-heading text-lg font-semibold text-zinc-900">Продажа</h1>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setShiftDetailsOpen(true)}
-          >
-            <WalletIcon data-icon="inline-start" />
-            Касса за смену
-          </Button>
-        </div>
+      {!openShift && (
+        <Alert className="shrink-0 border-0 bg-amber-50 text-amber-950 shadow-xs">
+          <AlertTriangleIcon />
+          <AlertTitle>Откройте смену для кассовых операций</AlertTitle>
+          <AlertDescription>
+            Продажа, доплата, выдача заказов и выдача денег курьеру доступны только при открытой смене.
+            Заказ оформить можно и сейчас — предоплата попадёт в кассу в день выдачи.
+          </AlertDescription>
+        </Alert>
+      )}
 
+      <ScreenBody surface={false} scroll="none">
         <QuickSaleForm
           products={data.products}
-          bouquets={data.bouquetTemplates}
           customers={data.customers}
           pending={isPending}
           disabled={!openShift}
@@ -205,7 +275,7 @@ export function CashPage({ data }: { data: DashboardData }) {
           onCreateOrder={() => setOrderOpen(true)}
           onSubmit={(event, after) => submitForm(event, createSaleAction, after)}
         />
-      </div>
+      </ScreenBody>
 
       <OrderDialog
         open={orderOpen}
@@ -214,16 +284,22 @@ export function CashPage({ data }: { data: DashboardData }) {
         bouquets={data.bouquetTemplates}
         customers={data.customers}
         pending={isPending}
-        shiftOpen={Boolean(openShift)}
         items={items}
         setItems={setItems}
         onSubmit={(event, after) => {
           const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLElement | null
-          const action = submitter?.getAttribute("data-intent") === "draft" ? createOrderDraftAction : createOrderAction
-          submitForm(event, action, () => {
-            after?.()
-            setOrderOpen(false)
-          })
+          const isDraft = submitter?.getAttribute("data-intent") === "draft"
+          const action = isDraft ? createOrderDraftAction : createOrderAction
+          submitForm(
+            event,
+            action,
+            () => {
+              after?.()
+              setOrderOpen(false)
+            },
+            // После сохранения черновик «пропадал» — даём ссылку прямо в тосте.
+            isDraft ? { label: "Открыть черновики", href: "/orders/drafts" } : undefined
+          )
         }}
       />
 
@@ -348,7 +424,7 @@ function CustomerCreateDialog({
             </Field>
           </FieldGroup>
           <DialogFooter>
-            <Button type="button" variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="ghost" disabled={disabled} onClick={() => onOpenChange(false)}>
               Отмена
             </Button>
             <Button type="submit" disabled={disabled}>
@@ -388,9 +464,70 @@ function AddChip({
   )
 }
 
+// «Очистить» — сбрасывает набранную продажу и ничего не трогает на складе: состав живёт только
+// в состоянии формы (и в localStorage), списание происходит лишь при проведении продажи.
+// Чистим через resetForm, а не setItems([]): иначе на пустой корзине остаются включённая
+// смешанная оплата с её скрытыми полями и «Получено», и они прилипнут к следующей продаже.
+// Подтверждение обязательно: на планшете кнопку легко задеть пальцем.
+function ClearCartButton({
+  count,
+  disabled,
+  onClear,
+}: {
+  count: number
+  disabled?: boolean
+  onClear: () => void
+}) {
+  const [open, setOpen] = useState(false)
+
+  if (count === 0) {
+    return null
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-xs text-zinc-500"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+      >
+        <Trash2Icon data-icon="inline-start" />
+        Очистить
+      </Button>
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Очистить корзину?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {count === 1
+                ? "Позиция будет убрана из списка"
+                : `Все позиции (${count}) будут убраны из списка`}
+              , а поля продажи (клиент, скидка, оплата, комментарий) — сброшены. Со склада ничего
+              не спишется: это только текущий набор на кассе.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                onClear()
+                setOpen(false)
+              }}
+            >
+              Очистить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  )
+}
+
 function QuickSaleForm({
   products,
-  bouquets,
   customers,
   pending,
   disabled,
@@ -400,7 +537,6 @@ function QuickSaleForm({
   onSubmit,
 }: {
   products: Product[]
-  bouquets: BouquetTemplate[]
   customers: CustomerOption[]
   pending: boolean
   disabled: boolean
@@ -492,13 +628,6 @@ function QuickSaleForm({
             : null
   const completeDisabled = pending || Boolean(completeDisabledReason)
 
-  function addProduct(product: Product) {
-    setItems((current) => addProductToLineItems(current, product))
-  }
-
-  function addBouquet(bouquet: BouquetTemplate) {
-    setItems((current) => addBouquetToLineItems(current, bouquet))
-  }
 
   function resetForm() {
     setItems([])
@@ -575,42 +704,40 @@ function QuickSaleForm({
         onOpenChange={setCustomerDialogOpen}
         onCreated={handleCustomerCreated}
       />
-      <form onSubmit={handleSubmit}>
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-          {/* Левая колонка: крупный поиск (автофокус) + компактная корзина. */}
-          <div className="flex min-w-0 flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
-            <ProductCombobox
-              products={products}
-              bouquets={bouquets}
-              includeBouquets
-              portalDropdown
-              autoFocus
-              inputClassName="h-12 rounded-xl text-base"
-              placeholder="Найти товар — название, код или артикул"
-              disabled={pending}
-              onSelect={addProduct}
-              onSelectBouquet={addBouquet}
-            />
-            <div className="min-w-0">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="text-sm font-medium text-zinc-700">Корзина</span>
-                {items.length > 0 && (
-                  <span className="text-xs text-zinc-500">{items.length} поз.</span>
-                )}
+      <form onSubmit={handleSubmit} className="@container/cash flex min-h-0 flex-1 flex-col">
+        {/* На всю высоту: корзина слева скроллится сама, панель оплаты — 360px справа. В узкой
+            рабочей области (< @4xl) колонки складываются, скроллится вся область. */}
+        <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-1 gap-3 overflow-y-auto overscroll-contain @4xl/cash:auto-rows-[minmax(0,1fr)] @4xl/cash:grid-cols-[minmax(0,1fr)_360px] @4xl/cash:overflow-hidden">
+          {/* Левая колонка: корзина. */}
+          <div className="flex min-h-0 min-w-0 flex-col rounded-2xl bg-background shadow-xs @4xl/cash:overflow-y-auto">
+            <div className="flex flex-col gap-3 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-foreground">Корзина</span>
+                <div className="flex items-center gap-2">
+                  {items.length > 0 && (
+                    <span className="text-xs text-muted-foreground tabular-nums">{items.length} поз.</span>
+                  )}
+                  <ClearCartButton
+                    count={items.length}
+                    disabled={pending}
+                    onClear={resetForm}
+                  />
+                </div>
               </div>
               <ProductLineItems
                 products={products}
                 items={items}
                 disabled={pending}
                 emptyTitle="Корзина пуста"
+                maxHeightPx={null}
                 onItemsChange={setItems}
               />
             </div>
           </div>
 
           {/* Правая колонка: панель оплаты. На виду — способ оплаты, получено, сдача, итог. */}
-          <div className="flex min-w-0 flex-col rounded-xl border border-zinc-200 bg-white shadow-sm xl:sticky xl:top-20 xl:self-start">
-            <div className="flex flex-col gap-4 p-4 sm:p-5">
+          <div className="flex min-h-0 min-w-0 flex-col rounded-2xl bg-background shadow-xs @4xl/cash:overflow-y-auto">
+            <div className="flex flex-col gap-4 p-4">
               <input type="hidden" name="customerId" value={selectedCustomer?.id ?? ""} />
               <input type="hidden" name="saleDiscountType" value={saleDiscountType} />
               <input type="hidden" name="saleDiscountValue" value={saleDiscountValue} />
@@ -667,7 +794,7 @@ function QuickSaleForm({
 
               {/* Клиент — опционален для walk-in: свёрнут, пока не выбран. */}
               {showCustomer && (
-                <div className="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-3">
+                <div className="flex flex-col gap-2 rounded-xl bg-muted/30 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <FieldLabel className="m-0">Клиент</FieldLabel>
                     <Button
@@ -718,7 +845,7 @@ function QuickSaleForm({
 
               {/* Скидка на чек — редка, свёрнута по умолчанию. */}
               {showSaleDiscount && (
-                <FieldSet className="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+                <FieldSet className="rounded-xl bg-muted/30 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <FieldLegend className="m-0">Скидка на чек</FieldLegend>
                     <Button
@@ -818,7 +945,7 @@ function QuickSaleForm({
 
               {/* Разбивка показывается только когда есть скидка — иначе не загромождаем. */}
               {hasAnyDiscount && (
-                <div className="grid gap-1.5 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm">
+                <div className="grid gap-1.5 rounded-xl bg-muted/30 p-3 text-sm">
                   <Info label="Товары до скидки" value={formatMoney(saleTotals.itemsTotalBeforeDiscount)} />
                   {saleTotals.itemsDiscountTotal > 0 && (
                     <Info label="Скидка по позициям" value={`− ${formatMoney(saleTotals.itemsDiscountTotal)}`} />
@@ -866,7 +993,7 @@ function QuickSaleForm({
             </div>
 
             {/* Закреплённый итог + сдача + главное действие. */}
-            <div className="sticky bottom-0 z-10 flex flex-col gap-3 rounded-b-xl border-t border-zinc-200 bg-white/95 p-4 backdrop-blur supports-[backdrop-filter]:bg-white/80 sm:px-5">
+            <div className="sticky bottom-0 z-10 mt-auto flex flex-col gap-3 rounded-b-2xl border-t border-border/40 bg-background/95 p-4 backdrop-blur supports-[backdrop-filter]:bg-background/85">
               <div className="flex items-end justify-between gap-3">
                 <div>
                   <div className="text-xs text-zinc-500">Итого к оплате</div>
@@ -897,7 +1024,7 @@ function QuickSaleForm({
                     }
                   >
                     <Button
-                      className="h-11 w-full border-brand bg-brand text-white shadow-sm hover:border-brand-strong hover:bg-brand-strong"
+                      className="h-11 w-full bg-brand text-white shadow-sm hover:bg-brand-strong"
                       type="submit"
                       disabled={completeDisabled}
                     >
@@ -933,8 +1060,8 @@ function QuickSaleForm({
               {/* Оформление заказа с доставкой — наследует текущую корзину. */}
               <Button
                 type="button"
-                variant="outline"
-                className="h-10 w-full border-brand bg-brand-subtle/40 text-brand-strong hover:border-brand-strong hover:bg-brand-subtle hover:text-brand-strong"
+                variant="ghost"
+                className="h-10 w-full bg-brand-subtle/60 text-brand-strong hover:bg-brand-subtle hover:text-brand-strong"
                 disabled={pending}
                 onClick={onCreateOrder}
               >
@@ -990,7 +1117,7 @@ function DateChip({
         "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
         active
           ? "border-brand bg-brand-subtle text-brand-strong"
-          : "border-zinc-300 text-zinc-600 hover:border-zinc-400 hover:bg-zinc-100"
+          : "text-muted-foreground hover:bg-muted"
       )}
     >
       {label}
@@ -1005,7 +1132,6 @@ function OrderDialog({
   bouquets,
   customers,
   pending,
-  shiftOpen,
   items,
   setItems,
   onSubmit,
@@ -1016,7 +1142,6 @@ function OrderDialog({
   bouquets: BouquetTemplate[]
   customers: CustomerOption[]
   pending: boolean
-  shiftOpen: boolean
   items: ProductLineItem[]
   setItems: React.Dispatch<React.SetStateAction<ProductLineItem[]>>
   onSubmit: (event: React.FormEvent<HTMLFormElement>, after?: () => void) => void
@@ -1024,7 +1149,7 @@ function OrderDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl lg:max-w-6xl">
-        <DialogHeader className="shrink-0 border-b border-zinc-200 px-5 py-4">
+        <DialogHeader className="shrink-0 border-b border-border/40 px-5 py-4">
           <DialogTitle>Новый заказ</DialogTitle>
           <DialogDescription>Оформление заказа с самовывозом или доставкой. Состав наследуется из корзины продажи.</DialogDescription>
         </DialogHeader>
@@ -1033,7 +1158,6 @@ function OrderDialog({
           bouquets={bouquets}
           customers={customers}
           pending={pending}
-          shiftOpen={shiftOpen}
           items={items}
           setItems={setItems}
           onSubmit={onSubmit}
@@ -1048,7 +1172,6 @@ function NewOrderForm({
   bouquets,
   customers,
   pending,
-  shiftOpen,
   items,
   setItems,
   onSubmit,
@@ -1057,7 +1180,6 @@ function NewOrderForm({
   bouquets: BouquetTemplate[]
   customers: CustomerOption[]
   pending: boolean
-  shiftOpen: boolean
   items: ProductLineItem[]
   setItems: React.Dispatch<React.SetStateAction<ProductLineItem[]>>
   onSubmit: (event: React.FormEvent<HTMLFormElement>, after?: () => void) => void
@@ -1080,6 +1202,8 @@ function NewOrderForm({
   const [dueTime, setDueTime] = useState("")
   const [address, setAddress] = useState("")
   const [note, setNote] = useState("")
+  // Фото-референсы: загружаются сразу при выборе, в заказ уходят id (скрытое поле orderImageIds).
+  const [images, setImages] = useState<OrderImage[]>([])
   const [paymentMethod, setPaymentMethod] = useState("cash")
   // Смешанная предоплата: блок размонтируется при prepaid=0 (сброс состояния «бесплатный»).
   const [prepaidSplit, setPrepaidSplit] = useState<SplitPaymentState>({ enabled: false, valid: true })
@@ -1103,31 +1227,23 @@ function NewOrderForm({
   const total = itemsTotal + effectiveDeliveryPrice
   const balance = total - prepaid
   const fullyPaid = items.length > 0 && balance <= 0
-  const needsShift = prepaid > 0 && !shiftOpen
+  // Предоплата — отложенная (в кассу проводится при выдаче), поэтому открытая смена для
+  // создания заказа не нужна.
   const prepaidTooHigh = prepaid > total
   const dueAt = dueDate && dueTime ? `${dueDate}T${dueTime}` : ""
   const orderDisabledReason = items.length === 0
     ? "Добавьте позиции"
-    : needsShift
-      ? "Откройте смену для предоплаты"
-      : prepaidTooHigh
-        ? "Предоплата выше итога"
-        : prepaidSplit.enabled && !prepaidSplit.valid
-          ? "Заполните части смешанной предоплаты"
-          : null
+    : prepaidTooHigh
+      ? "Предоплата выше итога"
+      : prepaidSplit.enabled && !prepaidSplit.valid
+        ? "Заполните части смешанной предоплаты"
+        : null
   const orderDisabled = pending || Boolean(orderDisabledReason)
   const orderDiscountActive = orderDiscountType !== "none"
   const showOrderDiscount = orderDiscountOpen || orderDiscountActive
   const todayValue = dateInputValue(new Date())
   const tomorrowValue = dateInputValue(addLocalDays(new Date(), 1))
 
-  function addProduct(product: Product) {
-    setItems((current) => addProductToLineItems(current, product))
-  }
-
-  function addBouquet(bouquet: BouquetTemplate) {
-    setItems((current) => addBouquetToLineItems(current, bouquet))
-  }
 
   function resetForm() {
     setItems([])
@@ -1144,6 +1260,7 @@ function NewOrderForm({
     setDeliveryType("pickup")
     setAddress("")
     setNote("")
+    setImages([])
     setDeliveryPrice(0)
     setCourierPayout(0)
     setPrepaid(0)
@@ -1216,12 +1333,6 @@ function NewOrderForm({
     if (prepaid < 0 || deliveryPrice < 0 || courierPayout < 0) {
       event.preventDefault()
       toast.error("Суммы не могут быть отрицательными.")
-      return
-    }
-
-    if (needsShift) {
-      event.preventDefault()
-      toast.error("Откройте смену для предоплаты.")
       return
     }
 
@@ -1381,6 +1492,7 @@ function NewOrderForm({
                 <FieldLabel htmlFor="order-note">Комментарий</FieldLabel>
                 <Textarea id="order-note" name="note" rows={2} value={note} onChange={(event) => setNote(event.target.value)} />
               </Field>
+              <OrderImagesField images={images} onChange={setImages} disabled={pending} />
             </FieldGroup>
           </OrderStep>
 
@@ -1392,8 +1504,8 @@ function NewOrderForm({
                 includeBouquets
                 portalDropdown
                 disabled={pending}
-                onSelect={addProduct}
-                onSelectBouquet={addBouquet}
+                onSelect={(product) => setItems((current) => addProductToLineItems(current, product))}
+                onSelectBouquet={(bouquet) => setItems((current) => addBouquetToLineItems(current, bouquet))}
               />
               <ProductLineItems
                 products={products}
@@ -1481,13 +1593,12 @@ function NewOrderForm({
               )}
               {prepaid > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  «Провести заказ» — предоплата сразу уходит в кассу текущей смены. «Сохранить черновик» —
-                  сумма и способ запоминаются, в кассу попадут при отправке черновика в работу.
+                  Предоплата попадёт в кассу в день выдачи заказа, а не сегодня. Смена для этого не нужна.
                 </p>
               )}
 
               {showOrderDiscount ? (
-                <div className="grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+                <div className="grid gap-3 rounded-xl bg-muted/30 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-medium">Скидка на чек</div>
                     <Button
@@ -1554,13 +1665,6 @@ function NewOrderForm({
                 </Button>
               )}
 
-              {needsShift && (
-                <Alert>
-                  <AlertTriangleIcon />
-                  <AlertTitle>Откройте смену для кассовых операций</AlertTitle>
-                  <AlertDescription>Предоплату можно принять только при открытой смене.</AlertDescription>
-                </Alert>
-              )}
               {prepaidTooHigh && (
                 <Alert className="border-amber-200 bg-amber-50 text-amber-950">
                   <AlertTriangleIcon />
@@ -1569,7 +1673,7 @@ function NewOrderForm({
                 </Alert>
               )}
 
-              <div className="grid gap-1.5 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm">
+              <div className="grid gap-1.5 rounded-xl bg-muted/30 p-3 text-sm">
                 <Info label="До скидки" value={formatMoney(orderTotals.itemsTotalBeforeDiscount)} />
                 {orderTotals.itemsDiscountTotal > 0 && (
                   <Info label="Скидка по позициям" value={`− ${formatMoney(orderTotals.itemsDiscountTotal)}`} />
@@ -1578,14 +1682,14 @@ function NewOrderForm({
                   <Info label="Скидка на чек" value={`− ${formatMoney(orderTotals.dealDiscountAmount)}`} />
                 )}
                 {effectiveDeliveryPrice > 0 && <Info label="Доставка" value={formatMoney(effectiveDeliveryPrice)} />}
-                {prepaid > 0 && <Info label="Предоплата" value={`− ${formatMoney(prepaid)}`} />}
+                {prepaid > 0 && <Info label="Предоплата (в кассу при выдаче)" value={`− ${formatMoney(prepaid)}`} />}
               </div>
             </FieldGroup>
           </OrderStep>
         </div>
 
         {/* Закреплённый футер модалки: итог + остаток к доплате + главное действие. */}
-        <div className="shrink-0 border-t border-zinc-200 bg-white px-5 py-4">
+        <div className="shrink-0 border-t border-border/40 bg-background px-5 py-4">
           <div className="flex flex-col gap-3">
             <div className="flex items-end justify-between gap-3">
               <div>
@@ -1682,7 +1786,7 @@ function ShiftDetailsSheet({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full gap-0 sm:max-w-xl">
-        <SheetHeader className="border-b border-zinc-200">
+        <SheetHeader className="border-b border-border/40">
           <SheetTitle>Касса за смену</SheetTitle>
           <SheetDescription>
             {openShift
@@ -1737,7 +1841,7 @@ function ShiftDetailsSheet({
               </div>
 
               {/* Ожидается в кассе — ключевое число для сверки на закрытии. */}
-              <div className="flex items-baseline justify-between rounded-xl border border-zinc-200 bg-zinc-50/60 px-4 py-3">
+              <div className="flex items-baseline justify-between rounded-xl bg-muted/30 px-4 py-3">
                 <span className="text-sm text-muted-foreground">Ожидается в кассе</span>
                 <span className="text-xl font-semibold tabular-nums text-zinc-950">
                   {formatMoney(summary.expectedCash)}
@@ -1747,7 +1851,7 @@ function ShiftDetailsSheet({
               {/* Справочно: деньги, не входящие в выручку/кассу этой смены. */}
               {(summary.deferredPrepayments > 0 ||
                 summary.revenueReceivedInOtherShifts > 0 ||
-                (Boolean(openShift) && summary.draftPrepaidTotal > 0)) && (
+                (Boolean(openShift) && (summary.draftPrepaidTotal > 0 || summary.pendingPrepaidTotal > 0))) && (
                 <div className="flex flex-col gap-1 rounded-lg bg-amber-50/60 px-3 py-2 text-xs text-amber-900">
                   {summary.deferredPrepayments > 0 && (
                     <ShiftNote label="Предоплаты по будущим заказам" value={formatMoney(summary.deferredPrepayments)} />
@@ -1756,6 +1860,12 @@ function ShiftDetailsSheet({
                     <ShiftNote
                       label="Из выручки получено в другие смены"
                       value={formatMoney(summary.revenueReceivedInOtherShifts)}
+                    />
+                  )}
+                  {Boolean(openShift) && summary.pendingPrepaidTotal > 0 && (
+                    <ShiftNote
+                      label="Предоплаты по невыданным заказам — попадут в кассу при выдаче"
+                      value={formatMoney(summary.pendingPrepaidTotal)}
                     />
                   )}
                   {Boolean(openShift) && summary.draftPrepaidTotal > 0 && (
@@ -2105,6 +2215,7 @@ function getShiftCashSummary(detail: DashboardData["shiftDetails"][number]) {
     expectedCash: detail.summary.expectedCash,
     deferredPrepayments: detail.summary.deferredPrepayments,
     draftPrepaidTotal: detail.summary.draftPrepaidTotal,
+    pendingPrepaidTotal: detail.summary.pendingPrepaidTotal,
     revenueReceivedInOtherShifts: detail.summary.revenueReceivedInOtherShifts,
     cashIn: detail.summary.cashIn,
     cashOutOther: detail.breakdown.cashOutOther,

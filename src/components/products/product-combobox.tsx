@@ -25,6 +25,10 @@ type ProductComboboxProps = {
   autoFocus?: boolean
   /** Доп. классы для самого поля ввода (например, увеличенная высота на кассе). */
   inputClassName?: string
+  /** Классы обёртки (напр. flex-1 внутри поля шапки). */
+  className?: string
+  /** «Голый» инпут без фона/рамки/иконки — когда обёртка (поле шапки) рисует поле сама. */
+  bare?: boolean
   onSelect: (product: Product) => void
   onSelectBouquet?: (bouquet: BouquetTemplate) => void
 }
@@ -44,6 +48,8 @@ export function ProductCombobox({
   maxResults = defaultMaxResults,
   autoFocus = false,
   inputClassName,
+  className,
+  bare = false,
   onSelect,
   onSelectBouquet,
 }: ProductComboboxProps) {
@@ -230,11 +236,18 @@ export function ProductCombobox({
   }
 
   return (
-    <div className="relative min-w-0">
-      <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+    <div className={cn("relative min-w-0", className)}>
+      {!bare && (
+        <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      )}
       <Input
         ref={inputRef}
-        className={cn("h-10 pl-9", inputClassName)}
+        className={cn(
+          bare
+            ? "h-full rounded-none border-0 bg-transparent px-2 shadow-none hover:bg-transparent focus-visible:border-0 focus-visible:bg-transparent focus-visible:ring-0"
+            : "h-10 pl-9",
+          inputClassName
+        )}
         placeholder={placeholder}
         value={query ?? ""}
         disabled={disabled}
@@ -320,7 +333,7 @@ function ProductComboboxDropdown({
 }) {
   return (
     <div
-      className={`rounded-lg bg-white p-1 text-popover-foreground shadow-xl ring-1 ring-zinc-300 ${className ?? ""}`}
+      className={`rounded-xl bg-popover p-1 text-popover-foreground shadow-xl ring-1 ring-border/60 ${className ?? ""}`}
       style={style}
     >
       {results.length > 0 ? (

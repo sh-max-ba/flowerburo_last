@@ -6,13 +6,16 @@ import {
   AlertCircleIcon,
   AlertTriangleIcon,
   CheckCircle2Icon,
+  ClipboardListIcon,
   CopyIcon,
   EyeIcon,
   EyeOffIcon,
   KeyRoundIcon,
+  MessageCircleIcon,
   MinusCircleIcon,
   PencilIcon,
   PlusIcon,
+  TruckIcon,
   UserCheckIcon,
   UserXIcon,
   XCircleIcon,
@@ -79,6 +82,8 @@ import {
 } from "@/components/ui/sheet"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { SegmentedTabs } from "@/components/ui/segmented-tabs"
+import { ScreenHeader } from "@/components/screen-header"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
@@ -100,6 +105,7 @@ export function SettingsPage({
   orderSettings: OrderSettings
 }) {
   const router = useRouter()
+  const [section, setSection] = useState<"suppliers" | "orders" | "wazzup">("suppliers")
   const [supplierSheet, setSupplierSheet] = useState(false)
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null)
   const [activeToggleSupplier, setActiveToggleSupplier] = useState<Supplier | null>(null)
@@ -132,13 +138,23 @@ export function SettingsPage({
 
   return (
     <>
-      <Tabs defaultValue="suppliers" className="gap-4">
-        <TabsList className="h-10 w-full justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit">
-          <TabsTrigger value="suppliers">Поставщики</TabsTrigger>
-          <TabsTrigger value="orders">Заказы</TabsTrigger>
-          <TabsTrigger value="wazzup">Wazzup</TabsTrigger>
-        </TabsList>
-        <TabsContent value="suppliers">
+      <ScreenHeader
+        title="Настройки"
+        tabs={
+          <SegmentedTabs
+            aria-label="Разделы настроек"
+            value={section}
+            onValueChange={setSection}
+            items={[
+              { value: "suppliers", label: "Поставщики", icon: TruckIcon, count: suppliers.length },
+              { value: "orders", label: "Заказы", icon: ClipboardListIcon },
+              { value: "wazzup", label: "Wazzup", icon: MessageCircleIcon },
+            ]}
+          />
+        }
+      />
+      <div className="flex flex-col gap-4">
+        {section === "suppliers" && (
           <SuppliersSection
             suppliers={suppliers}
             pending={isPending}
@@ -152,15 +168,15 @@ export function SettingsPage({
             }}
             onToggleActive={setActiveToggleSupplier}
           />
-        </TabsContent>
-        <TabsContent value="orders" className="flex flex-col gap-4">
-          <OrderPolicyBlock orderSettings={orderSettings} />
-          <StockCostPolicyBlock orderSettings={orderSettings} />
-        </TabsContent>
-        <TabsContent value="wazzup">
-          <WazzupSettingsBlock status={wazzupStatus} />
-        </TabsContent>
-      </Tabs>
+        )}
+        {section === "orders" && (
+          <>
+            <OrderPolicyBlock orderSettings={orderSettings} />
+            <StockCostPolicyBlock orderSettings={orderSettings} />
+          </>
+        )}
+        {section === "wazzup" && <WazzupSettingsBlock status={wazzupStatus} />}
+      </div>
 
       <SupplierSheet
         key={editingSupplier ? `edit-supplier-${editingSupplier.id}` : "create-supplier"}
@@ -228,7 +244,7 @@ function SuppliersSection({
   onToggleActive: (supplier: Supplier) => void
 }) {
   return (
-    <Card className="rounded-2xl border bg-white">
+    <Card className="rounded-2xl">
       <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <CardTitle>Поставщики</CardTitle>
@@ -426,7 +442,7 @@ function OrderPolicyBlock({ orderSettings }: { orderSettings: OrderSettings }) {
   }
 
   return (
-    <Card className="rounded-2xl border bg-white">
+    <Card className="rounded-2xl">
       <CardHeader>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -541,7 +557,7 @@ function StockCostPolicyBlock({ orderSettings }: { orderSettings: OrderSettings 
   }
 
   return (
-    <Card className="rounded-2xl border bg-white">
+    <Card className="rounded-2xl">
       <CardHeader>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -766,13 +782,13 @@ function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
   return (
     <div className="flex flex-col gap-4">
       <Tabs defaultValue="connection" className="gap-4">
-        <TabsList className="h-10 w-full justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit">
+        <TabsList variant="line" className="w-full justify-start overflow-x-auto sm:w-fit">
           <TabsTrigger value="connection">Подключение</TabsTrigger>
           <TabsTrigger value="operations">Синхронизация и диагностика</TabsTrigger>
         </TabsList>
 
         <TabsContent value="connection" className="flex flex-col gap-4">
-          <Card className="rounded-2xl border bg-white">
+          <Card className="rounded-2xl">
             <CardHeader>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -821,7 +837,7 @@ function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
             </CardContent>
           </Card>
 
-          <Card className="rounded-2xl border bg-white">
+          <Card className="rounded-2xl">
             <CardHeader>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -952,7 +968,7 @@ function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
             </CardContent>
           </Card>
 
-          <Card className="rounded-2xl border bg-white">
+          <Card className="rounded-2xl">
             <CardHeader>
               <CardTitle>Подключение webhook</CardTitle>
               <CardDescription>Что включить в Wazzup</CardDescription>
@@ -976,7 +992,7 @@ function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
             </CardContent>
           </Card>
 
-          <Card className="rounded-2xl border bg-white">
+          <Card className="rounded-2xl">
             <CardHeader>
               <CardTitle>Проверка</CardTitle>
               <CardDescription>Быстрые проверки без показа ключей</CardDescription>
@@ -1017,7 +1033,7 @@ function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
         </TabsContent>
 
         <TabsContent value="operations" className="flex flex-col gap-4">
-          <Card className="rounded-2xl border bg-white">
+          <Card className="rounded-2xl">
             <CardHeader>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -1099,7 +1115,7 @@ function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
             </CardContent>
           </Card>
 
-          <Card className="rounded-2xl border bg-white">
+          <Card className="rounded-2xl">
             <CardHeader>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -1188,7 +1204,7 @@ function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
             </CardContent>
           </Card>
 
-          <Card className="rounded-2xl border bg-white">
+          <Card className="rounded-2xl">
             <CardHeader>
               <CardTitle>Диагностика</CardTitle>
               <CardDescription>Последние Wazzup события без raw payload и секретов</CardDescription>
@@ -1302,7 +1318,7 @@ function WazzupSettingsBlock({ status }: { status: WazzupSettingsStatus }) {
             {apiResult?.lines.join("\n")}
           </pre>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setApiResult(null)}>
+            <Button type="button" variant="ghost" onClick={() => setApiResult(null)}>
               Закрыть
             </Button>
           </DialogFooter>

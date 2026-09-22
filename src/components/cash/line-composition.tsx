@@ -27,7 +27,7 @@ export function LineComposition({ items }: { items: CompositionItem[] }) {
         if (group.type === "bouquet") {
           const total = group.items.reduce((sum, item) => sum + item.total, 0)
           return (
-            <div key={group.key} className="rounded-lg border border-zinc-200 bg-white p-2">
+            <div key={group.key} className="rounded-lg bg-muted/30 p-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-zinc-800">
                   <Badge variant="secondary">Букет</Badge>

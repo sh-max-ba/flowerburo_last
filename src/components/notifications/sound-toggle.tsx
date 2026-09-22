@@ -5,7 +5,7 @@ import { Volume2Icon, VolumeXIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { readSoundPref, SOUND_PREF_EVENT, writeSoundPref } from "@/lib/sound-preference"
 
-// Тумблер звука уведомлений в топбаре. Состояние живёт в cookie (пер-девайс) и
+// Тумблер звука уведомлений в leading поля поиска (касса, стол заказов, сделки). Состояние живёт в cookie (пер-девайс) и
 // читается через useSyncExternalStore: SSR-снимок = «включено» (без расхождений
 // гидратации), на клиенте — реальное значение cookie; подписка на событие держит
 // иконку синхронной с любым изменением (в т.ч. из глобального островка).
@@ -19,8 +19,9 @@ export function SoundToggle() {
 
   return (
     <Button
-      variant="outline"
-      size="icon-sm"
+      variant="ghost"
+      size="icon-lg"
+      className="size-10 text-muted-foreground hover:text-foreground"
       onClick={() => writeSoundPref(!enabled)}
       title={enabled ? "Звук уведомлений включён" : "Звук уведомлений выключен"}
       aria-label={enabled ? "Выключить звук уведомлений" : "Включить звук уведомлений"}

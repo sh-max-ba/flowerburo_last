@@ -2,12 +2,11 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
-import { AlertTriangleIcon, Trash2Icon } from "lucide-react"
+import { AlertTriangleIcon } from "lucide-react"
 import { toast } from "sonner"
 import { createStockDocumentAction, saveStockDocumentDraftAction } from "@/app/actions"
-import type { Product, StockDocument, Supplier } from "@/lib/db"
+import type { AllocationMethod, Product, StockDocument, Supplier } from "@/lib/db"
 import { toDatetimeLocalValue } from "@/lib/datetime"
-import { formatMoney } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -19,40 +18,21 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { StockActProductPicker } from "@/components/stock/stock-act-product-picker"
+import {
+  addProductToLines,
+  documentLineFromItem,
+  resolveDocumentLines,
+  StockDocumentItemsTable,
+  type DocumentLine,
+} from "@/components/stock/stock-document-items-editor"
 import { OverheadEditor } from "@/components/stock/overhead-editor"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableFooter,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { ProductThumbnail } from "@/components/products/product-thumbnail"
+import { SupplierSelect } from "@/components/stock/supplier-select"
 import { Textarea } from "@/components/ui/textarea"
-
-type Line = {
-  product: Product
-  qty: string
-  unitCost: string
-  comment: string
-}
 
 type Result = Awaited<ReturnType<typeof saveStockDocumentDraftAction>>
 
@@ -70,10 +50,11 @@ export function StockDocumentForm({
   const [negativeConfirm, setNegativeConfirm] = useState<{ formData: FormData } | null>(null)
   const [supplierId, setSupplierId] = useState(document.supplierId ? String(document.supplierId) : "none")
   const [operationAt, setOperationAt] = useState(() => toDatetimeLocalValue(document.operationAt))
-  const [items, setItems] = useState<Line[]>(
-    document.items.map((item) => ({
-      product:
-        products.find((product) => product.code === item.productCode) ??
+  const isWriteOff = document.type === "stock_out"
+  const [items, setItems] = useState<DocumentLine[]>(
+    document.items.map((item) => {
+      const product =
+        products.find((candidate) => candidate.code === item.productCode) ??
         ({
           code: item.productCode,
           name: item.productName,
@@ -91,72 +72,29 @@ export function StockDocumentForm({
           vaseLifeDays: null,
           available: item.beforeStock ?? 0,
           updatedAt: "",
-        } satisfies Product),
-      qty: String(item.qty),
-      unitCost: item.unitCost ? String(item.unitCost) : "",
-      comment: item.comment,
-    }))
+        } satisfies Product)
+      return documentLineFromItem(item, product, isWriteOff)
+    })
   )
-  const isWriteOff = document.type === "stock_out"
+  // Сумма и метод накладных — для живого предпросмотра себестоимости в таблице позиций.
+  const [overheadState, setOverheadState] = useState<{ total: number; method: AllocationMethod }>(() => ({
+    total: document.overheads.reduce((sum, overhead) => sum + overhead.amount, 0),
+    method: document.allocationMethod,
+  }))
   const operationAtLabel = isWriteOff ? "Дата и время списания" : "Дата и время приемки"
 
-  const resolvedItems = items.map((item) => {
-    const product = products.find((candidate) => candidate.code === item.product.code) ?? item.product
-    const qty = Number(item.qty || 0)
-    const afterStock = product.stock + (isWriteOff ? -qty : qty)
-    return { item, product, qty, afterStock }
-  })
-
-  const negativeLines = isWriteOff ? resolvedItems.filter((line) => line.afterStock < 0) : []
-
-  const totals = resolvedItems.reduce(
-    (acc, line) => {
-      if (Number.isFinite(line.qty) && line.qty > 0) {
-        acc.totalQty += line.qty
-        // Приход — по введённой цене закупки; списание — по текущей себестоимости товара.
-        const unit = isWriteOff ? line.product.costPrice || 0 : Number(line.item.unitCost) || 0
-        acc.totalValue += line.qty * unit
-      }
-      return acc
-    },
-    { totalQty: 0, totalValue: 0 }
-  )
+  const negativeLines = isWriteOff
+    ? resolveDocumentLines(items, products, isWriteOff).filter((line) => line.afterStock < 0)
+    : []
 
   function addProduct(product: Product) {
     const freshProduct = products.find((item) => item.code === product.code) ?? product
-    setItems((current) => {
-      const existing = current.find((item) => item.product.code === freshProduct.code)
-      if (existing) {
-        const updated = {
-          ...existing,
-          product: freshProduct,
-          qty: String(incrementWholeQty(existing.qty)),
-        }
-        return [
-          updated,
-          ...current.filter((item) => item.product.code !== freshProduct.code),
-        ]
-      }
-
-      return [{ product: freshProduct, qty: "1", unitCost: "", comment: "" }, ...current]
-    })
+    setItems((current) => addProductToLines(current, freshProduct, isWriteOff))
   }
 
-  function updateQty(productCode: string, qty: string) {
+  function updateLine(productCode: string, patch: Partial<DocumentLine>) {
     setItems((current) =>
-      current.map((item) => (item.product.code === productCode ? { ...item, qty } : item))
-    )
-  }
-
-  function updateUnitCost(productCode: string, unitCost: string) {
-    setItems((current) =>
-      current.map((item) => (item.product.code === productCode ? { ...item, unitCost } : item))
-    )
-  }
-
-  function updateComment(productCode: string, comment: string) {
-    setItems((current) =>
-      current.map((item) => (item.product.code === productCode ? { ...item, comment } : item))
+      current.map((item) => (item.product.code === productCode ? { ...item, ...patch } : item))
     )
   }
 
@@ -215,14 +153,15 @@ export function StockDocumentForm({
       {document.correctsDocumentId != null && (
         <Alert className="border-indigo-200 bg-indigo-50 text-indigo-950">
           <AlertTriangleIcon />
-          <AlertTitle>Корректировка приходного акта</AlertTitle>
+          <AlertTitle>{isWriteOff ? "Корректировка акта списания" : "Корректировка приходного акта"}</AlertTitle>
           <AlertDescription>
-            При проведении исходный приход будет откатан, а эти позиции — применены. Себестоимость при
-            корректировке не пересчитывается автоматически.
+            При проведении {isWriteOff ? "исходное списание будет откатано" : "исходный приход будет откатан"},
+            а эти позиции — применены заново. Остатки в таблице уже учитывают откат исходного акта.
+            {!isWriteOff && " Себестоимость при корректировке не пересчитывается автоматически."}
           </AlertDescription>
         </Alert>
       )}
-      <Card className="rounded-2xl border bg-white">
+      <Card className="rounded-2xl">
         <CardHeader>
           <CardTitle>Редактирование черновика</CardTitle>
           <CardDescription>Перед проведением остатки будут пересчитаны по актуальному остатку из базы.</CardDescription>
@@ -245,23 +184,35 @@ export function StockDocumentForm({
             {!isWriteOff && (
               <Field className="md:col-span-2">
                 <FieldLabel htmlFor="edit-stock-document-supplier">Поставщик</FieldLabel>
-                <input type="hidden" name="supplierId" value={supplierId === "none" ? "" : supplierId} />
-                <Select value={supplierId} onValueChange={(value) => setSupplierId(value ?? "none")}>
-                  <SelectTrigger id="edit-stock-document-supplier" className="w-full" disabled={pending}>
-                    <SelectValue placeholder="Без поставщика">{(value) => (!value || value === "none" ? "Без поставщика" : suppliers.find((s) => String(s.id) === String(value))?.name ?? "Без поставщика")}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value="none">Без поставщика</SelectItem>
-                      {suppliers.map((supplier) => (
-                        <SelectItem key={supplier.id} value={String(supplier.id)}>
-                          {supplier.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
+                <SupplierSelect
+                  suppliers={suppliers}
+                  value={supplierId}
+                  onValueChange={setSupplierId}
+                  disabled={pending}
+                  triggerId="edit-stock-document-supplier"
+                />
                 {supplierId === "none" && <FieldDescription>Поставщик не указан.</FieldDescription>}
+              </Field>
+            )}
+            {!isWriteOff && (
+              <Field className="md:col-span-2">
+                <FieldLabel htmlFor="edit-stock-document-paid">Оплачено поставщику</FieldLabel>
+                <Input
+                  id="edit-stock-document-paid"
+                  name="paidAmount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  placeholder="0"
+                  defaultValue={document.paidAmount || ""}
+                  disabled={pending}
+                  className="tabular-nums"
+                />
+                <FieldDescription>
+                  Долг поставщику в списке актов считается как стоимость товаров минус эта сумма.
+                  Накладные расходы (доставка и т.п.) в долг не входят.
+                </FieldDescription>
               </Field>
             )}
           </div>
@@ -275,149 +226,46 @@ export function StockDocumentForm({
                 disabled={pending}
               />
             </Field>
-            <Field>
-              <FieldLabel>Поиск товара</FieldLabel>
-              <StockActProductPicker
-                products={products}
-                disabled={pending}
-                placeholder="Найти товар и добавить в акт"
-                onSelect={addProduct}
-              />
-            </Field>
           </FieldGroup>
           {!isWriteOff && (
             <OverheadEditor
               initialOverheads={document.overheads}
               initialMethod={document.allocationMethod}
               disabled={pending}
+              onStateChange={setOverheadState}
             />
           )}
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border bg-white">
+      <Card className="rounded-2xl">
         <CardHeader>
           <CardTitle>Позиции акта</CardTitle>
         </CardHeader>
-        <CardContent>
-          {items.length === 0 ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">Позиции акта пока не добавлены</div>
-          ) : (
-            <div className="overflow-x-auto rounded-lg border">
-              <ScrollArea style={{ height: Math.min(items.length * 90 + 48, 420) }}>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="min-w-64">Товар</TableHead>
-                      <TableHead className="w-28">Остаток</TableHead>
-                      <TableHead className="w-32">Кол-во</TableHead>
-                      {!isWriteOff && <TableHead className="w-32">Цена закупки</TableHead>}
-                      <TableHead className="w-36">После</TableHead>
-                      <TableHead className="min-w-44">Комментарий</TableHead>
-                      <TableHead className="w-12" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {items.map((item) => {
-                      const product = products.find((candidate) => candidate.code === item.product.code) ?? item.product
-                      const qty = Number(item.qty || 0)
-                      const afterStock = product.stock + (isWriteOff ? -qty : qty)
-
-                      return (
-                        <TableRow key={product.code}>
-                          <TableCell>
-                            <input type="hidden" name="itemProductCode" value={product.code} />
-                            <div className="flex min-w-0 items-center gap-2">
-                              <ProductThumbnail name={product.name} imagePath={product.imagePath} size="sm" />
-                              <div className="min-w-0">
-                                <div className="truncate font-medium">{product.name}</div>
-                                <div className="text-xs text-muted-foreground">{product.code}</div>
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell>{formatNumber(product.stock)}</TableCell>
-                          <TableCell>
-                            <Input
-                              name="itemQty"
-                              type="number"
-                              min="1"
-                              step="1"
-                              value={item.qty}
-                              disabled={pending}
-                              onChange={(event) => updateQty(product.code, event.target.value)}
-                              required
-                            />
-                          </TableCell>
-                          {!isWriteOff && (
-                            <TableCell>
-                              <Input
-                                name="itemUnitCost"
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                inputMode="decimal"
-                                placeholder="0"
-                                value={item.unitCost}
-                                disabled={pending}
-                                onChange={(event) => updateUnitCost(product.code, event.target.value)}
-                              />
-                            </TableCell>
-                          )}
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <span>{formatNumber(afterStock)}</span>
-                              {isWriteOff && afterStock < 0 && (
-                                <Badge className="border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-50">
-                                  Будет минус
-                                </Badge>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              name="itemComment"
-                              value={item.comment}
-                              disabled={pending}
-                              onChange={(event) => updateComment(product.code, event.target.value)}
-                            />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-sm"
-                              disabled={pending}
-                              onClick={() => removeProduct(product.code)}
-                            >
-                              <Trash2Icon />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                  <TableFooter>
-                    <TableRow>
-                      <TableCell className="font-medium" colSpan={2}>
-                        Позиций: {items.length}
-                      </TableCell>
-                      <TableCell className="font-semibold">{formatNumber(totals.totalQty)}</TableCell>
-                      {!isWriteOff && <TableCell />}
-                      <TableCell
-                        colSpan={3}
-                        className="text-right font-semibold"
-                        title={isWriteOff ? "Оценочно по текущей себестоимости" : "По введённым ценам закупки"}
-                      >
-                        {isWriteOff ? "Стоимость списания" : "Стоимость прихода"}: {formatMoney(totals.totalValue)}
-                      </TableCell>
-                    </TableRow>
-                  </TableFooter>
-                </Table>
-              </ScrollArea>
-            </div>
-          )}
+        <CardContent className="flex flex-col gap-4">
+          {/* Поиск — вплотную над таблицей позиций: добавленная строка появляется сразу под полем,
+              иначе на ноутбуке она оказывается за сгибом. */}
+          <StockActProductPicker
+            products={products}
+            disabled={pending}
+            placeholder="Найти товар и добавить в акт"
+            onSelect={addProduct}
+          />
+          <StockDocumentItemsTable
+            items={items}
+            products={products}
+            isWriteOff={isWriteOff}
+            pending={pending}
+            overheadTotal={overheadState.total}
+            allocationMethod={overheadState.method}
+            emptyState={
+              <div className="py-10 text-center text-sm text-muted-foreground">Позиции акта пока не добавлены</div>
+            }
+            onUpdate={updateLine}
+            onRemove={removeProduct}
+          />
           {negativeLines.length > 0 && (
-            <Alert className="mt-4 border-amber-200 bg-amber-50 text-amber-950">
+            <Alert className="border-amber-200 bg-amber-50 text-amber-950">
               <AlertTriangleIcon />
               <AlertTitle>После списания остаток уйдет в минус ({negativeLines.length})</AlertTitle>
               <AlertDescription>
@@ -429,7 +277,7 @@ export function StockDocumentForm({
       </Card>
 
       <div className="sticky bottom-0 flex justify-end gap-2 border-t bg-zinc-50 py-3">
-        <Button type="button" variant="outline" disabled={pending} onClick={() => router.push(`/stock/acts/${document.id}`)}>
+        <Button type="button" variant="ghost" disabled={pending} onClick={() => router.push(`/stock/acts/${document.id}`)}>
           Отмена
         </Button>
         <Button type="submit" name="intent" value="draft" variant="outline" disabled={pending}>
@@ -514,13 +362,4 @@ function Info({ label, value }: { label: string; value: string }) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value)
-}
-
-function incrementWholeQty(value: string) {
-  const next = Number(value || 0) + 1
-  if (!Number.isFinite(next)) {
-    return 1
-  }
-
-  return Math.max(1, Math.round(next))
 }

@@ -125,7 +125,7 @@ export function CustomerDetailPage({
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
-      <Card className="rounded-2xl border-zinc-200 bg-white">
+      <Card className="rounded-2xl">
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -200,7 +200,7 @@ export function CustomerDetailPage({
             ) : null}
           </div>
 
-          <div className="grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm">
+          <div className="grid gap-3 rounded-xl bg-muted/30 p-3 text-sm">
             {customer.instagram ? (
               <InfoLine label="Instagram" value={customer.instagram} />
             ) : null}
@@ -215,7 +215,7 @@ export function CustomerDetailPage({
       </Card>
 
       <div className="flex min-w-0 flex-col gap-5">
-        <Card className="rounded-2xl border-zinc-200 bg-white">
+        <Card className="rounded-2xl">
           <CardHeader>
             <CardTitle className="font-semibold text-zinc-950">История</CardTitle>
           </CardHeader>
@@ -250,7 +250,7 @@ export function CustomerDetailPage({
             <input type="hidden" name="customerId" value={customer.id} />
             <CustomerFields customer={customer} />
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
+              <Button type="button" variant="ghost" onClick={() => setEditOpen(false)}>
                 Отмена
               </Button>
               <Button type="submit" disabled={pending}>
@@ -482,7 +482,7 @@ function StatTile({
   emphasis?: boolean
 }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+    <div className="rounded-xl bg-muted/30 p-3">
       <div className="text-xs text-zinc-500">{label}</div>
       <div className={cn("mt-1 text-lg font-semibold text-zinc-950", emphasis && "text-destructive")}>
         {value}

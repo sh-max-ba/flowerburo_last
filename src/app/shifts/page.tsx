@@ -22,6 +22,8 @@ export default async function Page() {
       title="Смены"
       shiftContext={buildShiftShellContext(user, data)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
+      layout="fill"
     >
       <ShiftsPage data={data} />
     </CrmShell>

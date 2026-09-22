@@ -22,6 +22,7 @@ import { RevenueChart } from "./revenue-chart"
 import { DonutChart } from "./donut-chart"
 import { ManagersTable } from "./managers-table"
 import { DateRangePicker } from "./date-range-picker"
+import { ScreenHeader } from "@/components/screen-header"
 
 type DashboardPageProps = {
   data: OwnerDashboardData
@@ -37,12 +38,9 @@ export function DashboardPage({ data }: DashboardPageProps) {
     data
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Селектор периода вместо статичного заголовка. */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="font-heading text-lg font-semibold text-zinc-900">Сводка по магазину</h1>
-        <DateRangePicker range={range} />
-      </div>
+    <div className="flex flex-col gap-4 2xl:gap-5">
+      {/* Селектор периода в карточке-шапке вместо статичного заголовка. */}
+      <ScreenHeader title="Дашборд" leading={<DateRangePicker range={range} />} tabs={null} />
 
       {/* Адаптив: <md — стопкой; md (планшет) — 2 колонки: hero и широкие блоки
           (графики, таблицы) на всю ширину, а компактные Смена/Склад — по
@@ -94,7 +92,7 @@ function RevenueHeroCard({
   const hasActivity = period.salesCount > 0 || period.ordersCount > 0
   return (
     <StatCard title={`Выручка ${periodLabel(range)}`} icon={ReceiptTextIcon} href="/cash" className={className}>
-      <div className="flex flex-1 flex-col justify-center gap-2">
+      <div className="flex flex-1 flex-col justify-start gap-2">
         <Money
           value={period.salesTotal}
           className="text-6xl leading-none font-light tracking-tight text-brand"
@@ -363,7 +361,7 @@ function ShiftCard({
               <CheckCircle2Icon className="size-4 text-emerald-600" />
               Открыта
             </span>
-            <span className="rounded-md border border-zinc-200/70 px-1.5 py-0.5 text-[11px] font-medium text-zinc-500">
+            <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-zinc-500">
               {shift.type === "night" ? "Ночная" : "Дневная"}
             </span>
           </div>

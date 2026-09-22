@@ -31,6 +31,7 @@ export default async function Page({
       title="Дашборд"
       shiftContext={getShiftShellContext(user)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
     >
       <DashboardPage data={data} />
     </CrmShell>

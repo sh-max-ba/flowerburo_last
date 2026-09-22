@@ -32,6 +32,8 @@ export default async function StockLotsPage() {
       title="Партии и сроки"
       shiftContext={getShiftShellContext(user)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
+      layout="fill"
     >
       <StockLotsClient enabled={enabled} expiring={expiring} lots={lots} todayISO={todayISO} />
     </CrmShell>

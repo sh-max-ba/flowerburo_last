@@ -10,7 +10,7 @@ import {
   CalendarClockIcon,
   CheckIcon,
   ChevronDownIcon,
-  EyeIcon,
+  ChevronRightIcon,
   InfoIcon,
   MessageSquareIcon,
   SunIcon,
@@ -19,6 +19,9 @@ import { useState } from "react"
 import type { DashboardData, ShiftDetails } from "@/lib/db"
 import { cn, formatMoney } from "@/lib/utils"
 import { formatInstant } from "@/lib/datetime"
+import { DataView, type DataViewColumn } from "@/components/data-view"
+import { ScreenBody } from "@/components/screen-body"
+import { ScreenHeader } from "@/components/screen-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -39,109 +42,199 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { ShiftCashTimeline } from "@/components/cash/shift-cash-timeline"
+
+type ShiftRow = DashboardData["shifts"][number] & { cashier: string; difference: number | null }
 
 export function ShiftsPage({ data }: { data: DashboardData }) {
   const router = useRouter()
+  const [search, setSearch] = useState("")
   const shiftDetailsById = new Map(data.shiftDetails.map((detail) => [detail.shift.id, detail]))
+  const rows: ShiftRow[] = data.shifts.map((shift) => ({
+    ...shift,
+    cashier: shiftDetailsById.get(shift.id)?.cashier ?? (shift.cashierName || "-"),
+    difference: shift.closingCash === null ? null : shift.closingCash - shift.expectedCash,
+  }))
+  const normalized = search.trim().toLowerCase()
+  const visible = normalized
+    ? rows.filter((row) => `#${row.id} ${row.cashier} ${row.note} ${dateTime(row.openedAt)}`.toLowerCase().includes(normalized))
+    : rows
+
+  const columns: DataViewColumn<ShiftRow>[] = [
+    {
+      key: "id",
+      header: "№",
+      className: "w-20 tabular-nums",
+      sortValue: (row) => row.id,
+      defaultDirection: "desc",
+      cell: (row) => (
+        <Link href={`/shifts/${row.id}`} className="font-medium hover:underline">
+          #{row.id}
+        </Link>
+      ),
+    },
+    {
+      key: "type",
+      header: "Тип",
+      className: "w-28",
+      sortValue: (row) => row.type,
+      cell: (row) => (
+        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+          {row.type === "night" ? <CalendarClockIcon className="size-3.5" /> : <SunIcon className="size-3.5" />}
+          {row.type === "night" ? "Ночная" : "Дневная"}
+        </span>
+      ),
+    },
+    {
+      key: "cashier",
+      header: "Ответственный",
+      grow: true,
+      sortValue: (row) => row.cashier,
+      cell: (row) => (
+        <span className="inline-flex max-w-full items-center gap-1.5">
+          <span className="truncate">{row.cashier}</span>
+          {row.note?.trim() ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={<span className="inline-flex shrink-0 text-muted-foreground" aria-label="Комментарий к смене" />}
+              >
+                <MessageSquareIcon className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs whitespace-pre-wrap">{row.note}</TooltipContent>
+            </Tooltip>
+          ) : null}
+        </span>
+      ),
+    },
+    {
+      key: "openedAt",
+      header: "Открыта",
+      className: "tabular-nums",
+      sortValue: (row) => row.openedAt,
+      defaultDirection: "desc",
+      cell: (row) => dateTime(row.openedAt),
+    },
+    {
+      key: "closedAt",
+      header: "Закрыта",
+      className: "tabular-nums",
+      hideBelow: "3xl",
+      sortValue: (row) => row.closedAt ?? "",
+      cell: (row) => (row.closedAt ? dateTime(row.closedAt) : <span className="text-emerald-700">активна</span>),
+    },
+    {
+      key: "openingCash",
+      header: "Начальная",
+      align: "right",
+      className: "tabular-nums",
+      hideBelow: "5xl",
+      sortValue: (row) => row.openingCash,
+      cell: (row) => <span className="text-muted-foreground">{formatMoney(row.openingCash)}</span>,
+    },
+    {
+      key: "expectedCash",
+      header: "Ожидается",
+      align: "right",
+      className: "tabular-nums",
+      hideBelow: "4xl",
+      sortValue: (row) => row.expectedCash,
+      cell: (row) => <span className="font-medium">{formatMoney(row.expectedCash)}</span>,
+    },
+    {
+      key: "closingCash",
+      header: "Факт",
+      align: "right",
+      className: "tabular-nums",
+      hideBelow: "5xl",
+      sortValue: (row) => row.closingCash,
+      cell: (row) => (row.closingCash === null ? <span className="text-muted-foreground">—</span> : formatMoney(row.closingCash)),
+    },
+    {
+      key: "difference",
+      header: "Разница",
+      sortValue: (row) => row.difference,
+      cell: (row) => (row.difference === null ? <span className="text-muted-foreground">—</span> : <DifferenceBadge difference={row.difference} />),
+    },
+    {
+      key: "status",
+      header: "Статус",
+      className: "w-24",
+      hideBelow: "4xl",
+      sortValue: (row) => row.status,
+      cell: (row) => (
+        <span className={row.status === "open" ? "font-medium text-emerald-700" : "text-muted-foreground"}>
+          {row.status === "open" ? "Открыта" : "Закрыта"}
+        </span>
+      ),
+    },
+  ]
 
   return (
-    <Card className="rounded-2xl border bg-white">
-      <CardContent>
-        {!data.shifts.length ? (
-          <CompactEmpty title="Смен пока нет" />
-        ) : (
-          <TooltipProvider>
-          <div className="min-w-0 overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>№</TableHead>
-                  <TableHead>Тип</TableHead>
-                  <TableHead>Ответственный</TableHead>
-                  <TableHead>Открыта</TableHead>
-                  <TableHead>Закрыта</TableHead>
-                  <TableHead className="text-right">Начальная наличка</TableHead>
-                  <TableHead className="text-right">Ожидается</TableHead>
-                  <TableHead className="text-right">Факт</TableHead>
-                  <TableHead>Разница</TableHead>
-                  <TableHead>Статус</TableHead>
-                  <TableHead className="text-right">Действие</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.shifts.map((shift) => {
-                  const detail = shiftDetailsById.get(shift.id)
-                  const difference = shift.closingCash === null ? null : shift.closingCash - shift.expectedCash
-
-                  return (
-                    <TableRow
-                      key={shift.id}
-                      className="cursor-pointer transition-colors hover:bg-muted/50"
-                      onClick={() => router.push(`/shifts/${shift.id}`)}
-                    >
-                      <TableCell className="font-medium">#{shift.id}</TableCell>
-                      <TableCell>
-                        <ShiftTypeBadge type={shift.type} />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1.5">
-                          <span>{detail?.cashier ?? (shift.cashierName || "-")}</span>
-                          {shift.note?.trim() ? (
-                            <Tooltip>
-                              <TooltipTrigger
-                                render={
-                                  <span
-                                    className="inline-flex text-muted-foreground"
-                                    aria-label="Комментарий к смене"
-                                    onClick={(event) => event.stopPropagation()}
-                                  />
-                                }
-                              >
-                                <MessageSquareIcon className="size-3.5" />
-                              </TooltipTrigger>
-                              <TooltipContent className="max-w-xs whitespace-pre-wrap">
-                                {shift.note}
-                              </TooltipContent>
-                            </Tooltip>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                      <TableCell>{dateTime(shift.openedAt)}</TableCell>
-                      <TableCell>{shift.closedAt ? dateTime(shift.closedAt) : "активна"}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatMoney(shift.openingCash)}</TableCell>
-                      <TableCell className="text-right font-medium tabular-nums">{formatMoney(shift.expectedCash)}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {shift.closingCash === null ? "-" : formatMoney(shift.closingCash)}
-                      </TableCell>
-                      <TableCell>
-                        {difference === null ? "-" : <DifferenceBadge difference={difference} />}
-                      </TableCell>
-                      <TableCell>
-                        <ShiftStatusBadge status={shift.status} />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Link
-                          className={buttonVariants({ variant: "outline", size: "sm" })}
-                          href={`/shifts/${shift.id}`}
-                          onClick={(event) => event.stopPropagation()}
-                        >
-                          <EyeIcon data-icon="inline-start" />
-                          Открыть
-                        </Link>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          </div>
-          </TooltipProvider>
-        )}
-      </CardContent>
-    </Card>
+    <>
+      <ScreenHeader
+        title="Смены"
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Поиск по номеру, ответственному или комментарию",
+          inputProps: { "aria-label": "Поиск смен" },
+        }}
+        meta={`${visible.length} ${pluralShifts(visible.length)}`}
+      />
+      <ScreenBody>
+        <DataView
+          rows={visible}
+          columns={columns}
+          getRowKey={(row) => row.id}
+          onRowSelect={(row) => router.push(`/shifts/${row.id}`)}
+          rowActions={(row) => (
+            <Link
+              href={`/shifts/${row.id}`}
+              className={cn(buttonVariants({ variant: "ghost", size: "icon-lg" }), "size-9 text-muted-foreground")}
+              aria-label="Открыть смену"
+              title="Открыть"
+            >
+              <ChevronRightIcon className="size-4" />
+            </Link>
+          )}
+          renderCard={(row) => (
+            <div className="flex items-start justify-between gap-3 px-4 py-3">
+              <Link href={`/shifts/${row.id}`} className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 font-medium tabular-nums">
+                  #{row.id}
+                  <span className="text-sm font-normal text-muted-foreground">{row.type === "night" ? "Ночная" : "Дневная"}</span>
+                </div>
+                <div className="mt-0.5 truncate text-sm text-muted-foreground">
+                  {row.cashier} · {dateTime(row.openedAt)}
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs tabular-nums">
+                  <span>Ожидается {formatMoney(row.expectedCash)}</span>
+                  {row.difference === null ? null : <DifferenceBadge difference={row.difference} />}
+                </div>
+              </Link>
+              <Link
+                href={`/shifts/${row.id}`}
+                className={cn(buttonVariants({ variant: "ghost", size: "icon" }), "text-muted-foreground")}
+                aria-label="Открыть смену"
+              >
+                <ChevronRightIcon className="size-4" />
+              </Link>
+            </div>
+          )}
+          empty={<CompactEmpty title={normalized ? "Ничего не найдено" : "Смен пока нет"} />}
+        />
+      </ScreenBody>
+    </>
   )
+}
+
+function pluralShifts(count: number) {
+  const mod10 = count % 10
+  const mod100 = count % 100
+  if (mod10 === 1 && mod100 !== 11) return "смена"
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return "смены"
+  return "смен"
 }
 
 export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
@@ -150,7 +243,7 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
   const note = shift.note?.trim()
 
   return (
-      <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-4 2xl:gap-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-lg font-semibold">Смена #{shift.id}</span>
@@ -161,7 +254,7 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
               {dateTime(shift.openedAt)} → {shift.closedAt ? dateTime(shift.closedAt) : "активна"}
             </span>
           </div>
-          <Link className={buttonVariants({ variant: "outline", size: "sm" })} href="/shifts">
+          <Link className={buttonVariants({ variant: "ghost", size: "sm" })} href="/shifts">
             <ArrowLeftIcon data-icon="inline-start" />
             Назад к сменам
           </Link>
@@ -188,7 +281,7 @@ export function ShiftDetailPage({ detail }: { detail: ShiftDetails }) {
 
         <MethodBreakdownCard detail={detail} />
 
-        <Card className="rounded-2xl border bg-white">
+        <Card className="rounded-2xl">
           <CardHeader>
             <CardTitle>Хронология смены</CardTitle>
             <CardDescription>
@@ -219,7 +312,7 @@ function ReconciliationPanel({
   const counted = closingCash !== null
 
   return (
-    <Card className="overflow-hidden rounded-2xl border bg-white">
+    <Card className="overflow-hidden rounded-2xl">
       <div className="grid grid-cols-1 divide-y sm:grid-cols-3 sm:divide-x sm:divide-y-0">
         <div className="p-5">
           <div className="text-xs text-muted-foreground">Ожидается в кассе</div>
@@ -337,7 +430,7 @@ function FormulaCard({ detail, compact }: { detail: ShiftDetails; compact?: bool
   )
 
   return (
-    <Card className={cn("rounded-2xl border bg-white", compact && "rounded-xl")}>
+    <Card className={cn("rounded-2xl", compact && "rounded-xl")}>
       <CardHeader>
         <CardTitle>Наличные в кассе</CardTitle>
         <CardDescription>
@@ -380,7 +473,7 @@ function RevenueCard({ detail }: { detail: ShiftDetails }) {
   const explainers = getRevenueExplainers(detail)
 
   return (
-    <Card className="rounded-2xl border bg-white">
+    <Card className="rounded-2xl">
       <CardHeader>
         <CardTitle>Выручка смены</CardTitle>
         <CardDescription>Признаётся в смене выдачи заказа; быстрые продажи — сразу</CardDescription>
@@ -431,7 +524,13 @@ function getRevenueExplainers(detail: ShiftDetails) {
       `−${formatMoney(summary.deferredPrepayments)} — получены в эту смену за незавершённые заказы (станут выручкой при выдаче)`
     )
   }
-  // Черновики — глобальная справка «на сейчас», к закрытой смене отношения не имеет.
+  // Отложенные предоплаты и черновики — глобальная справка «на сейчас», к закрытой смене
+  // отношения не имеет.
+  if (detail.shift.status === "open" && summary.pendingPrepaidTotal >= 0.01) {
+    lines.push(
+      `${formatMoney(summary.pendingPrepaidTotal)} — предоплаты по невыданным заказам, попадут в кассу при выдаче`
+    )
+  }
   if (detail.shift.status === "open" && summary.draftPrepaidTotal >= 0.01) {
     lines.push(`${formatMoney(summary.draftPrepaidTotal)} — предоплаты в черновиках, в кассу не проведены`)
   }
@@ -469,7 +568,7 @@ function MethodBreakdownCard({ detail }: { detail: ShiftDetails }) {
   )
 
   return (
-    <Card className="rounded-2xl border bg-white">
+    <Card className="rounded-2xl">
       <CardHeader>
         <CardTitle>Выручка по способам</CardTitle>
         <CardDescription>
@@ -525,7 +624,7 @@ function OperatorSummaryCard({ operators }: { operators: ShiftDetails["operatorS
   )
 
   return (
-    <Card className="rounded-2xl border bg-white">
+    <Card className="rounded-2xl">
       <CardHeader>
         <CardTitle>Итоги по операторам</CardTitle>
         <CardDescription>Кто сколько провёл за смену (атрибуция по операциям)</CardDescription>
@@ -584,7 +683,7 @@ function OperatorSummaryCard({ operators }: { operators: ShiftDetails["operatorS
 
 function ShiftStat({ title, value, emphasis }: { title: string; value: string; emphasis?: boolean }) {
   return (
-    <Card className={cn("rounded-2xl border bg-white", emphasis && "border-primary bg-primary/5")}>
+    <Card className={cn("rounded-2xl", emphasis && "bg-primary/5 ring-1 ring-primary/30")}>
       <CardHeader>
         <CardDescription className="text-xs">{title}</CardDescription>
         <CardTitle className="text-2xl font-semibold">{value}</CardTitle>
@@ -658,7 +757,7 @@ function DifferenceBadge({
   }
 
   return (
-    <Badge variant="outline" className={cn("border-amber-300 text-amber-700", className)}>
+    <Badge variant="warning" className={className}>
       <ArrowUpIcon data-icon="inline-start" />
       Излишек <span className="font-semibold">{formatMoney(magnitude)}</span>
     </Badge>

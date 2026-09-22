@@ -51,7 +51,7 @@ export default async function SupplierCardPage({ params }: { params: Promise<{ i
         </Link>
       </div>
 
-      <Card className="rounded-2xl border bg-white">
+      <Card className="rounded-2xl">
         <CardHeader className="flex flex-row items-center justify-between gap-2">
           <CardTitle className="flex items-center gap-3">
             {supplier.name}
@@ -90,7 +90,7 @@ export default async function SupplierCardPage({ params }: { params: Promise<{ i
         </CardContent>
       </Card>
 
-      <Card className="rounded-2xl border bg-white">
+      <Card className="rounded-2xl">
         <CardHeader>
           <CardTitle>История закупок</CardTitle>
         </CardHeader>

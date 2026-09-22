@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { AlertTriangleIcon, PencilIcon } from "lucide-react"
+import { AlertTriangleIcon, ArrowDownUpIcon, CalendarDaysIcon, ListIcon, PencilIcon, PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
   cancelOrderAction,
@@ -12,6 +12,7 @@ import {
 } from "@/app/actions"
 import type { BouquetTemplate, Order, OrderStatus, Product } from "@/lib/db"
 import { deliveryTypeLabel } from "@/lib/labels"
+import { formatMoney } from "@/lib/utils"
 import { Alert, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -24,21 +25,23 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { ScreenBody } from "@/components/screen-body"
+import { HeaderFilter, HeaderPrimaryAction, HeaderSegment, ScreenHeader } from "@/components/screen-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsCount, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   OrderComposition,
   OrderDealLink,
   OrdersActivityRefresh,
   OrderSourceBadge,
   OrderStatusBadge,
-  OrderToolbar,
   OrderUrgencyBadge,
   OrderCalendarView,
   Spinner,
+  orderMatchesSearch,
+  orderSortOptions,
   orderUrgency,
   type OrderSortMode,
   type OrderViewMode,
@@ -48,6 +51,7 @@ import {
   startOfLocalDay,
 } from "@/components/orders/order-shared"
 import { OrderEditSheet } from "@/components/orders/order-edit-sheet"
+import { OrderImageStrip } from "@/components/orders/order-images"
 import { cn } from "@/lib/utils"
 
 type Result = Awaited<ReturnType<typeof startOrderWorkAction>>
@@ -72,20 +76,18 @@ export function OrdersPage({
   products,
   bouquets,
   hasOpenShift,
-  draftsCount = 0,
-  canManageDrafts = false,
+  canCreateOrder = false,
 }: {
   orders: Order[]
   products: Product[]
   bouquets: BouquetTemplate[]
   // Когда смена не открыта, в пустом состоянии показываем подсказку перейти к сменам.
   hasOpenShift?: boolean
-  // Черновики живут на отдельной странице /orders/drafts (owner/manager);
-  // здесь — только бейдж-ссылка с количеством.
-  draftsCount?: number
-  canManageDrafts?: boolean
+  // «+ Новый заказ» ведёт на кассу (оформление заказа) — только тем, кому доступна касса.
+  canCreateOrder?: boolean
 }) {
   const router = useRouter()
+  const [search, setSearch] = useState("")
   const [sortMode, setSortMode] = useState<OrderSortMode>("default")
   const [viewMode, setViewMode] = useState<OrderViewMode>("list")
   const [statusFilter, setStatusFilter] = useState<WorkStatusFilter>("all")
@@ -109,20 +111,30 @@ export function OrdersPage({
     return result
   }, [queueOrders])
 
+  const normalizedSearch = search.trim().toLowerCase()
   const orders = useMemo(() => {
-    const filtered = statusFilter === "all" ? queueOrders : queueOrders.filter((order) => order.status === statusFilter)
+    const byStatus = statusFilter === "all" ? queueOrders : queueOrders.filter((order) => order.status === statusFilter)
+    const filtered = normalizedSearch ? byStatus.filter((order) => orderMatchesSearch(order, normalizedSearch)) : byStatus
     return sortWorkOrders(filtered, sortMode)
-  }, [queueOrders, statusFilter, sortMode])
+  }, [queueOrders, statusFilter, sortMode, normalizedSearch])
 
-  function run(orderId: number, action: () => Promise<Result>) {
+  function run(orderId: number, action: () => Promise<Result>, successLink?: { label: string; href: string }) {
     setPendingOrderId(orderId)
     startTransition(async () => {
       try {
         const result = await action()
         if (result.ok) {
-          for (const message of result.messages ?? [result.message]) {
-            toast.success(message)
-          }
+          const messages = result.messages ?? [result.message]
+          messages.forEach((message, index) => {
+            // Ссылку вешаем на последний тост (после «Букет готов» заказ уходит в «Готовые»).
+            const withLink = successLink && index === messages.length - 1
+            toast.success(
+              message,
+              withLink
+                ? { action: { label: successLink.label, onClick: () => router.push(successLink.href) } }
+                : undefined
+            )
+          })
           router.refresh()
         } else {
           toast.error(result.message)
@@ -136,94 +148,127 @@ export function OrdersPage({
   return (
     <>
       <OrdersActivityRefresh />
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap items-center gap-2">
-            <Tabs
-              value={statusFilter}
-              onValueChange={(value) => setStatusFilter((value ?? "all") as WorkStatusFilter)}
-            >
-              <TabsList>
-                {workStatusFilters.map((filter) => (
-                  <TabsTrigger key={filter.value} value={filter.value}>
-                    {filter.label}
-                    <span className="ml-1.5 text-muted-foreground">{counts[filter.value]}</span>
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
-            {canManageDrafts && (
-              <Button variant="outline" size="sm" render={<Link href="/orders/drafts" />}>
-                Черновики
-                <span className="ml-1.5 text-muted-foreground">{draftsCount}</span>
+      <ScreenHeader
+        title="Стол заказов"
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Поиск по заказам: номер, клиент, телефон, состав",
+          inputProps: { "aria-label": "Поиск заказов" },
+        }}
+        actions={
+          <>
+            <HeaderFilter
+              icon={ArrowDownUpIcon}
+              label="Сортировка"
+              value={sortMode}
+              allValue="default"
+              options={orderSortOptions}
+              onValueChange={setSortMode}
+            />
+            <HeaderSegment
+              label="Вид"
+              value={viewMode}
+              onValueChange={setViewMode}
+              options={[
+                { value: "list", label: "Список", icon: ListIcon },
+                { value: "calendar", label: "Календарь", icon: CalendarDaysIcon },
+              ]}
+            />
+          </>
+        }
+        primaryAction={
+          canCreateOrder ? <HeaderPrimaryAction icon={PlusIcon} label="Новый заказ" href="/cash?order=new" /> : undefined
+        }
+      />
+
+      {/* Второй уровень — статус в работе, подчёркиванием внутри контента. */}
+      <Tabs
+        value={statusFilter}
+        onValueChange={(value) => setStatusFilter((value ?? "all") as WorkStatusFilter)}
+        className="shrink-0"
+      >
+        <TabsList variant="line" className="no-scrollbar max-w-full overflow-x-auto">
+          {workStatusFilters.map((filter) => (
+            <TabsTrigger key={filter.value} value={filter.value}>
+              {filter.label}
+              <TabsCount value={counts[filter.value]} />
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+
+      <ScreenBody surface={viewMode === "calendar" || !orders.length}>
+        {!orders.length ? (
+          <Empty className="min-h-56">
+            <EmptyHeader>
+              <EmptyTitle>
+                {normalizedSearch
+                  ? "Ничего не найдено"
+                  : statusFilter === "all"
+                    ? "Заказов для флористов нет"
+                    : "По этому фильтру заказов нет"}
+              </EmptyTitle>
+              <EmptyDescription>
+                {normalizedSearch
+                  ? "Измените запрос или сбросьте фильтр."
+                  : statusFilter !== "all"
+                    ? "Сбросьте фильтр, чтобы увидеть все заказы в работе."
+                    : hasOpenShift === false
+                      ? "Новые заказы появятся после создания на кассе. Сейчас смена не открыта — откройте её, чтобы работать с кассой."
+                      : "Новые заказы появятся после создания на кассе."}
+              </EmptyDescription>
+            </EmptyHeader>
+            {normalizedSearch ? (
+              <Button variant="ghost" size="sm" onClick={() => setSearch("")}>
+                Очистить поиск
               </Button>
-            )}
-          </div>
-          <OrderToolbar
-            sortMode={sortMode}
-            viewMode={viewMode}
-            onSortModeChange={setSortMode}
-            onViewModeChange={setViewMode}
-          />
-        </div>
-        <Card className="rounded-2xl border bg-white">
-          <CardContent>
-            {!orders.length ? (
-              <Empty>
-                <EmptyHeader>
-                  <EmptyTitle>
-                    {statusFilter === "all"
-                      ? "Заказов для флористов нет"
-                      : "По этому фильтру заказов нет"}
-                  </EmptyTitle>
-                  <EmptyDescription>
-                    {statusFilter !== "all"
-                      ? "Сбросьте фильтр, чтобы увидеть все заказы в работе."
-                      : hasOpenShift === false
-                        ? "Новые заказы появятся после создания на кассе. Сейчас смена не открыта — откройте её, чтобы работать с кассой."
-                        : "Новые заказы появятся после создания на кассе."}
-                  </EmptyDescription>
-                </EmptyHeader>
-                {statusFilter !== "all" ? (
-                  <Button variant="outline" size="sm" onClick={() => setStatusFilter("all")}>
-                    Показать все
-                  </Button>
-                ) : (
-                  hasOpenShift === false && (
-                    <Button variant="outline" size="sm" render={<Link href="/shifts" />}>
-                      Перейти к сменам
-                    </Button>
-                  )
-                )}
-              </Empty>
-            ) : viewMode === "calendar" ? (
-              <OrderCalendarView
-                orders={orders}
-                weekStart={weekStart}
-                showMoney={false}
-                onToday={() => setWeekStart(startOfLocalDay(new Date()))}
-                onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
-                onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
-                onOpenOrder={() => setViewMode("list")}
-              />
+            ) : statusFilter !== "all" ? (
+              <Button variant="ghost" size="sm" onClick={() => setStatusFilter("all")}>
+                Показать все
+              </Button>
             ) : (
-              <div className="grid gap-3 lg:grid-cols-2">
-                {orders.map((order) => (
-                  <WorkOrderCard
-                    key={order.id}
-                    order={order}
-                    pendingAction={pendingOrderId === order.id}
-                    onStart={(target) => run(target.id, () => startOrderWorkAction(target.id))}
-                    onReady={(target) => run(target.id, () => markOrderReadyAction(target.id))}
-                    onCancel={(target) => run(target.id, () => cancelOrderAction(target.id))}
-                    onEdit={setEditingOrder}
-                  />
-                ))}
-              </div>
+              hasOpenShift === false && (
+                <Button variant="ghost" size="sm" render={<Link href="/shifts" />}>
+                  Перейти к сменам
+                </Button>
+              )
             )}
-          </CardContent>
-        </Card>
-      </div>
+          </Empty>
+        ) : viewMode === "calendar" ? (
+          <div className="p-4">
+            <OrderCalendarView
+              orders={orders}
+              weekStart={weekStart}
+              showMoney={false}
+              onToday={() => setWeekStart(startOfLocalDay(new Date()))}
+              onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
+              onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
+              onOpenOrder={() => setViewMode("list")}
+            />
+          </div>
+        ) : (
+          // Сетка на всю ширину: столько карточек, сколько влезает по 360px, а не одна слева.
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(min(360px,100%),1fr))] gap-3 pb-2">
+            {orders.map((order) => (
+              <WorkOrderCard
+                key={order.id}
+                order={order}
+                pendingAction={pendingOrderId === order.id}
+                onStart={(target) => run(target.id, () => startOrderWorkAction(target.id))}
+                onReady={(target) =>
+                  run(target.id, () => markOrderReadyAction(target.id), {
+                    label: "Открыть «Готовые»",
+                    href: "/ready-orders",
+                  })
+                }
+                onCancel={(target) => run(target.id, () => cancelOrderAction(target.id))}
+                onEdit={setEditingOrder}
+              />
+            ))}
+          </div>
+        )}
+      </ScreenBody>
 
       {editingOrder && (
         <OrderEditSheet
@@ -263,7 +308,7 @@ function WorkOrderCard({
   const readyIsPrimary = order.status === "В работе"
 
   return (
-    <div className={cn("flex flex-col gap-4 rounded-2xl border bg-white p-4", urgency.cardClass)}>
+    <div className={cn("flex min-w-0 flex-col gap-4 rounded-2xl bg-background p-4 shadow-xs", urgency.cardClass)}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm text-muted-foreground">{order.number || `#${order.id}`}</div>
@@ -273,9 +318,7 @@ function WorkOrderCard({
           <OrderStatusBadge status={order.status} />
           <OrderUrgencyBadge order={order} />
           {order.isModified && (
-            <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">
-              Изменён
-            </Badge>
+            <Badge variant="warning">Изменён</Badge>
           )}
         </div>
       </div>
@@ -290,6 +333,8 @@ function WorkOrderCard({
         {order.note && <div className="text-muted-foreground">{order.note}</div>}
         <OrderDealLink dealId={order.dealId} className="mt-0.5" />
       </div>
+      {/* Фото-референсы — флористу важно видеть их крупно, рядом с составом. */}
+      <OrderImageStrip images={order.images} size="lg" />
       <OrderComposition items={order.items} size="lg" />
       {(order.status === "Готов" || order.status === "Передан курьеру") && (
         <Alert>
@@ -315,8 +360,8 @@ function WorkOrderCard({
         {(order.status === "Новый" || order.status === "В работе") && (
           <Button
             size="lg"
-            variant="outline"
-            className={touchButtonClass}
+            variant="ghost"
+            className={cn(touchButtonClass, "bg-muted/60 hover:bg-muted")}
             onClick={() => onEdit(order)}
             disabled={pendingAction}
           >
@@ -352,8 +397,8 @@ function ReadyConfirmButton({
         render={
           <Button
             size="lg"
-            variant={primary ? "default" : "outline"}
-            className={touchButtonClass}
+            variant={primary ? "default" : "ghost"}
+            className={cn(touchButtonClass, !primary && "bg-muted/60 hover:bg-muted")}
             disabled={pending}
           />
         }
@@ -411,6 +456,9 @@ function CancelConfirmButton({
           <AlertDialogDescription>
             Заказ {order.number || `#${order.id}`} будет отменён, бронь и списание со склада откатятся.
             Действие необратимо.
+            {order.pendingPrepaid > 0.009
+              ? ` Предоплата ${formatMoney(order.pendingPrepaid)} в кассу не попадала — просто верните её клиенту.`
+              : ""}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

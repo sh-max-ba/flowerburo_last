@@ -640,7 +640,7 @@ export function WazzupCustomChat({ dealId, bouquets }: { dealId: number; bouquet
         )}
       </div>
 
-      <div className="flex flex-col gap-2 border-t border-zinc-200 bg-white p-3">
+      <div className="flex flex-col gap-2 border-t border-border/40 bg-background p-3">
         {replyTo ? (
           <div className="flex items-start gap-2 rounded-lg border-l-2 border-emerald-500 bg-zinc-100 px-3 py-1.5 text-xs">
             <div className="min-w-0 flex-1">
@@ -659,7 +659,7 @@ export function WazzupCustomChat({ dealId, bouquets }: { dealId: number; bouquet
         ) : null}
 
         {recording ? (
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-2xl border border-zinc-200 bg-zinc-50 px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-2xl bg-muted/30 px-3 py-2">
             <span className="flex items-center gap-2 text-sm font-medium text-zinc-700">
               <span className="size-2.5 animate-pulse rounded-full bg-red-500" aria-hidden />
               Идёт запись
@@ -771,7 +771,7 @@ function MessageBubble({
       <div
         className={cn(
           "max-w-[80%] rounded-2xl px-3 py-2 text-sm shadow-sm",
-          outbound ? "bg-emerald-600 text-white" : "border border-zinc-200 bg-white text-zinc-900"
+          outbound ? "bg-emerald-600 text-white" : "bg-background text-foreground shadow-xs"
         )}
       >
         {!outbound && item.authorName ? (
@@ -781,7 +781,7 @@ function MessageBubble({
           <div
             className={cn(
               "mb-1 border-l-2 pl-2 text-xs",
-              outbound ? "border-white/60 text-emerald-50/90" : "border-zinc-300 text-muted-foreground"
+              outbound ? "border-white/60 text-emerald-50/90" : "bg-muted text-muted-foreground"
             )}
           >
             <span className="line-clamp-2">{item.quotedText}</span>
@@ -1026,7 +1026,7 @@ function VoiceTranscript({
       <div
         className={cn(
           "mt-1.5 border-t pt-1.5 text-xs leading-snug whitespace-pre-wrap break-words",
-          outbound ? "border-white/20 text-emerald-50/90" : "border-zinc-200 text-zinc-600"
+          outbound ? "border-white/20 text-emerald-50/90" : "bg-muted text-muted-foreground"
         )}
       >
         {text}
@@ -1083,7 +1083,7 @@ function BouquetPickerDialog({
         />
         <div className="flex max-h-[55vh] flex-col gap-2 overflow-y-auto pr-1">
           {bouquets.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-zinc-200 p-4 text-sm text-muted-foreground">
+            <div className="rounded-lg bg-muted/30 p-4 text-sm text-muted-foreground">
               Активные букеты не найдены.
             </div>
           ) : (
@@ -1091,7 +1091,7 @@ function BouquetPickerDialog({
               const availability = getBouquetAvailability(bouquet)
               const busy = busyId === bouquet.id
               return (
-                <div key={bouquet.id} className="flex gap-3 rounded-lg border border-zinc-200 p-2.5">
+                <div key={bouquet.id} className="flex gap-3 rounded-lg bg-muted/30 p-2.5">
                   <BouquetThumbnail name={bouquet.name} imagePath={bouquet.imagePath} size="lg" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">

@@ -22,6 +22,8 @@ export default async function Page() {
       title="Пользователи"
       shiftContext={getShiftShellContext(user)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
+      layout="fill"
     >
       <UsersPage users={users} currentUserId={user.id} />
     </CrmShell>

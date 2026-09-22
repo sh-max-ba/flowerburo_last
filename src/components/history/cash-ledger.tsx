@@ -2,7 +2,7 @@
 
 import { Fragment, useMemo, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { ChevronDownIcon } from "lucide-react"
+import { ChevronDownIcon, CreditCardIcon, HistoryIcon, TagIcon } from "lucide-react"
 import { toast } from "sonner"
 import { cancelOrderAction, reverseCashTransactionAction } from "@/app/actions"
 import {
@@ -16,19 +16,11 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { ScreenBody } from "@/components/screen-body"
+import { HeaderAction, HeaderFilter, ScreenHeader } from "@/components/screen-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { LineComposition } from "@/components/cash/line-composition"
 import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
@@ -49,7 +41,7 @@ const TYPE_OPTIONS: Array<{ value: string; label: string }> = [
 // Возвраты и изъятия уменьшают кассу (показываем минусом), остальное — приход.
 const OUTFLOW_TYPES = new Set<CashTransactionType>(["cash_out", "cash_refund"])
 
-export function CashLedger({ entries }: { entries: CashLedgerEntry[] }) {
+export function CashLedger({ entries, showStockHistoryLink = false }: { entries: CashLedgerEntry[]; showStockHistoryLink?: boolean }) {
   const [typeFilter, setTypeFilter] = useState("all")
   const [methodFilter, setMethodFilter] = useState("all")
   const [query, setQuery] = useState("")
@@ -82,27 +74,40 @@ export function CashLedger({ entries }: { entries: CashLedgerEntry[] }) {
   }, [entries, typeFilter, methodFilter, query])
 
   return (
-    <Card className="rounded-2xl border bg-white">
-      <CardContent className="flex flex-col gap-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Поиск: заказ, клиент, кто, комментарий"
-            className="sm:max-w-xs"
-          />
-          <FilterSelect value={typeFilter} onChange={setTypeFilter} allLabel="Все типы" options={TYPE_OPTIONS} />
-          <FilterSelect
-            value={methodFilter}
-            onChange={setMethodFilter}
-            allLabel="Все способы"
-            options={paymentMethodOptions}
-          />
-          <span className="text-xs text-muted-foreground sm:ml-auto">
-            {filtered.length} из {entries.length}
-          </span>
-        </div>
+    <>
+      <ScreenHeader
+        title="История кассы"
+        search={{
+          value: query,
+          onChange: setQuery,
+          placeholder: "Поиск: заказ, клиент, кто, комментарий",
+          inputProps: { "aria-label": "Поиск по истории кассы" },
+        }}
+        meta={`${filtered.length} из ${entries.length}`}
+        actions={
+          <>
+            <HeaderFilter
+              icon={TagIcon}
+              label="Тип"
+              value={typeFilter}
+              allValue="all"
+              options={[{ value: "all", label: "Все типы" }, ...TYPE_OPTIONS]}
+              onValueChange={setTypeFilter}
+            />
+            <HeaderFilter
+              icon={CreditCardIcon}
+              label="Способ"
+              value={methodFilter}
+              allValue="all"
+              options={[{ value: "all", label: "Все способы" }, ...paymentMethodOptions]}
+              onValueChange={setMethodFilter}
+            />
+            {showStockHistoryLink ? <HeaderAction icon={HistoryIcon} label="История склада" href="/history/stock" /> : null}
+          </>
+        }
+      />
 
+      <ScreenBody className="px-1">
         {filtered.length === 0 ? (
           <Empty className="min-h-56">
             <EmptyHeader>
@@ -123,6 +128,7 @@ export function CashLedger({ entries }: { entries: CashLedgerEntry[] }) {
                   <TableHead>Тип</TableHead>
                   <TableHead>Способ</TableHead>
                   <TableHead className="text-right">Сумма</TableHead>
+                  <TableHead className="text-right">Скидка</TableHead>
                   <TableHead>Связь</TableHead>
                   <TableHead>Кто</TableHead>
                   <TableHead>Комментарий</TableHead>
@@ -167,13 +173,32 @@ export function CashLedger({ entries }: { entries: CashLedgerEntry[] }) {
                           {outflow ? "−" : "+"}
                           {formatMoney(entry.amount)}
                         </TableCell>
+                        {/* Скидка связанного документа: у предоплаты и доплаты по одному заказу
+                            это одна и та же скидка заказа, а не доля конкретной проводки —
+                            складывать колонку по строкам нельзя. У возвратов и выплат её нет. */}
+                        <TableCell className="whitespace-nowrap text-right tabular-nums">
+                          {entry.discountAmount > 0 ? (
+                            <span
+                              className="text-emerald-700"
+                              title={
+                                entry.totalBeforeDiscount > 0
+                                  ? `Скидка документа. До скидки ${formatMoney(entry.totalBeforeDiscount)}`
+                                  : "Скидка документа"
+                              }
+                            >
+                              −{formatMoney(entry.discountAmount)}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
                         <TableCell className="whitespace-nowrap">{renderLink(entry)}</TableCell>
                         <TableCell className="whitespace-nowrap">{entry.userName || "—"}</TableCell>
                         <TableCell className="min-w-48 text-xs text-muted-foreground">{entry.comment || "—"}</TableCell>
                       </TableRow>
                       {expandable && isOpen && (
                         <TableRow>
-                          <TableCell colSpan={7} className="bg-muted/30 p-0">
+                          <TableCell colSpan={8} className="bg-muted/30 p-0">
                             {entry.items.length > 0 ? <LineComposition items={entry.items} /> : null}
                             {/* Для выплат (cash_out) по заказу правильное действие — встречная
                                 операция, а не отмена всего заказа: панель отмены тут не место. */}
@@ -194,43 +219,11 @@ export function CashLedger({ entries }: { entries: CashLedgerEntry[] }) {
             </Table>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </ScreenBody>
+    </>
   )
 }
 
-function FilterSelect({
-  value,
-  onChange,
-  allLabel,
-  options,
-}: {
-  value: string
-  onChange: (value: string) => void
-  allLabel: string
-  options: Array<{ value: string; label: string }>
-}) {
-  const labelFor = (val: string) =>
-    val === "all" ? allLabel : (options.find((option) => option.value === val)?.label ?? val)
-
-  return (
-    <Select value={value} onValueChange={(next) => onChange(next ?? "all")}>
-      <SelectTrigger className="h-9 w-full text-sm sm:w-44">
-        <SelectValue>{(val) => labelFor(String(val ?? "all"))}</SelectValue>
-      </SelectTrigger>
-      <SelectContent align="start">
-        <SelectGroup>
-          <SelectItem value="all">{allLabel}</SelectItem>
-          {options.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
-  )
-}
 
 function renderLink(entry: CashLedgerEntry) {
   if (entry.orderId) {
@@ -297,7 +290,7 @@ function OrderCancelPanel({ entry }: { entry: CashLedgerEntry }) {
   }
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 px-3 py-2">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 px-3 py-2">
       <span className="text-xs text-muted-foreground">
         {orderLabel}
         {entry.orderStatus ? ` · ${entry.orderStatus}` : ""}
@@ -360,7 +353,7 @@ function ReverseOpPanel({ entry }: { entry: CashLedgerEntry }) {
   }
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 px-3 py-2">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 px-3 py-2">
       <span className="text-xs text-muted-foreground">
         {label} · {formatMoney(entry.amount)}
       </span>
@@ -418,7 +411,7 @@ function SaleStornoPanel({ entry }: { entry: CashLedgerEntry }) {
   }
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 px-3 py-2">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 px-3 py-2">
       <span className="text-xs text-muted-foreground">
         {entry.saleId ? `Продажа #${entry.saleId}` : "Продажа"} · {amount}
       </span>

@@ -27,6 +27,8 @@ export default async function ClientsPage({
       title="Клиенты"
       shiftContext={getShiftShellContext(user)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
+      header="page"
+      layout="fill"
     >
       <CustomersPage customers={customers} search={search} />
     </CrmShell>
