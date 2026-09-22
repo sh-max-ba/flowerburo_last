@@ -16,20 +16,23 @@ type StatTileProps = {
   spark?: number[]
   sparkColor?: string
   href?: string
+  // Плитка-кнопка (раскрыть список): вместо ссылки — обработчик клика.
+  onClick?: () => void
   className?: string
 }
 
 // Плитка метрики: подпись, крупное значение (пропорциональные цифры), дельта к прошлому периоду
 // и спарклайн. Без рамок — карточка на bg-background с мягкой тенью, как весь «вектор».
-export function StatTile({ label, value, unit, delta, hint, spark, sparkColor, href, className }: StatTileProps) {
-  // Когда плитка — ссылка, элементом грида становится <Link>: позиционирующий className
-  // (col-span и т.п.) вешаем на него, а не на внутренний блок.
+export function StatTile({ label, value, unit, delta, hint, spark, sparkColor, href, onClick, className }: StatTileProps) {
+  // Когда плитка — ссылка или кнопка, элементом грида становится обёртка: позиционирующий
+  // className (col-span и т.п.) вешаем на неё, а не на внутренний блок.
+  const interactive = Boolean(href || onClick)
   const body = (
     <div
       className={cn(
         "flex h-full min-w-0 flex-col gap-2 rounded-2xl bg-background p-4 shadow-xs transition-shadow",
-        href && "hover:shadow-md",
-        !href && className
+        interactive && "hover:shadow-md",
+        !interactive && className
       )}
     >
       <div className="flex items-start justify-between gap-2">
@@ -45,14 +48,25 @@ export function StatTile({ label, value, unit, delta, hint, spark, sparkColor, h
     </div>
   )
 
-  if (!href) {
-    return body
+  if (href) {
+    return (
+      <Link href={href} className={cn("block h-full rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-ring/40", className)}>
+        {body}
+      </Link>
+    )
   }
-  return (
-    <Link href={href} className={cn("block h-full rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-ring/40", className)}>
-      {body}
-    </Link>
-  )
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn("block h-full w-full rounded-2xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/40", className)}
+      >
+        {body}
+      </button>
+    )
+  }
+  return body
 }
 
 // Дельта: «+12 %» к предыдущему периоду той же длины. Цвет — направление × «рост хорош ли».

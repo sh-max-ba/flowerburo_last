@@ -28,3 +28,19 @@ export function productCardHref(code: string, range?: AnalyticsRange): string {
   const qs = rangeParams(range).toString()
   return qs ? `${base}?${qs}` : base
 }
+
+// Вкладка «Продажи» с раскрытыми продажами товара (?product=) — чеки и заказы, где он был.
+export function salesProductHref(code: string, range: AnalyticsRange): string {
+  const params = rangeParams(range)
+  params.set("tab", "sales")
+  params.set("product", code)
+  return `/analytics?${params.toString()}`
+}
+
+// Вкладка «Продажи» с раскрытым списком чеков и заказов периода (?docs=1).
+export function salesDocumentsHref(range: AnalyticsRange): string {
+  const params = rangeParams(range)
+  params.set("tab", "sales")
+  params.set("docs", "1")
+  return `/analytics?${params.toString()}`
+}

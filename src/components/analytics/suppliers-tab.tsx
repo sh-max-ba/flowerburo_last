@@ -2,10 +2,12 @@
 
 import { useMemo, useState } from "react"
 import Link from "next/link"
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
+import { BanknoteIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import type { AnalyticsSuppliers, SupplierPositionRow } from "@/lib/db"
 import { cn, formatMoney } from "@/lib/utils"
 import { FilterChips } from "@/components/screen-header"
+import { SupplierPaymentDialog } from "@/components/suppliers/supplier-payment-dialog"
+import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { BarList, Panel } from "./bar-list"
 import { TrendChart } from "./charts"
@@ -32,12 +34,14 @@ type Group = {
   label: string
   href?: string
   sub?: string
+  supplierId: number | null
   docsCount: number
   qty: number
   goodsSum: number
   landedSum: number
-  // Долг только у группировки по поставщикам.
-  debt?: number
+  writeOffQty: number
+  writeOffCost: number
+  // Долг на сегодня — только у группировки по поставщикам.
   debtNow?: number
   rows: SupplierPositionRow[]
 }
@@ -46,10 +50,12 @@ const supplierKey = (row: { supplierId: number | null }) => (row.supplierId === 
 
 // Позиции по поставщикам в обе стороны: «поставщик → его товары» и «товар → кто его поставлял».
 // Одна выборка с сервера, группировка на клиенте; строка группы раскрывается по клику.
+// Списания — оценка: списание товара делится между поставщиками пропорционально их поставкам.
 export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query: string }) {
   const { totals, suppliers, positions, series, range } = data
   const [mode, setMode] = useState<GroupMode>("supplier")
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [paying, setPaying] = useState<{ supplierId: number; supplierName: string } | null>(null)
   const days = series.map((point) => point.day)
 
   const filteredPositions = useMemo(() => {
@@ -75,11 +81,13 @@ export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query:
                 : undefined
               : productCardHref(row.productCode, range),
           sub: mode === "product" ? row.categoryPath.split("/")[0] || "Без категории" : undefined,
+          supplierId: mode === "supplier" ? row.supplierId : null,
           docsCount: 0,
           qty: 0,
           goodsSum: 0,
           landedSum: 0,
-          debt: supplier?.debt,
+          writeOffQty: 0,
+          writeOffCost: 0,
           debtNow: supplier?.debtNow,
           rows: [],
         }
@@ -89,6 +97,8 @@ export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query:
       group.qty += row.qty
       group.goodsSum += row.goodsSum
       group.landedSum += row.landedSum
+      group.writeOffQty += row.writeOffQty
+      group.writeOffCost += row.writeOffCost
     }
     // Число актов группы: у поставщика — из сводки за период (акты без строк тоже считаются),
     // у товара — сумма по поставщикам.
@@ -104,7 +114,22 @@ export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query:
     return [...map.values()].sort((a, b) => b.goodsSum - a.goodsSum || a.label.localeCompare(b.label, "ru"))
   }, [filteredPositions, mode, suppliers, range])
 
-  const visibleGoods = groups.reduce((sum, group) => sum + group.goodsSum, 0)
+  const visible = useMemo(
+    () =>
+      groups.reduce(
+        (acc, group) => {
+          acc.docsCount += group.docsCount
+          acc.qty += group.qty
+          acc.goodsSum += group.goodsSum
+          acc.writeOffQty += group.writeOffQty
+          acc.writeOffCost += group.writeOffCost
+          acc.debtNow += group.debtNow ?? 0
+          return acc
+        },
+        { docsCount: 0, qty: 0, goodsSum: 0, writeOffQty: 0, writeOffCost: 0, debtNow: 0 }
+      ),
+    [groups]
+  )
 
   function toggle(key: string) {
     setExpanded((current) => {
@@ -131,6 +156,8 @@ export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query:
     ]
   }, [suppliers])
 
+  const payingDocuments = paying ? data.debtDocuments.filter((document) => document.supplierId === paying.supplierId) : []
+
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12">
       <StatTile
@@ -145,10 +172,12 @@ export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query:
       />
       <StatTile
         className="xl:col-span-3"
-        label="Накладные расходы"
-        value={moneyValue(totals.overheadTotal)}
+        label="Списания поставок"
+        value={moneyValue(totals.writeOffCost)}
         unit="сом"
-        hint={`${formatPercent(percentOf(totals.overheadTotal, totals.goodsTotal), 1)} от закупок · итого ${formatCompactMoney(totals.landedTotal)}`}
+        hint={`${formatQty(totals.writeOffQty)} шт · ${formatPercent(percentOf(totals.writeOffCost, totals.goodsTotal), 1)} от закупок${
+          totals.writeOffUnattributedCost > 0 ? ` · без поставщика ${formatCompactMoney(totals.writeOffUnattributedCost)}` : ""
+        }`}
       />
       <StatTile
         className="xl:col-span-3"
@@ -157,8 +186,8 @@ export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query:
         unit="сом"
         hint={
           totals.debt > 0
-            ? `не оплачено по приходам периода ${formatMoney(totals.debt)}`
-            : "приходы периода оплачены полностью"
+            ? `не оплачено по приходам периода ${formatMoney(totals.debt)} · расходы ${formatCompactMoney(totals.overheadTotal)}`
+            : `приходы периода оплачены · расходы ${formatCompactMoney(totals.overheadTotal)}`
         }
       />
       <StatTile
@@ -200,7 +229,7 @@ export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query:
           />
           <span className="px-1 text-xs text-muted-foreground tabular-nums">
             {groups.length} {plural(groups.length, mode === "supplier" ? SUPPLIERS_FORMS : POSITIONS_FORMS)}
-            {query.trim() ? ` · ${formatMoney(visibleGoods)}` : ""}
+            {query.trim() ? ` · ${formatMoney(visible.goodsSum)}` : ""}
           </span>
         </div>
 
@@ -213,19 +242,20 @@ export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query:
           </Empty>
         ) : (
           <div className="@container/positions min-w-0">
+            <div className="min-w-0 overflow-x-auto">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="text-[11px] font-medium text-muted-foreground uppercase">
                   <th className="px-4 py-2 text-left font-medium">{mode === "supplier" ? "Поставщик" : "Товар"}</th>
-                  <th className="hidden px-3 py-2 text-right font-medium @3xl/positions:table-cell">Актов</th>
+                  <th className="hidden px-3 py-2 text-right font-medium @4xl/positions:table-cell">Актов</th>
                   <th className="px-3 py-2 text-right font-medium">Кол-во</th>
                   <th className="px-3 py-2 text-right font-medium">Сумма</th>
-                  <th className="hidden px-3 py-2 text-right font-medium @4xl/positions:table-cell">Доля</th>
-                  <th className="hidden px-3 py-2 text-right font-medium @2xl/positions:table-cell">Цена, посл.</th>
-                  {mode === "supplier" ? (
-                    <th className="hidden px-3 py-2 text-right font-medium @4xl/positions:table-cell">Долг</th>
-                  ) : null}
-                  <th className="hidden px-3 py-2 text-right font-medium @5xl/positions:table-cell">Последний приход</th>
+                  <th className="hidden px-3 py-2 text-right font-medium @5xl/positions:table-cell">Доля</th>
+                  <th className="hidden px-3 py-2 text-right font-medium @3xl/positions:table-cell">Списания</th>
+                  <th className="hidden px-3 py-2 text-right font-medium @4xl/positions:table-cell">Цена, посл.</th>
+                  {mode === "supplier" ? <th className="hidden px-3 py-2 text-right font-medium @3xl/positions:table-cell">Долг</th> : null}
+                  <th className="hidden px-3 py-2 text-right font-medium @6xl/positions:table-cell">Последний приход</th>
+                  {mode === "supplier" ? <th className="w-0 px-2 py-2" /> : null}
                 </tr>
               </thead>
               <tbody>
@@ -239,24 +269,70 @@ export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query:
                       group={group}
                       mode={mode}
                       open={open}
-                      share={percentOf(group.goodsSum, visibleGoods)}
+                      share={percentOf(group.goodsSum, visible.goodsSum)}
                       lastAt={lastAt}
                       lastCost={lastRow?.lastCost ?? 0}
                       onToggle={() => toggle(group.key)}
+                      onPay={
+                        mode === "supplier" && group.supplierId !== null && (group.debtNow ?? 0) > 0
+                          ? () => setPaying({ supplierId: group.supplierId as number, supplierName: group.label })
+                          : undefined
+                      }
                       range={range}
                     />
                   )
                 })}
               </tbody>
+              <tfoot>
+                <tr className="border-t border-border/60 bg-muted/30 font-medium">
+                  <td className="px-4 py-2.5">
+                    Итого · {groups.length} {plural(groups.length, mode === "supplier" ? SUPPLIERS_FORMS : POSITIONS_FORMS)}
+                  </td>
+                  <td className="hidden px-3 py-2.5 text-right tabular-nums @4xl/positions:table-cell">{mode === "supplier" ? visible.docsCount : ""}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">{formatQty(visible.qty)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">{formatMoney(visible.goodsSum)}</td>
+                  <td className="hidden px-3 py-2.5 text-right tabular-nums text-muted-foreground @5xl/positions:table-cell">100 %</td>
+                  <td className="hidden px-3 py-2.5 text-right tabular-nums whitespace-nowrap @3xl/positions:table-cell">
+                    {formatMoney(visible.writeOffCost)}
+                    <span className="block text-xs font-normal text-muted-foreground">
+                      {formatQty(visible.writeOffQty)} шт · {formatPercent(percentOf(visible.writeOffCost, visible.goodsSum), 1)}
+                    </span>
+                  </td>
+                  <td className="hidden px-3 py-2.5 @4xl/positions:table-cell" />
+                  {mode === "supplier" ? (
+                    <td className={cn("hidden px-3 py-2.5 text-right tabular-nums whitespace-nowrap @3xl/positions:table-cell", visible.debtNow > 0 && "text-red-600")}>
+                      {visible.debtNow > 0 ? formatMoney(visible.debtNow) : "—"}
+                    </td>
+                  ) : null}
+                  <td className="hidden px-3 py-2.5 @6xl/positions:table-cell" />
+                  {mode === "supplier" ? <td className="px-2 py-2.5" /> : null}
+                </tr>
+              </tfoot>
             </table>
+            </div>
           </div>
         )}
       </section>
 
       <p className="text-xs text-muted-foreground md:col-span-2 xl:col-span-12">
         Суммы — стоимость товаров по строкам проведённых приходных актов (без накладных расходов) по дате операции.
-        Долг — товары минус оплачено поставщику; «сейчас» — по всем проведённым приходам на сегодня.
+        Списания — оценка: списание товара за период делится между поставщиками пропорционально их поставкам этого
+        товара за период. Долг — товары минус оплачено поставщику; «сейчас» — по всем проведённым приходам на сегодня.
+        Погашение записывается в журнал оплат поставщика.
       </p>
+
+      {paying ? (
+        <SupplierPaymentDialog
+          supplierId={paying.supplierId}
+          supplierName={paying.supplierName}
+          debtDocuments={payingDocuments}
+          hasOpenShift={data.hasOpenShift}
+          open
+          onOpenChange={(open) => {
+            if (!open) setPaying(null)
+          }}
+        />
+      ) : null}
     </div>
   )
 }
@@ -269,6 +345,7 @@ function GroupRows({
   lastAt,
   lastCost,
   onToggle,
+  onPay,
   range,
 }: {
   group: Group
@@ -278,9 +355,11 @@ function GroupRows({
   lastAt: string | null
   lastCost: number
   onToggle: () => void
+  onPay?: () => void
   range: AnalyticsSuppliers["range"]
 }) {
   const Chevron = open ? ChevronDownIcon : ChevronRightIcon
+  const writeOffPct = percentOf(group.writeOffCost, group.goodsSum)
   return (
     <>
       <tr
@@ -292,7 +371,7 @@ function GroupRows({
           <div className="flex min-w-0 items-center gap-2">
             <Chevron className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
                 <span className="truncate font-medium">{group.label}</span>
                 {group.href ? (
                   <Link
@@ -303,6 +382,15 @@ function GroupRows({
                     {mode === "supplier" ? "карточка" : "товар"}
                   </Link>
                 ) : null}
+                {mode === "supplier" && group.supplierId !== null ? (
+                  <Link
+                    href={`/stock/acts?type=stock_in&supplier=${group.supplierId}&dateFrom=${range.from}&dateTo=${range.to}`}
+                    className="shrink-0 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    акты
+                  </Link>
+                ) : null}
               </div>
               <div className="truncate text-xs text-muted-foreground">
                 {group.sub ? `${group.sub} · ` : ""}
@@ -311,22 +399,55 @@ function GroupRows({
             </div>
           </div>
         </td>
-        <td className="hidden px-3 py-2.5 text-right tabular-nums @3xl/positions:table-cell">{group.docsCount}</td>
-        <td className="px-3 py-2.5 text-right tabular-nums">{formatQty(group.qty)}</td>
+        <td className="hidden px-3 py-2.5 text-right tabular-nums @4xl/positions:table-cell">{group.docsCount}</td>
+        <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">{formatQty(group.qty)}</td>
         <td className="px-3 py-2.5 text-right font-medium tabular-nums whitespace-nowrap">{formatMoney(group.goodsSum)}</td>
-        <td className="hidden px-3 py-2.5 text-right tabular-nums text-muted-foreground @4xl/positions:table-cell">{formatPercent(share, 1)}</td>
+        <td className="hidden px-3 py-2.5 text-right tabular-nums text-muted-foreground @5xl/positions:table-cell">{formatPercent(share, 1)}</td>
+        <td className="hidden px-3 py-2.5 text-right tabular-nums whitespace-nowrap @3xl/positions:table-cell">
+          {group.writeOffCost > 0 ? (
+            <>
+              <span className={cn(writeOffPct >= 15 ? "text-red-600" : writeOffPct >= 7 ? "text-amber-700" : "")}>{formatMoney(group.writeOffCost)}</span>
+              <span className="block text-xs text-muted-foreground">
+                {formatQty(group.writeOffQty)} шт · {formatPercent(writeOffPct, 1)}
+              </span>
+            </>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </td>
         {/* Цена у товара — из последнего прихода; у поставщика цены разные по позициям — см. строки. */}
-        <td className="hidden px-3 py-2.5 text-right tabular-nums whitespace-nowrap @2xl/positions:table-cell">
+        <td className="hidden px-3 py-2.5 text-right tabular-nums whitespace-nowrap @4xl/positions:table-cell">
           {mode === "product" ? formatMoney(lastCost) : <span className="text-muted-foreground">—</span>}
         </td>
         {mode === "supplier" ? (
-          <td className={cn("hidden px-3 py-2.5 text-right tabular-nums whitespace-nowrap @4xl/positions:table-cell", (group.debtNow ?? 0) > 0 ? "text-red-600" : "text-muted-foreground")}>
+          <td className={cn("hidden px-3 py-2.5 text-right tabular-nums whitespace-nowrap @3xl/positions:table-cell", (group.debtNow ?? 0) > 0 ? "text-red-600" : "text-muted-foreground")}>
             {(group.debtNow ?? 0) > 0 ? formatMoney(group.debtNow ?? 0) : "—"}
           </td>
         ) : null}
-        <td className="hidden px-3 py-2.5 text-right tabular-nums whitespace-nowrap text-muted-foreground @5xl/positions:table-cell">
+        <td className="hidden px-3 py-2.5 text-right tabular-nums whitespace-nowrap text-muted-foreground @6xl/positions:table-cell">
           {formatInstantDate(lastAt)}
         </td>
+        {mode === "supplier" ? (
+          <td className="px-2 py-1.5 text-right">
+            {onPay ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="whitespace-nowrap text-muted-foreground"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onPay()
+                }}
+                title="Погасить долг"
+                aria-label="Погасить долг"
+              >
+                <BanknoteIcon className="size-4" aria-hidden />
+                <span className="hidden @5xl/positions:inline">Погасить</span>
+              </Button>
+            ) : null}
+          </td>
+        ) : null}
       </tr>
       {open
         ? group.rows.map((row) => (
@@ -347,17 +468,28 @@ function GroupRows({
                   </div>
                 </div>
               </td>
-              <td className="hidden px-3 py-2 text-right tabular-nums text-muted-foreground @3xl/positions:table-cell">{row.docsCount}</td>
+              <td className="hidden px-3 py-2 text-right tabular-nums text-muted-foreground @4xl/positions:table-cell">{row.docsCount}</td>
               <td className="px-3 py-2 text-right tabular-nums">{formatQty(row.qty)}</td>
               <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">{formatMoney(row.goodsSum)}</td>
-              <td className="hidden px-3 py-2 text-right tabular-nums text-muted-foreground @4xl/positions:table-cell">
+              <td className="hidden px-3 py-2 text-right tabular-nums text-muted-foreground @5xl/positions:table-cell">
                 {formatPercent(percentOf(row.goodsSum, group.goodsSum), 0)}
               </td>
-              <td className="hidden px-3 py-2 text-right tabular-nums whitespace-nowrap @2xl/positions:table-cell">{formatMoney(row.lastCost)}</td>
-              {mode === "supplier" ? <td className="hidden @4xl/positions:table-cell" /> : null}
-              <td className="hidden px-3 py-2 text-right tabular-nums whitespace-nowrap text-muted-foreground @5xl/positions:table-cell">
+              <td className="hidden px-3 py-2 text-right tabular-nums whitespace-nowrap @3xl/positions:table-cell">
+                {row.writeOffCost > 0 ? (
+                  <>
+                    {formatMoney(row.writeOffCost)}
+                    <span className="block text-xs text-muted-foreground">{formatQty(row.writeOffQty)} шт</span>
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </td>
+              <td className="hidden px-3 py-2 text-right tabular-nums whitespace-nowrap @4xl/positions:table-cell">{formatMoney(row.lastCost)}</td>
+              {mode === "supplier" ? <td className="hidden @3xl/positions:table-cell" /> : null}
+              <td className="hidden px-3 py-2 text-right tabular-nums whitespace-nowrap text-muted-foreground @6xl/positions:table-cell">
                 {formatInstantDate(row.lastAt)}
               </td>
+              {mode === "supplier" ? <td /> : null}
             </tr>
           ))
         : null}

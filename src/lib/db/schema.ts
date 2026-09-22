@@ -1189,3 +1189,49 @@ export function migrateOrderPendingPrepayments(client: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_order_pending_prepayments_order_id ON order_pending_prepayments(order_id);
   `)
 }
+
+// v26: журнал оплат поставщикам. Долг по-прежнему считается от stock_documents.paid_amount
+// (goods_total − paid_amount у проведённого прихода), а здесь — КАЖДОЕ событие оплаты: погашение
+// долга (repayment, одна оплата может быть разнесена по нескольким актам — общий batch_id),
+// сумма «оплачено» в форме акта (document — при изменении пишется дельта, отрицательная при
+// уменьшении) и бэкфилл существующих оплат (backfill). cash_transaction_id — если наличные
+// изъяты из кассы смены (cash_out). Бэкфилл — только по проведённым приходам: у corrected/cancelled
+// оплата уже перенесена в корректировку или снята. Аддитивно, идемпотентно.
+export function migrateSupplierPayments(client: Database.Database) {
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS supplier_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      supplier_id INTEGER,
+      supplier_name TEXT NOT NULL DEFAULT '',
+      document_id INTEGER,
+      batch_id TEXT NOT NULL DEFAULT '',
+      amount REAL NOT NULL,
+      payment_method TEXT NOT NULL DEFAULT 'cash',
+      source TEXT NOT NULL DEFAULT 'repayment',
+      paid_at TEXT NOT NULL,
+      comment TEXT NOT NULL DEFAULT '',
+      cash_transaction_id INTEGER,
+      user_id INTEGER,
+      user_name TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_supplier_payments_supplier ON supplier_payments(supplier_id, paid_at);
+    CREATE INDEX IF NOT EXISTS idx_supplier_payments_document ON supplier_payments(document_id);
+  `)
+  const count = client.prepare("SELECT COUNT(*) as count FROM supplier_payments").get() as { count: number }
+  if (count.count === 0) {
+    client
+      .prepare(
+        `INSERT INTO supplier_payments (
+          supplier_id, supplier_name, document_id, batch_id, amount, payment_method, source, paid_at, comment,
+          user_id, user_name
+        )
+        SELECT supplier_id, COALESCE(supplier_name, ''), id, 'backfill:' || id, paid_amount, 'cash', 'backfill',
+          COALESCE(posted_at, operation_at, created_at), 'Оплачено при оформлении акта',
+          posted_by_user_id, COALESCE(posted_by_name, created_by_name, '')
+        FROM stock_documents
+        WHERE type = 'stock_in' AND status = 'posted' AND paid_amount > 0`
+      )
+      .run()
+  }
+}

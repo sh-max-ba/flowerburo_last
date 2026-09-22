@@ -86,6 +86,7 @@ import {
   clearProductCategory,
   renameProductCategory,
   setSupplierActive,
+  recordSupplierPayment,
   setUserActive,
   setAllowOversellOrders,
   setRecomputeCostOnReceipt,
@@ -914,6 +915,32 @@ export async function postStockDocumentAction(documentId: number) {
       revalidatePath("/history/stock")
     },
     "Акт склада проведен"
+  )
+}
+
+// Погашение долга поставщику: разносится по его проведённым приходам (FIFO) или по одному акту,
+// пишется в журнал оплат; при fromCash=1 наличные изымаются из кассы открытой смены.
+export async function recordSupplierPaymentAction(formData: FormData) {
+  return runRoleAction(
+    ["owner"],
+    (user) => {
+      const result = recordSupplierPayment(formData, user)
+      revalidatePath("/suppliers")
+      revalidatePath(`/suppliers/${String(formData.get("supplierId") ?? "")}`)
+      revalidatePath("/stock/acts")
+      for (const allocation of result.allocations) {
+        revalidatePath(`/stock/acts/${allocation.documentId}`)
+      }
+      revalidatePath("/analytics")
+      revalidatePath("/history")
+      const acts = result.allocations.map((allocation) => allocation.number).join(", ")
+      return [
+        `Оплата ${formatSom(result.amount)} записана`,
+        `Акты: ${acts}`,
+        ...(result.cashTransactionId ? ["Наличные изъяты из кассы смены"] : []),
+      ]
+    },
+    "Оплата поставщику записана"
   )
 }
 

@@ -10,6 +10,7 @@ import { clean, parsePositiveInteger, parseStockDocumentType, roundMoney, toNumb
 import { allocateOverheadShares, landedUnitCostOf } from "@/lib/stock-costing"
 import { getRecomputeCostOnReceipt, getTrackLotsEnabled } from "./app-settings"
 import { maybeCreateReceiptLot, revertLotsForDocument } from "./stock-lots"
+import { moveSupplierPaymentsToDocument, recordDocumentPaidDelta } from "./supplier-payments"
 
 export function listStockDocuments(filters?: {
   type?: string
@@ -331,6 +332,19 @@ function saveStockDocumentDraftInTransaction(
         documentId
       )
     client.prepare("DELETE FROM stock_document_items WHERE document_id = ?").run(documentId)
+    // Изменение «оплачено» в форме — событие оплаты для журнала расчётов с поставщиком.
+    if (isStockIn) {
+      recordDocumentPaidDelta(client, {
+        documentId,
+        documentNumber: String(existing.number ?? ""),
+        supplierId: supplier.supplierId,
+        supplierName: supplier.supplierName,
+        previousPaid: numberFromRow(existing.paid_amount),
+        nextPaid: paidAmount,
+        paidAt: operationAt,
+        currentUser: input.currentUser,
+      })
+    }
   } else {
     const documentNumber = generateStockDocumentNumberInTransaction(client, documentType)
     const document = client
@@ -357,6 +371,18 @@ function saveStockDocumentDraftInTransaction(
         createdByName: input.currentUser.name,
       })
     documentId = Number(document.lastInsertRowid)
+    if (isStockIn && paidAmount > 0) {
+      recordDocumentPaidDelta(client, {
+        documentId,
+        documentNumber,
+        supplierId: supplier.supplierId,
+        supplierName: supplier.supplierName,
+        previousPaid: 0,
+        nextPaid: paidAmount,
+        paidAt: operationAt,
+        currentUser: input.currentUser,
+      })
+    }
   }
 
   const insertItem = client.prepare(
@@ -766,6 +792,8 @@ function postStockCorrectionInTransaction(client: Database.Database, correctionI
       "UPDATE stock_documents SET status = 'corrected', corrected_by_document_id = ?, corrected_at = CURRENT_TIMESTAMP WHERE id = ?"
     )
     .run(correctionId, originalId)
+  // paid_amount скопирован в корректировку — журнал оплат переезжает вслед за долгом.
+  moveSupplierPaymentsToDocument(client, originalId, correctionId)
 }
 
 // Создаёт черновик корректировки по проведённому акту (приход или списание): копирует позиции
@@ -947,6 +975,8 @@ export function cancelStockDocument(documentId: number) {
     client
       .prepare("UPDATE stock_documents SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP WHERE id = ?")
       .run(documentId)
+    // «Оплачено» из формы отменённого черновика — не оплата; строки погашений (repayment) остаются.
+    client.prepare("DELETE FROM supplier_payments WHERE document_id = ? AND source = 'document'").run(documentId)
   })
 
   cancelDocument()

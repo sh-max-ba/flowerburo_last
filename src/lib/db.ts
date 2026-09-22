@@ -289,6 +289,7 @@ export type {
   AnalyticsStockSnapshot,
   AnalyticsOverview,
   AnalyticsSales,
+  AnalyticsSaleLine,
   AnalyticsSuppliers,
   SupplierAnalyticsRow,
   SupplierPositionRow,
@@ -299,3 +300,18 @@ export type {
   ProductCardMovement,
   ProductCardSupplier,
 } from "./db/queries/analytics"
+export {
+  listSupplierPayments,
+  listSupplierDebtDocuments,
+  getSupplierSettlement,
+  recordSupplierPayment,
+} from "./db/queries/supplier-payments"
+export type {
+  SupplierPayment,
+  SupplierPaymentSource,
+  SupplierDebtDocument,
+  SupplierSettlement,
+  SupplierPaymentResult,
+} from "./db/queries/supplier-payments"
+export { getSalesDocument, listProductSales } from "./db/queries/sales-documents"
+export type { SalesDocument, SalesDocumentItem, SalesDocumentSource, ProductSaleLine } from "./db/queries/sales-documents"

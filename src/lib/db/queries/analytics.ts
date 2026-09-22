@@ -2,6 +2,9 @@ import { numberFromRow } from "@/lib/db-row"
 import { SHOP_UTC_OFFSET_SQL } from "@/lib/datetime"
 import { db } from "../connection"
 import { getSalesReport, type SalesReport } from "./sales-report"
+import { listProductSales, type ProductSaleLine } from "./sales-documents"
+import { getOpenShift } from "./shifts"
+import type { SupplierDebtDocument } from "./supplier-payments"
 
 // BI-аналитика склада и продаж (/analytics). Только чтение, все агрегаты — SQL с границами
 // суток в поясе магазина (Бишкек, UTC+6): метки в БД лежат в UTC.
@@ -423,24 +426,51 @@ function getStockSnapshot(client: DbClient): AnalyticsStockSnapshot {
 
 // ── Продажи ────────────────────────────────────────────────────────────────
 
+// Строка продажи для раскрытия «какие именно чеки и заказы» — компактная форма строк отчёта.
+export type AnalyticsSaleLine = {
+  source: "sale" | "order"
+  sourceId: number
+  label: string
+  soldAt: string
+  customer: string
+  productCode: string
+  productName: string
+  qty: number
+  total: number
+}
+
 export type AnalyticsSales = {
   range: AnalyticsRange
   totals: AnalyticsPeriodTotals
   previous: AnalyticsPeriodTotals
   series: AnalyticsDayPoint[]
+  // Отчёт без строк (lines = []): строки отдаются отдельно в компактном виде.
   report: SalesReport
+  lines: AnalyticsSaleLine[]
 }
 
 export function getAnalyticsSales(opts?: AnalyticsRangeInput): AnalyticsSales {
   const client = db()
   const range = resolveAnalyticsRange(opts, client)
   const series = getDailySeries(client, range.from, range.to)
+  const report = getSalesReport({ dateFrom: range.from, dateTo: range.to })
   return {
     range,
     totals: sumSeries(series),
     previous: sumSeries(getDailySeries(client, range.prevFrom, range.prevTo)),
     series,
-    report: getSalesReport({ dateFrom: range.from, dateTo: range.to }),
+    report: { ...report, lines: [] },
+    lines: report.lines.map((line) => ({
+      source: line.source,
+      sourceId: line.sourceId,
+      label: line.sourceLabel,
+      soldAt: line.soldAt,
+      customer: line.customer,
+      productCode: line.productCode,
+      productName: line.productName,
+      qty: line.qty,
+      total: line.revenue,
+    })),
   }
 }
 
@@ -461,6 +491,10 @@ export type SupplierAnalyticsRow = {
   // Долг по всем проведённым приходам на сегодня — текущее состояние, не зависит от периода.
   debtNow: number
   lastReceiptAt: string | null
+  // Списания товаров этого поставщика за период — ОЦЕНКА: списание товара делится между поставщиками
+  // пропорционально их поставкам этого товара за период (партии не ведутся).
+  writeOffQty: number
+  writeOffCost: number
 }
 
 export type SupplierPositionRow = {
@@ -477,6 +511,9 @@ export type SupplierPositionRow = {
   maxCost: number
   lastCost: number
   lastAt: string | null
+  // Доля списаний товара, отнесённая на этого поставщика (см. SupplierAnalyticsRow).
+  writeOffQty: number
+  writeOffCost: number
 }
 
 export type AnalyticsSuppliers = {
@@ -491,11 +528,18 @@ export type AnalyticsSuppliers = {
     paidAmount: number
     debt: number
     debtNow: number
+    writeOffQty: number
+    writeOffCost: number
+    // Списания товаров, у которых в периоде не было приходов — поставщика не определить.
+    writeOffUnattributedCost: number
   }
   previousGoodsTotal: number
   series: AnalyticsDayPoint[]
   suppliers: SupplierAnalyticsRow[]
   positions: SupplierPositionRow[]
+  // Акты с долгом по каждому поставщику (на сегодня) — для диалога погашения прямо из таблицы.
+  debtDocuments: Array<SupplierDebtDocument & { supplierId: number }>
+  hasOpenShift: boolean
 }
 
 const PURCHASE_DATE_SQL = `DATE(COALESCE(stock_documents.operation_at, stock_documents.created_at), '${TZ}')`
@@ -550,6 +594,8 @@ function getSupplierShares(client: DbClient, range: AnalyticsRange): SupplierAna
     debt: round2(numberFromRow(row.debt)),
     debtNow: round2(numberFromRow(row.debtNow)),
     lastReceiptAt: row.lastReceiptAt ? String(row.lastReceiptAt) : null,
+    writeOffQty: 0,
+    writeOffCost: 0,
   }))
 }
 
@@ -603,7 +649,67 @@ function getSupplierPositions(client: DbClient, range: AnalyticsRange): Supplier
     maxCost: round2(numberFromRow(row.maxCost)),
     lastCost: round2(numberFromRow(row.lastCost)),
     lastAt: row.lastAt ? String(row.lastAt) : null,
+    writeOffQty: 0,
+    writeOffCost: 0,
   }))
+}
+
+// Списания за период по товарам (кол-во и сумма по закупочной цене строк) — для атрибуции
+// списаний поставщикам.
+function getWriteOffsByProduct(client: DbClient, range: AnalyticsRange): Map<string, { qty: number; cost: number }> {
+  const rows = client
+    .prepare(
+      `SELECT i.product_code as productCode, COALESCE(SUM(i.qty), 0) as qty,
+        COALESCE(SUM(${WRITEOFF_COST_SQL}), 0) as cost
+       FROM stock_document_items i
+       JOIN stock_documents d ON d.id = i.document_id
+       LEFT JOIN products ON products.code = i.product_code
+       WHERE d.type = 'stock_out' AND d.status = 'posted' AND ${WRITEOFF_DATE_SQL} BETWEEN @from AND @to
+       GROUP BY i.product_code`
+    )
+    .all({ from: range.from, to: range.to }) as Array<Record<string, unknown>>
+  const map = new Map<string, { qty: number; cost: number }>()
+  for (const row of rows) {
+    map.set(String(row.productCode ?? ""), { qty: numberFromRow(row.qty), cost: numberFromRow(row.cost) })
+  }
+  return map
+}
+
+// Раскладывает списания товара по поставщикам пропорционально их поставкам за период (оценка —
+// партии не ведутся). Возвращает сумму списаний, которые не удалось отнести (приходов в периоде не было).
+function attributeWriteOffs(
+  positions: SupplierPositionRow[],
+  suppliers: SupplierAnalyticsRow[],
+  writeOffs: Map<string, { qty: number; cost: number }>
+): number {
+  const receivedByProduct = new Map<string, number>()
+  for (const row of positions) {
+    receivedByProduct.set(row.productCode, (receivedByProduct.get(row.productCode) ?? 0) + row.qty)
+  }
+  const bySupplier = new Map<string, { qty: number; cost: number }>()
+  for (const row of positions) {
+    const writeOff = writeOffs.get(row.productCode)
+    const received = receivedByProduct.get(row.productCode) ?? 0
+    if (!writeOff || received <= 0) continue
+    const share = row.qty / received
+    row.writeOffQty = round2(writeOff.qty * share)
+    row.writeOffCost = round2(writeOff.cost * share)
+    const key = row.supplierId === null ? "none" : String(row.supplierId)
+    const acc = bySupplier.get(key) ?? { qty: 0, cost: 0 }
+    acc.qty += row.writeOffQty
+    acc.cost += row.writeOffCost
+    bySupplier.set(key, acc)
+  }
+  for (const supplier of suppliers) {
+    const acc = bySupplier.get(supplier.supplierId === null ? "none" : String(supplier.supplierId))
+    supplier.writeOffQty = round2(acc?.qty ?? 0)
+    supplier.writeOffCost = round2(acc?.cost ?? 0)
+  }
+  let unattributed = 0
+  for (const [productCode, writeOff] of writeOffs) {
+    if ((receivedByProduct.get(productCode) ?? 0) <= 0) unattributed += writeOff.cost
+  }
+  return round2(unattributed)
 }
 
 export function getAnalyticsSuppliers(opts?: AnalyticsRangeInput): AnalyticsSuppliers {
@@ -613,6 +719,32 @@ export function getAnalyticsSuppliers(opts?: AnalyticsRangeInput): AnalyticsSupp
   const positions = getSupplierPositions(client, range)
   const series = getDailySeries(client, range.from, range.to)
   const previous = sumSeries(getDailySeries(client, range.prevFrom, range.prevTo))
+  const writeOffUnattributedCost = attributeWriteOffs(positions, suppliers, getWriteOffsByProduct(client, range))
+
+  // Акты с долгом на сегодня — по всем поставщикам с долгом (не только с приходами в периоде).
+  const debtDocuments = (
+    client
+      .prepare(
+        `SELECT id, supplier_id as supplierId, number, COALESCE(operation_at, created_at) as operationAt,
+          goods_total as goodsTotal, paid_amount as paidAmount
+         FROM stock_documents
+         WHERE type = 'stock_in' AND status = 'posted' AND supplier_id IS NOT NULL AND goods_total - paid_amount > 0.005
+         ORDER BY COALESCE(operation_at, created_at) ASC, id ASC`
+      )
+      .all() as Array<Record<string, unknown>>
+  ).map((row) => {
+    const goodsTotal = round2(numberFromRow(row.goodsTotal))
+    const paidAmount = round2(numberFromRow(row.paidAmount))
+    return {
+      id: numberFromRow(row.id),
+      supplierId: numberFromRow(row.supplierId),
+      number: String(row.number ?? ""),
+      operationAt: String(row.operationAt ?? ""),
+      goodsTotal,
+      paidAmount,
+      debt: round2(Math.max(0, goodsTotal - paidAmount)),
+    }
+  })
 
   const totals = suppliers.reduce(
     (acc, row) => {
@@ -645,11 +777,16 @@ export function getAnalyticsSuppliers(opts?: AnalyticsRangeInput): AnalyticsSupp
       paidAmount: round2(totals.paidAmount),
       debt: round2(totals.debt),
       debtNow: round2(numberFromRow(debtNow.debt)),
+      writeOffQty: round2(suppliers.reduce((sum, row) => sum + row.writeOffQty, 0)),
+      writeOffCost: round2(suppliers.reduce((sum, row) => sum + row.writeOffCost, 0)),
+      writeOffUnattributedCost,
     },
     previousGoodsTotal: previous.purchases,
     series,
     suppliers,
     positions,
+    debtDocuments,
+    hasOpenShift: Boolean(getOpenShift(client)),
   }
 }
 
@@ -924,6 +1061,8 @@ export type ProductCardData = {
   movementsTruncated: boolean
   // Полная история цен закупки (последние приходы) — для блока «Закупочная цена».
   recentCosts: Array<{ at: string; unitCost: number; supplierName: string; documentId: number; documentNumber: string }>
+  // Продажи товара за период — строки чеков и заказов с клиентом (раскрытие «Продано»).
+  sales: ProductSaleLine[]
 }
 
 const MOVEMENTS_LIMIT = 500
@@ -1254,6 +1393,7 @@ export function getProductCardData(code: string, opts?: AnalyticsRangeInput): Pr
     movements,
     movementsTruncated,
     recentCosts,
+    sales: listProductSales(code, range.from, range.to),
   }
 }
 

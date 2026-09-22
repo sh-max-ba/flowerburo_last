@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import type { AnalyticsSales, SalesReportRow } from "@/lib/db"
 import { cn, formatMoney } from "@/lib/utils"
 import { DataView, type DataViewColumn } from "@/components/data-view"
@@ -10,15 +10,41 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { BarList, Panel } from "./bar-list"
 import { TrendChart } from "./charts"
 import { formatCompactMoney, formatPercent, formatQty, ORDERS_FORMS, percentOf, plural, POSITIONS_FORMS, SALES_FORMS, SERIES_COLORS } from "./format"
-import { productCardHref } from "./links"
 import { moneyValue } from "./overview-tab"
+import { groupLinesToDocs, SalesDrilldownSheet, type DrillTarget } from "./sales-drilldown-sheet"
 import { StatTile } from "./stat-tile"
 
 export function SalesTab({ data, query }: { data: AnalyticsSales; query: string }) {
-  const router = useRouter()
-  const { totals, previous, series, report, range } = data
+  const searchParams = useSearchParams()
+  const { totals, previous, series, report, lines, range } = data
   const [category, setCategory] = useState("all")
   const days = series.map((point) => point.day)
+
+  // Провалиться в продажи товара: чеки и заказы, где он был (строки отчёта с клиентом).
+  function productDrill(row: Pick<SalesReportRow, "productCode" | "productName">): DrillTarget {
+    const productLines = lines.filter((line) =>
+      row.productCode ? line.productCode === row.productCode : !line.productCode && line.productName === row.productName
+    )
+    return { kind: "product", productCode: row.productCode, productName: row.productName, lines: productLines }
+  }
+
+  // Все чеки и заказы периода — из тех же строк отчёта, сгруппированных по документу.
+  function documentsDrill(): DrillTarget {
+    return { kind: "documents", title: "Чеки и заказы за период", docs: groupLinesToDocs(lines) }
+  }
+
+  // ?product=<код> (ссылка из обзора) — сразу раскрываем продажи товара; ?docs=1 — список чеков и заказов.
+  const productParam = searchParams.get("product")
+  const docsParam = searchParams.get("docs")
+  const [drill, setDrill] = useState<DrillTarget | null>(() => {
+    if (productParam) {
+      const row = report.byProduct.find((entry) => entry.productCode === productParam)
+      return row ? productDrill(row) : null
+    }
+    return docsParam === "1" ? documentsDrill() : null
+  })
+  const openProduct = (row: Pick<SalesReportRow, "productCode" | "productName">) => setDrill(productDrill(row))
+  const openDocuments = () => setDrill(documentsDrill())
 
   const categories = useMemo(() => report.byCategory.map((row) => row.category), [report.byCategory])
 
@@ -125,7 +151,8 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
         delta={{ current: totals.revenue, previous: previous.revenue }}
         spark={series.map((point) => point.revenue)}
         sparkColor={SERIES_COLORS.revenue}
-        hint={`${totals.salesCount} ${plural(totals.salesCount, SALES_FORMS)} · ${totals.ordersCount} ${plural(totals.ordersCount, ORDERS_FORMS)}`}
+        hint={`${totals.salesCount} ${plural(totals.salesCount, SALES_FORMS)} · ${totals.ordersCount} ${plural(totals.ordersCount, ORDERS_FORMS)} → открыть`}
+        onClick={openDocuments}
       />
       <StatTile
         className="xl:col-span-3"
@@ -204,10 +231,7 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
           getRowKey={(row) => row.productCode || `custom:${row.productName}`}
           defaultSort={{ key: "revenue", direction: "desc" }}
           stickyHeader={false}
-          onRowSelect={(row) => {
-            if (row.productCode) router.push(productCardHref(row.productCode, range))
-          }}
-          rowClassName={(row) => (row.productCode ? undefined : "cursor-default")}
+          onRowSelect={(row) => openProduct(row)}
           renderCard={(row) => (
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <div className="min-w-0">
@@ -234,6 +258,8 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
           }
         />
       </section>
+
+      <SalesDrilldownSheet target={drill} onClose={() => setDrill(null)} range={range} />
     </div>
   )
 }

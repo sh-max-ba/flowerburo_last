@@ -17,7 +17,7 @@ import {
   SALES_FORMS,
   SERIES_COLORS,
 } from "./format"
-import { productCardHref, tabHref } from "./links"
+import { productCardHref, salesDocumentsHref, salesProductHref, tabHref } from "./links"
 import { StatTile } from "./stat-tile"
 
 // Значение плитки: число отдельно от единицы («3 828 563» + «сом»).
@@ -41,7 +41,8 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
         delta={{ current: totals.revenue, previous: previous.revenue }}
         spark={series.map((point) => point.revenue)}
         sparkColor={SERIES_COLORS.revenue}
-        hint={`${totals.salesCount} ${plural(totals.salesCount, SALES_FORMS)} · ${totals.ordersCount} ${plural(totals.ordersCount, ORDERS_FORMS)}`}
+        hint={`${totals.salesCount} ${plural(totals.salesCount, SALES_FORMS)} · ${totals.ordersCount} ${plural(totals.ordersCount, ORDERS_FORMS)} → открыть`}
+        href={salesDocumentsHref(data.range)}
       />
       <StatTile
         className="xl:col-span-3"
@@ -145,7 +146,8 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
             label: row.productName,
             value: row.revenue,
             meta: `${formatQty(row.qty)} шт`,
-            href: row.productCode ? productCardHref(row.productCode, data.range) : undefined,
+            // Проваливаемся в продажи товара (чеки и заказы) на вкладке «Продажи».
+            href: row.productCode ? salesProductHref(row.productCode, data.range) : undefined,
           }))}
           formatValue={formatMoney}
           showShare={false}

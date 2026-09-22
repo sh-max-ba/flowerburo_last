@@ -29,6 +29,8 @@ export type SalesReportLine = {
   sourceId: number
   sourceLabel: string
   soldAt: string
+  // Клиент документа (имя из чека/заказа) — для раскрытия «какие именно чеки и заказы».
+  customer: string
   productCode: string
   productName: string
   categoryPath: string
@@ -68,6 +70,7 @@ export type SalesReport = {
 type RawLine = {
   sourceId: number
   soldAt: string
+  customer: string
   productCode: string
   productName: string
   categoryPath: string
@@ -110,6 +113,7 @@ function toReportLines(raw: RawLine[], source: "sale" | "order"): SalesReportLin
         sourceId: line.sourceId,
         sourceLabel: source === "sale" ? `Чек #${line.sourceId}` : `Заказ №${line.orderNumber ?? line.sourceId}`,
         soldAt: line.soldAt,
+        customer: line.customer,
         productCode: line.productCode,
         productName: line.productName,
         categoryPath: line.categoryPath,
@@ -170,6 +174,7 @@ export function getSalesReport(filters?: SalesReportFilters): SalesReport {
       `SELECT
         sales.id as sourceId,
         sales.created_at as soldAt,
+        COALESCE(sales.customer_name, '') as customer,
         COALESCE(items.product_code, '') as productCode,
         COALESCE(products.name, items.product_code, '—') as productName,
         COALESCE(products.category_path, '') as categoryPath,
@@ -207,6 +212,7 @@ export function getSalesReport(filters?: SalesReportFilters): SalesReport {
         orders.id as sourceId,
         COALESCE(NULLIF(orders.number, ''), orders.id) as orderNumber,
         orders.completed_at as soldAt,
+        COALESCE(orders.customer, '') as customer,
         COALESCE(items.product_code, '') as productCode,
         COALESCE(products.name, NULLIF(items.name, ''), items.product_code, '—') as productName,
         COALESCE(products.category_path, '') as categoryPath,

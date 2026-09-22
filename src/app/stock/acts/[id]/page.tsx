@@ -13,7 +13,16 @@ import { formatMoney } from "@/lib/utils"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
-import { getDraftCorrectionId, getStockDocument, type StockDocumentStatus, type StockDocumentType } from "@/lib/db"
+import {
+  getDraftCorrectionId,
+  getStockDocument,
+  listSupplierDebtDocuments,
+  listSupplierPayments,
+  type StockDocumentStatus,
+  type StockDocumentType,
+} from "@/lib/db"
+import { SupplierPaymentButton } from "@/components/suppliers/supplier-payment-dialog"
+import { getPaymentMethodLabel } from "@/lib/labels"
 import {
   allocationMethodLabel,
   stockDocumentTypeLabel,
@@ -46,13 +55,18 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
   // Для черновика корректировки предпросмотр «Сейчас/Ожидается» считает от остатка с учётом отката
   // исходного акта — именно так проведение и пересчитает склад.
   const revertDeltas = getCorrectionRevertDeltas(document)
+  const shiftContext = getShiftShellContext(user)
+  // Расчёты с поставщиком: оплаты по этому акту и список актов с долгом (для диалога погашения).
+  const documentPayments = isStockIn ? listSupplierPayments({ documentId: document.id }) : []
+  const supplierDebtDocuments =
+    isStockIn && document.supplierId && document.supplierDebt > 0 ? listSupplierDebtDocuments(document.supplierId) : []
 
   return (
     <CrmShell
       user={user}
       active="stock-acts"
       title={`Акт ${document.number}`}
-      shiftContext={getShiftShellContext(user)}
+      shiftContext={shiftContext}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
     >
       <div className="flex justify-end">
@@ -313,6 +327,41 @@ export default async function StockActDetailsPage({ params }: PageProps<"/stock/
                   </span>
                 </div>
               </div>
+              {document.supplierId && document.supplierDebt > 0 ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <SupplierPaymentButton
+                    supplierId={document.supplierId}
+                    supplierName={document.supplierName}
+                    debtDocuments={supplierDebtDocuments}
+                    hasOpenShift={Boolean(shiftContext.openShift)}
+                    documentId={document.id}
+                    label="Оплатить"
+                    size="sm"
+                  />
+                  <Link href={`/suppliers/${document.supplierId}`} className={buttonVariants({ variant: "ghost", size: "sm" })}>
+                    Расчёты с поставщиком
+                  </Link>
+                </div>
+              ) : null}
+              {documentPayments.length > 0 ? (
+                <div className="mt-4 border-t pt-3">
+                  <div className="mb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">Оплаты по акту</div>
+                  <ul className="flex flex-col gap-1 text-sm">
+                    {documentPayments.map((payment) => (
+                      <li key={payment.id} className="flex items-center justify-between gap-3">
+                        <span className="min-w-0 truncate text-muted-foreground">
+                          {formatDateTime(payment.paidAt)} · {getPaymentMethodLabel(payment.paymentMethod)}
+                          {payment.userName ? ` · ${payment.userName}` : ""}
+                          {payment.comment ? ` · ${payment.comment}` : ""}
+                        </span>
+                        <span className={payment.amount < 0 ? "shrink-0 tabular-nums text-red-600" : "shrink-0 tabular-nums"}>
+                          {formatMoney(payment.amount)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
         )}

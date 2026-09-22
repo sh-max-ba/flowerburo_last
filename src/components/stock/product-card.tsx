@@ -23,6 +23,7 @@ import {
   SUPPLIERS_FORMS,
 } from "@/components/analytics/format"
 import { PeriodPicker } from "@/components/analytics/period-picker"
+import { SalesDrilldownSheet, type DrillTarget } from "@/components/analytics/sales-drilldown-sheet"
 import { StatTile } from "@/components/analytics/stat-tile"
 import { DataView, type DataViewColumn } from "@/components/data-view"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
@@ -79,7 +80,8 @@ function movementLabel(movement: ProductCardMovement): string {
   return base
 }
 
-function movementSource(movement: ProductCardMovement) {
+// Связь движения: акт — ссылка на страницу акта; чек/заказ — кнопка, раскрывающая документ в панели.
+function movementSource(movement: ProductCardMovement, onOpenDoc?: (target: DrillTarget) => void) {
   if (movement.documentId !== null) {
     return (
       <Link href={`/stock/acts/${movement.documentId}`} className="font-medium underline-offset-4 hover:underline">
@@ -87,9 +89,23 @@ function movementSource(movement: ProductCardMovement) {
       </Link>
     )
   }
-  if (movement.saleId !== null) return <span>Чек #{movement.saleId}</span>
-  if (movement.orderId !== null) return <span>Заказ #{movement.orderId}</span>
-  return <span className="text-muted-foreground">—</span>
+  const ref =
+    movement.saleId !== null
+      ? { source: "sale" as const, id: movement.saleId, label: `Чек #${movement.saleId}` }
+      : movement.orderId !== null
+        ? { source: "order" as const, id: movement.orderId, label: `Заказ #${movement.orderId}` }
+        : null
+  if (!ref) return <span className="text-muted-foreground">—</span>
+  if (!onOpenDoc) return <span>{ref.label}</span>
+  return (
+    <button
+      type="button"
+      className="font-medium underline-offset-4 hover:underline"
+      onClick={() => onOpenDoc({ kind: "document", source: ref.source, id: ref.id })}
+    >
+      {ref.label}
+    </button>
+  )
 }
 
 /**
@@ -100,7 +116,26 @@ function movementSource(movement: ProductCardMovement) {
 export function ProductCard({ data }: { data: ProductCardData }) {
   const { product, period, previous, series, suppliers, movements, range } = data
   const [kind, setKind] = useState<KindFilter>("all")
+  const [drill, setDrill] = useState<DrillTarget | null>(null)
   const days = series.map((point) => point.day)
+
+  // «Продано» → список чеков и заказов с этим товаром за период.
+  function openSales() {
+    setDrill({
+      kind: "product",
+      productCode: product.code,
+      productName: product.name,
+      lines: data.sales.map((line) => ({
+        source: line.source,
+        sourceId: line.sourceId,
+        label: line.label,
+        soldAt: line.soldAt,
+        customer: line.customer,
+        qty: line.qty,
+        total: line.total,
+      })),
+    })
+  }
   const marginPct = product.salePrice > 0 ? percentOf(product.salePrice - product.costPrice, product.salePrice) : 0
   const netChange = period.closingStock - period.openingStock
 
@@ -174,7 +209,7 @@ export function ProductCard({ data }: { data: ProductCardData }) {
         className: "whitespace-nowrap",
         cell: (row) => (
           <span className="flex min-w-0 flex-col">
-            {movementSource(row)}
+            {movementSource(row, setDrill)}
             {row.supplierName ? <span className="truncate text-xs text-muted-foreground">{row.supplierName}</span> : null}
           </span>
         ),
@@ -265,7 +300,8 @@ export function ProductCard({ data }: { data: ProductCardData }) {
               delta={{ current: period.soldQty, previous: previous.soldQty }}
               spark={series.map((point) => point.soldQty)}
               sparkColor={SERIES_COLORS.revenue}
-              hint={`${formatMoney(period.revenue)} · ${period.salesCount} ${plural(period.salesCount, SALES_FORMS)} · ${period.ordersCount} ${plural(period.ordersCount, ORDERS_FORMS)}`}
+              hint={`${formatMoney(period.revenue)} · ${period.salesCount} ${plural(period.salesCount, SALES_FORMS)} · ${period.ordersCount} ${plural(period.ordersCount, ORDERS_FORMS)} → открыть`}
+              onClick={openSales}
             />
             <StatTile
               label="Поступило"
@@ -458,6 +494,8 @@ export function ProductCard({ data }: { data: ProductCardData }) {
           </section>
         </div>
       </ScreenBody>
+
+      <SalesDrilldownSheet target={drill} onClose={() => setDrill(null)} range={range} />
     </>
   )
 }
