@@ -12,7 +12,7 @@ import { formatCompactMoney, formatPercent, formatQty, ORDERS_FORMS, percentOf, 
 import { operationsHref, productCardHref } from "./links"
 import { moneyValue } from "./overview-tab"
 import { StatTile } from "./stat-tile"
-import { ActiveFilters, FilterMenu, OpenInWindowLink, Pagination, RangeFilter, TableToolbar, usePagination } from "./table-chrome"
+import { ActiveFilters, FilterCombobox, OpenInWindowLink, Pagination, RangeFilter, TableToolbar, usePagination } from "./table-chrome"
 
 export function SalesTab({ data, query }: { data: AnalyticsSales; query: string }) {
   const router = useRouter()
@@ -135,15 +135,10 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
     [report.totals.revenue]
   )
 
-  const chips = [
-    ...(category !== "all" ? [{ key: "category", label: category, onRemove: () => setCategory("all") }] : []),
-    ...(revenueRange.from || revenueRange.to
-      ? [{ key: "revenue", label: `Выручка ${revenueRange.from || "0"}–${revenueRange.to || "∞"}`, onRemove: () => setRevenueRange({ from: "", to: "" }) }]
-      : []),
-    ...(marginFilter !== "all"
-      ? [{ key: "margin", label: MARGIN_OPTIONS.find((option) => option.value === marginFilter)?.label ?? "", onRemove: () => setMarginFilter("all") }]
-      : []),
-  ]
+  // Категория и наценка видны в самих кнопках; чипом показываем только диапазон выручки.
+  const chips = revenueRange.from || revenueRange.to
+    ? [{ key: "revenue", label: `Выручка ${revenueRange.from || "0"}–${revenueRange.to || "∞"}`, onRemove: () => setRevenueRange({ from: "", to: "" }) }]
+    : []
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12">
@@ -224,29 +219,26 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
         <TableToolbar
           left={
             <>
-              <FilterMenu
-                groups={[
-                  {
-                    key: "category",
-                    label: "Категория",
-                    value: category,
-                    options: [{ value: "all", label: "Все категории" }, ...categories],
-                    onValueChange: (value) => {
-                      setCategory(value)
-                      setPage(1)
-                    },
-                  },
-                  {
-                    key: "margin",
-                    label: "Наценка",
-                    value: marginFilter,
-                    options: MARGIN_OPTIONS,
-                    onValueChange: (value) => {
-                      setMarginFilter(value)
-                      setPage(1)
-                    },
-                  },
-                ]}
+              <FilterCombobox
+                label="Категория"
+                value={category}
+                allLabel="Все категории"
+                options={categories}
+                onValueChange={(value) => {
+                  setCategory(value)
+                  setPage(1)
+                }}
+                searchPlaceholder="Найти категорию"
+              />
+              <FilterCombobox
+                label="Наценка"
+                value={marginFilter}
+                allLabel="Любая наценка"
+                options={MARGIN_OPTIONS.filter((option) => option.value !== "all")}
+                onValueChange={(value) => {
+                  setMarginFilter(value)
+                  setPage(1)
+                }}
               />
               <RangeFilter
                 label="Выручка от–до"

@@ -9,9 +9,10 @@ import { deliveryTypeLabel, getPaymentMethodLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import { formatCompactMoney, formatInstantShort, formatQty, formatSignedQty, plural } from "./format"
+import { formatInstantShort, formatQty, formatSignedQty, plural } from "./format"
 import { productCardHref } from "./links"
-import { ActiveFilters, FilterMenu, OpenInWindowLink, Pagination, TableToolbar } from "./table-chrome"
+import { FilterChips } from "@/components/screen-header"
+import { ActiveFilters, FilterCombobox, OpenInWindowLink, Pagination, TableToolbar } from "./table-chrome"
 
 const KIND_LABEL: Record<OperationKind, string> = {
   sale: "Чек",
@@ -19,14 +20,6 @@ const KIND_LABEL: Record<OperationKind, string> = {
   receipt: "Приход",
   writeoff: "Списание",
   inventory: "Инвентаризация",
-}
-
-const KIND_TITLE: Record<OperationKind, string> = {
-  sale: "Чеки кассы",
-  order: "Заказы",
-  receipt: "Приходы",
-  writeoff: "Списания",
-  inventory: "Инвентаризации",
 }
 
 const KIND_TONE: Record<OperationKind, "neutral" | "violet" | "success" | "orange" | "outline"> = {
@@ -37,14 +30,14 @@ const KIND_TONE: Record<OperationKind, "neutral" | "violet" | "success" | "orang
   inventory: "outline",
 }
 
-const TYPE_OPTIONS: Array<{ value: OperationTypeFilter; label: string }> = [
-  { value: "all", label: "Все операции" },
-  { value: "sales", label: "Продажи (чеки и заказы)" },
-  { value: "sale", label: "Чеки кассы" },
-  { value: "order", label: "Выданные заказы" },
-  { value: "receipt", label: "Приходы" },
-  { value: "writeoff", label: "Списания" },
-  { value: "inventory", label: "Инвентаризации" },
+// Чипы типов операций над таблицей: счётчик — по всей выборке с текущими товарными фильтрами.
+const TYPE_CHIPS: Array<{ value: OperationTypeFilter; label: string; kinds: OperationKind[] }> = [
+  { value: "all", label: "Все", kinds: ["sale", "order", "receipt", "writeoff", "inventory"] },
+  { value: "sale", label: "Чеки", kinds: ["sale"] },
+  { value: "order", label: "Заказы", kinds: ["order"] },
+  { value: "receipt", label: "Приходы", kinds: ["receipt"] },
+  { value: "writeoff", label: "Списания", kinds: ["writeoff"] },
+  { value: "inventory", label: "Инвентаризации", kinds: ["inventory"] },
 ]
 
 const DOCS_FORMS: [string, string, string] = ["операция", "операции", "операций"]
@@ -104,74 +97,62 @@ export function OperationsTab({ data }: { data: AnalyticsOperations }) {
   const grandAmount = totals.filter((entry) => listKinds.includes(entry.kind)).reduce((sum, entry) => sum + entry.amount, 0)
 
   const chips = [
-    ...(filters.category ? [{ key: "category", label: `Категория: ${filters.category}`, onRemove: () => push({ category: null }) }] : []),
     ...(filters.product ? [{ key: "product", label: `Товар: ${filters.productName}`, onRemove: () => push({ product: null }) }] : []),
-    ...(filters.reason ? [{ key: "reason", label: `Причина: ${filters.reason}`, onRemove: () => push({ reason: null }) }] : []),
-    ...(filters.supplier ? [{ key: "supplier", label: `Поставщик: ${filters.supplierName}`, onRemove: () => push({ supplier: null }) }] : []),
     ...(filters.query ? [{ key: "q", label: `Поиск: ${filters.query}`, onRemove: () => push({ q: null }) }] : []),
   ]
 
+  // Подпись итога по выбранному типу: сумма и штуки (у инвентаризации — знак разницы).
+  const summary = listKinds
+    .map((kind) => totalsByKind.get(kind))
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+  const summaryQty = summary.reduce((sum, entry) => sum + entry.qty, 0)
+  const totalLabel =
+    filters.type === "inventory"
+      ? `${grandAmount >= 0 ? "+" : "−"}${formatMoney(Math.abs(grandAmount))}`
+      : `${formatMoney(grandAmount)}${summaryQty > 0 ? ` · ${formatQty(summaryQty)} шт` : ""}`
+
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      {/* Итоги по видам — и быстрый фильтр по типу. */}
-      <div className="flex flex-wrap gap-2">
-        {(["sale", "order", "receipt", "writeoff", "inventory"] as OperationKind[]).map((kind) => {
-          const entry = totalsByKind.get(kind)
-          const active = filters.type === kind
-          return (
-            <button
-              key={kind}
-              type="button"
-              onClick={() => push({ type: active ? null : kind })}
-              className={cn(
-                "flex min-w-36 flex-1 flex-col gap-0.5 rounded-2xl bg-background p-3 text-left shadow-xs transition-shadow hover:shadow-md sm:flex-none sm:min-w-44",
-                active && "ring-2 ring-foreground/70"
-              )}
-              aria-pressed={active}
-            >
-              <span className="text-xs font-medium tracking-wide text-muted-foreground">{KIND_TITLE[kind]}</span>
-              <span className="text-lg font-semibold tabular-nums">
-                {entry ? entry.count : 0}
-                <span className="ml-1 text-xs font-normal text-muted-foreground">{plural(entry?.count ?? 0, DOCS_FORMS)}</span>
-              </span>
-              <span className="text-xs text-muted-foreground tabular-nums">
-                {entry ? (kind === "inventory" ? `${entry.amount >= 0 ? "+" : "−"}${formatCompactMoney(Math.abs(entry.amount))}` : formatCompactMoney(entry.amount)) : "—"}
-                {entry && kind !== "inventory" ? ` · ${formatQty(entry.qty)} шт` : ""}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-
       <section className="flex min-w-0 flex-col rounded-2xl bg-background shadow-xs">
+        {/* Тип операции — чипы со счётчиками, ниже — фильтры по товару и итог выборки. */}
+        <div className="px-3 pt-3">
+          <FilterChips
+            value={filters.type === "sales" ? "all" : filters.type}
+            options={TYPE_CHIPS.map((chip) => ({
+              value: chip.value,
+              label: chip.label,
+              count: chip.kinds.reduce((sum, kind) => sum + (totalsByKind.get(kind)?.count ?? 0), 0),
+            }))}
+            onValueChange={(value) => push({ type: value })}
+          />
+        </div>
         <TableToolbar
+          className="pt-1"
           left={
             <>
-              <FilterMenu
-                groups={[
-                  { key: "type", label: "Тип операции", value: filters.type, options: TYPE_OPTIONS, onValueChange: (value) => push({ type: value }) },
-                  {
-                    key: "category",
-                    label: "Категория товара",
-                    value: filters.category || "all",
-                    options: [{ value: "all", label: "Все категории" }, ...data.categories.map((name) => ({ value: name, label: name }))],
-                    onValueChange: (value) => push({ category: value }),
-                  },
-                  {
-                    key: "supplier",
-                    label: "Поставщик (приходы)",
-                    value: filters.supplier || "all",
-                    options: [{ value: "all", label: "Все поставщики" }, ...data.suppliers.map((row) => ({ value: String(row.id), label: row.name }))],
-                    onValueChange: (value) => push({ supplier: value }),
-                  },
-                  {
-                    key: "reason",
-                    label: "Причина списания",
-                    value: filters.reason || "all",
-                    options: [{ value: "all", label: "Все причины" }, ...data.reasons.map((name) => ({ value: name, label: name }))],
-                    onValueChange: (value) => push({ reason: value }),
-                  },
-                ]}
+              <FilterCombobox
+                label="Категория"
+                value={filters.category || "all"}
+                allLabel="Все категории"
+                options={data.categories.map((name) => ({ value: name, label: name }))}
+                onValueChange={(value) => push({ category: value })}
+                searchPlaceholder="Найти категорию"
+              />
+              <FilterCombobox
+                label="Поставщик"
+                value={filters.supplier || "all"}
+                allLabel="Все поставщики"
+                options={data.suppliers.map((row) => ({ value: String(row.id), label: row.name }))}
+                onValueChange={(value) => push({ supplier: value })}
+                searchPlaceholder="Найти поставщика"
+              />
+              <FilterCombobox
+                label="Причина списания"
+                value={filters.reason || "all"}
+                allLabel="Все причины"
+                options={data.reasons.map((name) => ({ value: name, label: name }))}
+                onValueChange={(value) => push({ reason: value })}
+                searchPlaceholder="Найти причину"
               />
               <ActiveFilters chips={chips} />
             </>
@@ -180,7 +161,7 @@ export function OperationsTab({ data }: { data: AnalyticsOperations }) {
             <>
               <span className="tabular-nums">
                 {total} {plural(total, DOCS_FORMS)}
-                {grandAmount !== 0 && filters.type !== "all" ? ` · ${formatMoney(grandAmount)}` : ""}
+                {total > 0 ? ` · ${totalLabel}` : ""}
               </span>
               <OpenInWindowLink />
             </>
@@ -201,9 +182,9 @@ export function OperationsTab({ data }: { data: AnalyticsOperations }) {
                 <tr className="text-[11px] font-medium text-muted-foreground uppercase">
                   <th className="px-4 py-2 text-left font-medium whitespace-nowrap">Дата</th>
                   <th className="px-3 py-2 text-left font-medium whitespace-nowrap">Операция</th>
-                  <th className="w-full min-w-40 px-3 py-2 text-left font-medium">Пояснение</th>
+                  <th className="w-full min-w-32 px-3 py-2 text-left font-medium">Пояснение</th>
                   <th className="hidden px-3 py-2 text-right font-medium whitespace-nowrap @3xl/ops:table-cell">Позиций</th>
-                  <th className="hidden px-3 py-2 text-right font-medium whitespace-nowrap @2xl/ops:table-cell">Кол-во</th>
+                  <th className="hidden px-3 py-2 text-right font-medium whitespace-nowrap @3xl/ops:table-cell">Кол-во</th>
                   <th className="px-3 py-2 text-right font-medium whitespace-nowrap">Сумма</th>
                   <th className="hidden px-3 py-2 text-left font-medium whitespace-nowrap @4xl/ops:table-cell">Кто</th>
                   <th className="w-0 px-2 py-2" />
@@ -276,12 +257,13 @@ function OperationRows({
           </span>
         </td>
         <td className="px-3 py-2.5 whitespace-nowrap">
-          <span className="flex items-center gap-2">
+          {/* В узкой таблице номер уходит под бейдж, чтобы не раздвигать колонку. */}
+          <span className="flex flex-col items-start gap-0.5 @3xl/ops:flex-row @3xl/ops:items-center @3xl/ops:gap-2">
             <Badge variant={KIND_TONE[row.kind]}>{KIND_LABEL[row.kind]}</Badge>
             <span className="font-medium">{row.kind === "sale" ? `#${row.id}` : row.number}</span>
           </span>
         </td>
-        <td className="w-full max-w-0 min-w-40 px-3 py-2.5">
+        <td className="w-full max-w-0 min-w-32 px-3 py-2.5">
           <div className="min-w-0">
             <div className="truncate">
               {title}
@@ -291,7 +273,7 @@ function OperationRows({
           </div>
         </td>
         <td className="hidden px-3 py-2.5 text-right tabular-nums text-muted-foreground @3xl/ops:table-cell">{row.itemsCount}</td>
-        <td className="hidden px-3 py-2.5 text-right tabular-nums @2xl/ops:table-cell">{row.kind === "inventory" ? formatSignedQty(row.qty) : formatQty(row.qty)}</td>
+        <td className="hidden px-3 py-2.5 text-right tabular-nums @3xl/ops:table-cell">{row.kind === "inventory" ? formatSignedQty(row.qty) : formatQty(row.qty)}</td>
         <td className={cn("px-3 py-2.5 text-right font-medium tabular-nums whitespace-nowrap", amountClass)}>
           {row.kind === "inventory" ? `${row.amount >= 0 ? "+" : "−"}${formatMoney(Math.abs(row.amount))}` : formatMoney(row.amount)}
         </td>

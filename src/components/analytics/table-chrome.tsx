@@ -3,23 +3,15 @@
 import type React from "react"
 import { useMemo, useState } from "react"
 import { usePathname, useSearchParams } from "next/navigation"
-import { ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon, SlidersHorizontalIcon, XIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon, XIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 
-// Общая «обвязка» таблиц аналитики: шапка со счётчиком и действиями, кнопка фильтров с
-// выпадающим списком, чипы активных фильтров, постраничная навигация и ссылка «в отдельном окне».
+// Общая «обвязка» таблиц аналитики: шапка со счётчиком и действиями, кнопки-фильтры с выпадающим
+// списком (с поиском для длинных), чипы активных фильтров, постраничная навигация и ссылка
+// «в отдельном окне».
 
 export const PAGE_SIZE = 50
 
@@ -68,51 +60,102 @@ export function Pagination({ page, pageCount, total, pageSize, onPageChange, cla
 
 export type FilterOption = { value: string; label: string; count?: number }
 
-export type FilterGroup = {
-  key: string
+type FilterComboboxProps = {
   label: string
   value: string
   allValue?: string
+  allLabel?: string
   options: FilterOption[]
   onValueChange: (value: string) => void
+  // Подпись поля поиска; поиск показывается, когда вариантов больше семи.
+  searchPlaceholder?: string
+  className?: string
 }
 
-// Кнопка «Фильтры» с выпадающими группами (категория, поставщик, причина…). Активных — счётчик.
-export function FilterMenu({ groups, className }: { groups: FilterGroup[]; className?: string }) {
-  const active = groups.filter((group) => group.value !== (group.allValue ?? "all") && group.value !== "")
+// Один фильтр — одна кнопка: «Категория» → «Категория: Декор» с точкой. Список с поиском для
+// длинных справочников (поставщики), выбор закрывает список, «Все …» сбрасывает.
+export function FilterCombobox({
+  label,
+  value,
+  allValue = "all",
+  allLabel,
+  options,
+  onValueChange,
+  searchPlaceholder = "Найти…",
+  className,
+}: FilterComboboxProps) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState("")
+  const active = value !== allValue && value !== ""
+  const current = options.find((option) => option.value === value)
+  const searchable = options.length > 7
+  const results = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    return needle ? options.filter((option) => option.label.toLowerCase().includes(needle)) : options
+  }, [options, search])
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) setSearch("")
+      }}
+    >
+      <PopoverTrigger
         render={
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className={cn("h-8 gap-1.5 text-muted-foreground hover:text-foreground pointer-coarse:h-9", active.length > 0 && "bg-muted text-foreground", className)}
+            className={cn("h-8 max-w-64 gap-1.5 text-muted-foreground hover:text-foreground pointer-coarse:h-9", active && "bg-muted text-foreground", className)}
+            aria-label={active && current ? `${label}: ${current.label}` : label}
           />
         }
       >
-        <SlidersHorizontalIcon className="size-4" aria-hidden />
-        Фильтры
-        {active.length > 0 ? <span className="text-xs tabular-nums">{active.length}</span> : null}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-[70vh] w-64 overflow-y-auto">
-        {groups.map((group, index) => (
-          <DropdownMenuGroup key={group.key}>
-            {index > 0 ? <DropdownMenuSeparator /> : null}
-            <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
-            <DropdownMenuRadioGroup value={group.value} onValueChange={(next) => group.onValueChange(next)}>
-              {group.options.map((option) => (
-                <DropdownMenuRadioItem key={option.value} value={option.value}>
-                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                  {option.count !== undefined ? <span className="ml-2 text-xs text-muted-foreground tabular-nums">{option.count}</span> : null}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuGroup>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+        <span className="truncate">{active && current ? `${label}: ${current.label}` : label}</span>
+        <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" aria-hidden />
+      </PopoverTrigger>
+      <PopoverContent align="start" sideOffset={6} className="w-72 p-0">
+        <Command shouldFilter={false} loop>
+          {searchable ? <CommandInput value={search} onValueChange={setSearch} placeholder={searchPlaceholder} autoFocus /> : null}
+          <CommandList className="max-h-72 overflow-y-auto">
+            <CommandGroup>
+              <CommandItem
+                value={`__all__${label}`}
+                onSelect={() => {
+                  onValueChange(allValue)
+                  setOpen(false)
+                }}
+              >
+                <CheckIcon className={cn("size-4 shrink-0", active ? "opacity-0" : "opacity-100")} aria-hidden />
+                <span className="font-medium">{allLabel ?? `Все ${label.toLowerCase()}`}</span>
+              </CommandItem>
+              {results.length ? (
+                results.map((option) => (
+                  <CommandItem
+                    key={option.value}
+                    value={`${option.value}::${option.label}`}
+                    onSelect={() => {
+                      onValueChange(option.value)
+                      setOpen(false)
+                    }}
+                  >
+                    <CheckIcon className={cn("size-4 shrink-0", option.value === value ? "opacity-100" : "opacity-0")} aria-hidden />
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    {option.count !== undefined ? <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{option.count}</span> : null}
+                  </CommandItem>
+                ))
+              ) : (
+                <CommandItem value="__empty__" disabled>
+                  Ничего не найдено
+                </CommandItem>
+              )}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   )
 }
 
