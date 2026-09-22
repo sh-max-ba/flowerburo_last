@@ -33,16 +33,21 @@ type PaginationProps = {
   className?: string
 }
 
-// «1–50 из 320 ‹ ›» — прячется, когда всё помещается на одной странице.
-export function Pagination({ page, pageCount, total, pageSize, onPageChange, className }: PaginationProps) {
-  if (total <= pageSize) return null
+// «1–50 из 320 ‹ ›» — прячется, когда всё помещается на одной странице (если нет summary —
+// итога выборки, который показывается всегда).
+export function Pagination({ page, pageCount, total, pageSize, onPageChange, summary, className }: PaginationProps & { summary?: React.ReactNode }) {
+  const paged = total > pageSize
+  if (!paged && !summary) return null
   const from = (page - 1) * pageSize + 1
   const to = Math.min(total, page * pageSize)
   return (
-    <div className={cn("flex items-center justify-between gap-3 border-t border-border/40 px-4 py-2 text-xs text-muted-foreground", className)}>
+    <div className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border/40 px-4 py-2 text-xs text-muted-foreground", className)}>
       <span className="tabular-nums">
-        {from}–{to} из {total}
+        {summary}
+        {summary && paged ? " · " : ""}
+        {paged ? `${from}–${to} из ${total}` : ""}
       </span>
+      {paged ? (
       <div className="flex items-center gap-1">
         <Button type="button" variant="ghost" size="icon-sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)} aria-label="Предыдущая страница">
           <ChevronLeftIcon />
@@ -54,6 +59,7 @@ export function Pagination({ page, pageCount, total, pageSize, onPageChange, cla
           <ChevronRightIcon />
         </Button>
       </div>
+      ) : null}
     </div>
   )
 }
@@ -106,14 +112,27 @@ export function FilterCombobox({
         render={
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="sm"
-            className={cn("h-8 max-w-64 gap-1.5 text-muted-foreground hover:text-foreground pointer-coarse:h-9", active && "bg-muted text-foreground", className)}
+            className={cn(
+              "h-9 max-w-64 gap-1.5 rounded-lg px-3 font-normal text-muted-foreground hover:text-foreground",
+              active && "bg-muted font-medium text-foreground",
+              className
+            )}
             aria-label={active && current ? `${label}: ${current.label}` : label}
           />
         }
       >
-        <span className="truncate">{active && current ? `${label}: ${current.label}` : label}</span>
+        <span className="truncate">
+          {active && current ? (
+            <>
+              <span className="text-muted-foreground">{label}: </span>
+              {current.label}
+            </>
+          ) : (
+            label
+          )}
+        </span>
         <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" aria-hidden />
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6} className="w-72 p-0">
@@ -183,7 +202,7 @@ export function ActiveFilters({ chips }: { chips: ActiveFilterChip[] }) {
 }
 
 // Открыть текущую таблицу в отдельном окне — та же страница без меню и вкладок (?full=1).
-export function OpenInWindowLink({ className, label = "В отдельном окне" }: { className?: string; label?: string }) {
+export function OpenInWindowLink({ className, label = "В отдельном окне", iconOnly = false }: { className?: string; label?: string; iconOnly?: boolean }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const params = new URLSearchParams(searchParams.toString())
@@ -201,17 +220,18 @@ export function OpenInWindowLink({ className, label = "В отдельном о�
       aria-label={label}
     >
       <ExternalLinkIcon className="size-3.5" aria-hidden />
-      <span className="hidden sm:inline">{label}</span>
+      {iconOnly ? null : <span className="hidden sm:inline">{label}</span>}
     </a>
   )
 }
 
 // Шапка блока-таблицы: слева фильтры/чипы, справа счётчик и действия.
+// Левая часть переносится по строкам, правая всегда остаётся в первой строке у края.
 export function TableToolbar({ left, right, className }: { left?: React.ReactNode; right?: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("flex flex-wrap items-center justify-between gap-2 px-3 pt-3 pb-2", className)}>
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5">{left}</div>
-      <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">{right}</div>
+    <div className={cn("flex items-start justify-between gap-2 px-3 pt-3 pb-2", className)}>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">{left}</div>
+      {right ? <div className="flex h-9 shrink-0 items-center gap-1 text-xs text-muted-foreground">{right}</div> : null}
     </div>
   )
 }
@@ -237,9 +257,9 @@ export function RangeFilter({
         render={
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="sm"
-            className={cn("h-8 gap-1.5 text-muted-foreground hover:text-foreground pointer-coarse:h-9", active && "bg-muted text-foreground")}
+            className={cn("h-9 gap-1.5 rounded-lg px-3 font-normal text-muted-foreground hover:text-foreground", active && "bg-muted font-medium text-foreground")}
           />
         }
       >

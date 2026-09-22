@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { formatInstantShort, formatQty, formatSignedQty, plural } from "./format"
 import { productCardHref } from "./links"
-import { FilterChips } from "@/components/screen-header"
+import { SegmentedTabs } from "@/components/ui/segmented-tabs"
 import { ActiveFilters, FilterCombobox, OpenInWindowLink, Pagination, TableToolbar } from "./table-chrome"
 
 const KIND_LABEL: Record<OperationKind, string> = {
@@ -114,22 +114,22 @@ export function OperationsTab({ data }: { data: AnalyticsOperations }) {
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <section className="flex min-w-0 flex-col rounded-2xl bg-background shadow-xs">
-        {/* Тип операции — чипы со счётчиками, ниже — фильтры по товару и итог выборки. */}
-        <div className="px-3 pt-3">
-          <FilterChips
-            value={filters.type === "sales" ? "all" : filters.type}
-            options={TYPE_CHIPS.map((chip) => ({
-              value: chip.value,
-              label: chip.label,
-              count: chip.kinds.reduce((sum, kind) => sum + (totalsByKind.get(kind)?.count ?? 0), 0),
-            }))}
-            onValueChange={(value) => push({ type: value })}
-          />
-        </div>
+        {/* Одна строка: тип операции (сегменты со счётчиками) · фильтры по товару · окно. */}
         <TableToolbar
-          className="pt-1"
           left={
             <>
+              <SegmentedTabs
+                size="sm"
+                aria-label="Тип операции"
+                value={filters.type === "sales" ? "all" : filters.type}
+                onValueChange={(value) => push({ type: value })}
+                items={TYPE_CHIPS.map((chip) => ({
+                  value: chip.value,
+                  label: chip.label,
+                  count: chip.kinds.reduce((sum, kind) => sum + (totalsByKind.get(kind)?.count ?? 0), 0),
+                }))}
+              />
+              <span className="mx-1 hidden h-5 w-px bg-border/60 sm:inline-block" aria-hidden />
               <FilterCombobox
                 label="Категория"
                 value={filters.category || "all"}
@@ -147,9 +147,9 @@ export function OperationsTab({ data }: { data: AnalyticsOperations }) {
                 searchPlaceholder="Найти поставщика"
               />
               <FilterCombobox
-                label="Причина списания"
+                label="Причина"
                 value={filters.reason || "all"}
-                allLabel="Все причины"
+                allLabel="Все причины списания"
                 options={data.reasons.map((name) => ({ value: name, label: name }))}
                 onValueChange={(value) => push({ reason: value })}
                 searchPlaceholder="Найти причину"
@@ -157,17 +157,8 @@ export function OperationsTab({ data }: { data: AnalyticsOperations }) {
               <ActiveFilters chips={chips} />
             </>
           }
-          right={
-            <>
-              <span className="tabular-nums">
-                {total} {plural(total, DOCS_FORMS)}
-                {total > 0 ? ` · ${totalLabel}` : ""}
-              </span>
-              <OpenInWindowLink />
-            </>
-          }
+          right={<OpenInWindowLink iconOnly />}
         />
-
         {rows.length === 0 ? (
           <Empty className="min-h-48">
             <EmptyHeader>
@@ -212,7 +203,14 @@ export function OperationsTab({ data }: { data: AnalyticsOperations }) {
             </table>
           </div>
         )}
-        <Pagination page={page} pageCount={pageCount} total={total} pageSize={pageSize} onPageChange={(next) => push({ page: String(next) })} />
+        <Pagination
+          page={page}
+          pageCount={pageCount}
+          total={total}
+          pageSize={pageSize}
+          onPageChange={(next) => push({ page: String(next) })}
+          summary={`${total} ${plural(total, DOCS_FORMS)}${total > 0 ? ` · ${totalLabel}` : ""}`}
+        />
       </section>
 
       <p className="text-xs text-muted-foreground">
