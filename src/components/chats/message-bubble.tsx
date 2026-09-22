@@ -107,7 +107,7 @@ export function MessageBubble({
   const bubble = (
     <div
       className={cn(
-        "group/bubble relative max-w-[min(85%,36rem)] rounded-lg px-3 py-2 text-sm shadow-xs",
+        "group/bubble relative w-fit max-w-full rounded-lg px-3 py-2 text-sm shadow-xs",
         outbound ? "rounded-br-sm bg-zinc-900 text-zinc-50" : "rounded-bl-sm bg-background text-foreground",
         message.status === "error" && "ring-1 ring-destructive/40"
       )}
@@ -162,12 +162,12 @@ export function MessageBubble({
       ) : null}
       <div
         className={cn(
-          "mt-1 flex items-center justify-end gap-1 text-[10px] leading-none",
+          "mt-1 flex items-center justify-end gap-1 text-[10px] leading-none whitespace-nowrap",
           outbound ? "text-zinc-400" : "text-muted-foreground"
         )}
       >
         {message.isEdited ? <span className="italic">изменено ·</span> : null}
-        {outbound && message.authorName ? <span className="truncate">{message.authorName} ·</span> : null}
+        {outbound && message.authorName ? <span className="max-w-40 truncate">{message.authorName} ·</span> : null}
         <span className="tabular-nums">{formatTime(message.dateTime)}</span>
         {outbound ? <StatusTicks status={message.status} errorText={message.errorText} /> : null}
       </div>
@@ -219,15 +219,17 @@ export function MessageBubble({
   return (
     <div className={cn("group/row flex items-end gap-1", outbound ? "justify-end" : "justify-start")}>
       {hoverActions}
+      {/* Ширина пузыря ограничена от ленты (85% / 36rem), а сам он — по содержимому: иначе
+          обёртка ужималась до минимума и «тест» переносился по буквам. */}
       {canAct ? (
         <ContextMenu>
-          <ContextMenuTrigger className="flex max-w-full">{bubble}</ContextMenuTrigger>
+          <ContextMenuTrigger className="flex min-w-0 max-w-[min(85%,36rem)]">{bubble}</ContextMenuTrigger>
           <ContextMenuContent className="w-56">
             <MenuKindContext.Provider value="context">{items}</MenuKindContext.Provider>
           </ContextMenuContent>
         </ContextMenu>
       ) : (
-        bubble
+        <div className="flex min-w-0 max-w-[min(85%,36rem)]">{bubble}</div>
       )}
     </div>
   )
