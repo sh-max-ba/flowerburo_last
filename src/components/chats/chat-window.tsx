@@ -782,11 +782,10 @@ export function ChatWindow({
         </div>
       </div>
 
-      {/* Лента: колонка читаемой ширины по центру, чтобы на широком экране входящие и наши
-          сообщения не разъезжались по краям. */}
-      <div ref={scrollRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-zinc-100/80 px-3 py-4 sm:px-6">
+      {/* Лента на всю ширину: входящие у левого края, наши — у правого. */}
+      <div ref={scrollRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-zinc-100/80 px-3 py-4 sm:px-5">
         {view.status === "loading" ? (
-          <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
+          <div className="flex flex-col gap-3">
             <Skeleton className="h-10 w-2/3 rounded-2xl bg-zinc-200/70" />
             <Skeleton className="ml-auto h-10 w-1/2 rounded-2xl bg-zinc-200/70" />
             <Skeleton className="h-16 w-3/4 rounded-2xl bg-zinc-200/70" />
@@ -805,7 +804,7 @@ export function ChatWindow({
             Сообщений пока нет. Напишите клиенту первым — сообщение появится здесь и в мессенджере.
           </div>
         ) : (
-          <div className="mx-auto flex w-full max-w-4xl flex-col">
+          <div className="flex flex-col">
             {items.map((item, index) => {
               const previous = items[index - 1]
               const next = items[index + 1]
@@ -827,9 +826,9 @@ export function ChatWindow({
         )}
       </div>
 
-      {/* Композер — в той же колонке, что и лента */}
+      {/* Композер */}
       <div className="flex shrink-0 flex-col bg-background px-3 py-2.5 sm:px-4">
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-2">
+        <div className="flex flex-col gap-2">
           {replyTo ? (
             <div className="flex items-start gap-2 rounded-xl border-l-2 border-brand bg-zinc-100 px-3 py-2 text-xs">
               <div className="min-w-0 flex-1">

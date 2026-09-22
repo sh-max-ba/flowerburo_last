@@ -29,7 +29,7 @@ import { wazzupMessageTypeLabel } from "@/lib/labels"
 import { cn } from "@/lib/utils"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { formatTime } from "./chat-shared"
+import { formatTime, messagePreview } from "./chat-shared"
 
 // Пузырь сообщения единого окна чатов: входящие слева (белые), наши справа (голубые). Цитата,
 // пометки «переслано»/«изменено»/«удалено», вложения (фото → лайтбокс, видео, документ, голосовое
@@ -160,7 +160,8 @@ export function MessageBubble({
             tight && "mx-1.5 mt-1"
           )}
         >
-          <span className="line-clamp-2">{message.quotedText}</span>
+          {/* Цитата вложения приходит как «[image]» — показываем подпись типа, как в списке диалогов. */}
+          <span className="line-clamp-2">{messagePreview(message.quotedText, "") || message.quotedText}</span>
         </div>
       ) : null}
       {message.isDeleted ? (
