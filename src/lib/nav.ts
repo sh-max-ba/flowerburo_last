@@ -3,6 +3,7 @@ import type { UserRole } from "@/lib/db"
 export type NavSectionId =
   | "dashboard"
   | "analytics"
+  | "chats"
   | "deals"
   | "clients"
   | "bouquets"
@@ -50,7 +51,10 @@ export type NavGroup = {
 export const NAV: NavItem[] = [
   { id: "dashboard", label: "Дашборд", href: "/dashboard", iconKey: "dashboard", roles: ["owner"] },
   { id: "analytics", label: "Аналитика", href: "/analytics", iconKey: "analytics", roles: ["owner"] },
-  { id: "deals", label: "Сделки", href: "/deals", iconKey: "deals", roles: ["owner", "manager"] },
+  { id: "chats", label: "Чаты", href: "/chats", iconKey: "chats", roles: ["owner", "manager"] },
+  // Канбан сделок выведен из сайдбара: рабочий список менеджера — «Чаты» (заказ создаётся из
+  // диалога). Маршрут /deals остаётся доступным по прямой ссылке (старые ссылки из заказов).
+  { id: "deals", label: "Сделки", href: "/deals", iconKey: "deals", roles: ["owner", "manager"], sidebar: false },
   { id: "clients", label: "Клиенты", href: "/clients", iconKey: "clients", roles: ["owner", "manager"] },
   { id: "bouquets", label: "Букеты", href: "/bouquets", iconKey: "bouquets", roles: ["owner", "manager"] },
   { id: "sales", label: "Касса", href: "/cash", iconKey: "cash", roles: ["owner", "manager"] },
@@ -73,7 +77,7 @@ export const NAV: NavItem[] = [
 
 export const NAV_GROUPS: NavGroup[] = [
   { id: "overview", label: "Обзор", ids: ["dashboard", "analytics"] },
-  { id: "crm", label: "CRM", ids: ["deals", "clients", "bouquets"] },
+  { id: "crm", label: "CRM", ids: ["chats", "deals", "clients", "bouquets"] },
   { id: "work", label: "Работа", ids: ["sales", "orders", "order-drafts", "ready-orders", "history-cash"] },
   { id: "stock", label: "Склад", ids: ["stock", "stock-report", "stock-acts", "stock-lots", "stock-inventory", "suppliers", "history"] },
   { id: "admin", label: "Администрирование", ids: ["shifts", "settings", "users"] },

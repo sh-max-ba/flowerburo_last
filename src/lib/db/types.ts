@@ -122,6 +122,15 @@ export type WazzupMessage = {
   quotedText: string
   // Кэш расшифровки голосового (STT). Пусто, пока не запрошена расшифровка.
   transcript: string
+  // Клиент отредактировал/удалил сообщение в мессенджере (вебхук isEdited/isDeleted).
+  isEdited: boolean
+  isDeleted: boolean
+  // Наше исходящее, пересланное из другого чата.
+  forwarded: boolean
+  // Причина ошибки доставки (status = error): код и описание из вебхука.
+  errorText: string
+  // Имя файла вложения (для наших отправок; у входящих выводится из ссылки).
+  fileName: string
   dateTime: string
   createdAt: string
 }

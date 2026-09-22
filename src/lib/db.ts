@@ -154,7 +154,27 @@ export {
   getWazzupMessageMedia,
   getWazzupTranscriptionSource,
   saveWazzupMessageTranscript,
+  getWazzupMessageById,
 } from "./db/queries/wazzup-messages"
+export {
+  listChats,
+  getChatCounts,
+  countUnansweredChats,
+  getChatsRevision,
+  getChatById,
+  getChatByIdentity,
+  getChatAvatarUri,
+  listChatsForPicker,
+  touchChatOnMessage,
+  assignChat,
+  markChatAnswered,
+  setChatChannel,
+  linkChatCustomer,
+  renameChatsOfCustomer,
+  findOrCreateWhatsappChat,
+  isGroupChatType,
+} from "./db/queries/chats"
+export type { ChatTab, ChatSummary, ChatCounts } from "./db/queries/chats"
 export type {
   WazzupChatIdentity,
   OutboundWazzupMessageInput,

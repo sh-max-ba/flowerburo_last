@@ -20,6 +20,7 @@ export function NotificationSounds() {
   // null — ещё не инициализировано (первый опрос только запоминает базовые значения).
   const lastOrderSeq = useRef<number | null>(null)
   const lastDealSeq = useRef<number | null>(null)
+  const lastMessageSeq = useRef<number | null>(null)
 
   useEffect(() => {
     enabledRef.current = readSoundPref()
@@ -95,25 +96,29 @@ export function NotificationSounds() {
           // 401 на странице логина и т.п. — просто молчим.
           return
         }
-        const data = (await response.json()) as { orderSeq?: number; dealSeq?: number }
+        const data = (await response.json()) as { orderSeq?: number; dealSeq?: number; messageSeq?: number }
         const orderSeq = Number(data.orderSeq ?? 0)
         const dealSeq = Number(data.dealSeq ?? 0)
+        const messageSeq = Number(data.messageSeq ?? 0)
 
         if (lastOrderSeq.current === null) {
           // Первый успешный опрос — только инициализация, без звука.
           lastOrderSeq.current = orderSeq
           lastDealSeq.current = dealSeq
+          lastMessageSeq.current = messageSeq
           return
         }
 
         if (orderSeq > lastOrderSeq.current) {
           play(orderAudioRef.current)
         }
-        if (dealSeq > (lastDealSeq.current ?? 0)) {
+        // Новая сделка и новое входящее сообщение — один звук (сделка = первое сообщение клиента).
+        if (dealSeq > (lastDealSeq.current ?? 0) || messageSeq > (lastMessageSeq.current ?? 0)) {
           play(dealAudioRef.current)
         }
         lastOrderSeq.current = orderSeq
         lastDealSeq.current = dealSeq
+        lastMessageSeq.current = messageSeq
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
           return

@@ -29,6 +29,8 @@ export type OutboundWazzupMessageInput = {
   authorName?: string | null
   quotedMessageId?: string | null
   quotedText?: string | null
+  forwarded?: boolean
+  fileName?: string | null
   dateTime: string
 }
 
@@ -51,13 +53,15 @@ export function upsertOutboundWazzupMessage(
       `INSERT INTO wazzup_messages (
         message_id, crm_message_id, deal_id, customer_id, channel_id, chat_type, chat_id,
         direction, message_type, text, content_uri, status, is_echo, author_name,
-        quoted_message_id, quoted_text, date_time, raw_payload, created_at, updated_at
+        quoted_message_id, quoted_text, forwarded, file_name, date_time, raw_payload, created_at, updated_at
       ) VALUES (
         @messageId, @crmMessageId, @dealId, @customerId, @channelId, @chatType, @chatId,
         'outbound', @messageType, @text, @contentUri, 'sent', 1, @authorName,
-        @quotedMessageId, @quotedText, @dateTime, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        @quotedMessageId, @quotedText, @forwarded, @fileName, @dateTime, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )
       ON CONFLICT(message_id) DO UPDATE SET
+        forwarded = MAX(wazzup_messages.forwarded, excluded.forwarded),
+        file_name = COALESCE(NULLIF(wazzup_messages.file_name, ''), excluded.file_name),
         crm_message_id = COALESCE(NULLIF(wazzup_messages.crm_message_id, ''), excluded.crm_message_id),
         deal_id = COALESCE(wazzup_messages.deal_id, excluded.deal_id),
         customer_id = COALESCE(wazzup_messages.customer_id, excluded.customer_id),
@@ -83,6 +87,8 @@ export function upsertOutboundWazzupMessage(
       authorName: clean(input.authorName ?? "") || null,
       quotedMessageId: clean(input.quotedMessageId ?? "") || null,
       quotedText: clean(input.quotedText ?? "") || null,
+      forwarded: input.forwarded ? 1 : 0,
+      fileName: clean(input.fileName ?? "") || null,
       dateTime,
     })
 
@@ -196,4 +202,11 @@ export function saveWazzupMessageTranscript(id: number, transcript: string): voi
       `UPDATE wazzup_messages SET transcript = @transcript, updated_at = CURRENT_TIMESTAMP WHERE id = @id`
     )
     .run({ id: Math.trunc(id), transcript: clean(transcript) || null })
+}
+
+export function getWazzupMessageById(id: number): WazzupMessage | null {
+  const row = db().prepare("SELECT * FROM wazzup_messages WHERE id = ?").get(Math.trunc(id)) as
+    | Record<string, unknown>
+    | undefined
+  return row ? mapWazzupMessage(row) : null
 }

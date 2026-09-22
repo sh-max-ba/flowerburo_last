@@ -1,0 +1,60 @@
+import fs from "node:fs/promises"
+import path from "node:path"
+import { chatUploadContentTypes } from "@/lib/chat-uploads"
+
+export const runtime = "nodejs"
+
+const uploadsDir = path.join(process.cwd(), "public", "uploads", "chat")
+
+// Раздача вложений чата, загруженных после сборки (Next не отдаёт из public/ новые файлы в проде).
+// Публично без сессии: по этим ссылкам файлы скачивает Wazzup; имена — случайные и непредсказуемые.
+export async function GET(_request: Request, { params }: { params: Promise<{ filename: string }> }) {
+  const { filename: rawFilename } = await params
+  const filename = String(rawFilename ?? "")
+  const contentType = getContentType(filename)
+  if (!contentType || !isSafeFilename(filename)) {
+    return new Response("Not found", { status: 404 })
+  }
+
+  try {
+    const file = await fs.readFile(path.join(uploadsDir, filename))
+    return new Response(file, {
+      headers: {
+        "Content-Type": contentType,
+        "Content-Length": String(file.byteLength),
+        "Cache-Control": "private, max-age=3600",
+      },
+    })
+  } catch {
+    return new Response("Not found", { status: 404 })
+  }
+}
+
+export async function HEAD(_request: Request, { params }: { params: Promise<{ filename: string }> }) {
+  const { filename: rawFilename } = await params
+  const filename = String(rawFilename ?? "")
+  const contentType = getContentType(filename)
+  if (!contentType || !isSafeFilename(filename)) {
+    return new Response(null, { status: 404 })
+  }
+  try {
+    const stat = await fs.stat(path.join(uploadsDir, filename))
+    if (!stat.isFile()) {
+      return new Response(null, { status: 404 })
+    }
+    return new Response(null, {
+      headers: { "Content-Type": contentType, "Content-Length": String(stat.size), "Cache-Control": "private, max-age=3600" },
+    })
+  } catch {
+    return new Response(null, { status: 404 })
+  }
+}
+
+function isSafeFilename(filename: string) {
+  return /^[a-z0-9._-]+$/i.test(filename) && !filename.includes("..")
+}
+
+function getContentType(filename: string) {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? ""
+  return chatUploadContentTypes[ext] ?? null
+}

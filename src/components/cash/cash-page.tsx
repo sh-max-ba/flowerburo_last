@@ -1125,7 +1125,9 @@ function DateChip({
   )
 }
 
-function OrderDialog({
+// Окно «Новый заказ» переиспользуется из чатов (initialCustomer — клиент диалога, initialSource —
+// канал: whatsapp/instagram/…); там оно живёт со своей корзиной и своим onSubmit.
+export function OrderDialog({
   open,
   onOpenChange,
   products,
@@ -1135,6 +1137,9 @@ function OrderDialog({
   items,
   setItems,
   onSubmit,
+  initialCustomer,
+  initialSource,
+  description,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -1145,13 +1150,18 @@ function OrderDialog({
   items: ProductLineItem[]
   setItems: React.Dispatch<React.SetStateAction<ProductLineItem[]>>
   onSubmit: (event: React.FormEvent<HTMLFormElement>, after?: () => void) => void
+  initialCustomer?: CustomerOption | null
+  initialSource?: string
+  description?: string
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl lg:max-w-6xl">
         <DialogHeader className="shrink-0 border-b border-border/40 px-5 py-4">
           <DialogTitle>Новый заказ</DialogTitle>
-          <DialogDescription>Оформление заказа с самовывозом или доставкой. Состав наследуется из корзины продажи.</DialogDescription>
+          <DialogDescription>
+            {description ?? "Оформление заказа с самовывозом или доставкой. Состав наследуется из корзины продажи."}
+          </DialogDescription>
         </DialogHeader>
         <NewOrderForm
           products={products}
@@ -1161,6 +1171,8 @@ function OrderDialog({
           items={items}
           setItems={setItems}
           onSubmit={onSubmit}
+          initialCustomer={initialCustomer}
+          initialSource={initialSource}
         />
       </DialogContent>
     </Dialog>
@@ -1175,6 +1187,8 @@ function NewOrderForm({
   items,
   setItems,
   onSubmit,
+  initialCustomer,
+  initialSource,
 }: {
   products: Product[]
   bouquets: BouquetTemplate[]
@@ -1183,19 +1197,26 @@ function NewOrderForm({
   items: ProductLineItem[]
   setItems: React.Dispatch<React.SetStateAction<ProductLineItem[]>>
   onSubmit: (event: React.FormEvent<HTMLFormElement>, after?: () => void) => void
+  initialCustomer?: CustomerOption | null
+  initialSource?: string
 }) {
   const [deliveryType, setDeliveryType] = useState("pickup")
   const [deliveryPrice, setDeliveryPrice] = useState(0)
   const [courierPayout, setCourierPayout] = useState(0)
   const [prepaid, setPrepaid] = useState(0)
-  const [customer, setCustomer] = useState("")
-  const [phone, setPhone] = useState(PHONE_PREFIX)
+  const [customer, setCustomer] = useState(initialCustomer?.name ?? "")
+  const [phone, setPhone] = useState(initialCustomer?.phone || PHONE_PREFIX)
   const [recipientPhone, setRecipientPhone] = useState(PHONE_PREFIX)
-  const [createdCustomers, setCreatedCustomers] = useState<CustomerOption[]>([])
+  // Клиент из чата может отсутствовать в общем списке (список грузится один раз) — добавляем.
+  const [createdCustomers, setCreatedCustomers] = useState<CustomerOption[]>(initialCustomer ? [initialCustomer] : [])
   const [customerDialogOpen, setCustomerDialogOpen] = useState(false)
-  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null)
-  const [orderDiscountType, setOrderDiscountType] = useState<DiscountType>("none")
-  const [orderDiscountValue, setOrderDiscountValue] = useState(0)
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(initialCustomer?.id ?? null)
+  const [orderDiscountType, setOrderDiscountType] = useState<DiscountType>(
+    initialCustomer && initialCustomer.defaultDiscountPercent > 0 ? "percent" : "none"
+  )
+  const [orderDiscountValue, setOrderDiscountValue] = useState(
+    initialCustomer && initialCustomer.defaultDiscountPercent > 0 ? initialCustomer.defaultDiscountPercent : 0
+  )
   const [orderDiscountTouched, setOrderDiscountTouched] = useState(false)
   const [orderDiscountOpen, setOrderDiscountOpen] = useState(false)
   const [dueDate, setDueDate] = useState("")
@@ -1369,6 +1390,7 @@ function NewOrderForm({
           <input type="hidden" name="deliveryType" value={deliveryType} />
           <input type="hidden" name="paymentMethod" value={paymentMethod} />
           <input type="hidden" name="dueAt" value={dueAt} />
+          {initialSource ? <input type="hidden" name="source" value={initialSource} /> : null}
 
           <OrderStep index={1} title="Клиент">
             <FieldGroup>

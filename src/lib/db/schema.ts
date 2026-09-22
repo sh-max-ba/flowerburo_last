@@ -1235,3 +1235,135 @@ export function migrateSupplierPayments(client: Database.Database) {
       .run()
   }
 }
+
+// v27: единое окно чатов. `chats` — одна строка на диалог (chat_type + chat_id) поверх ленты
+// wazzup_messages: имя/аватар контакта, привязка к клиенту, ответственный, «последнее сообщение»
+// и счётчик неотвеченных (входящие после нашего последнего исходящего). Заменяет канбан сделок как
+// рабочий список менеджера. `customer_changes` — история правок карточки клиента (кто/когда/что).
+// В wazzup_messages — правки/удаления клиентом (W-2), причина ошибки доставки (W-6), пометка
+// «переслано» и имя файла для вложений. Бэкфилл `chats` идёт из существующей ленты; идемпотентно.
+export function migrateChats(client: Database.Database) {
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS chats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_type TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      channel_id TEXT,
+      customer_id INTEGER,
+      name TEXT NOT NULL DEFAULT '',
+      avatar_uri TEXT,
+      phone TEXT NOT NULL DEFAULT '',
+      username TEXT NOT NULL DEFAULT '',
+      is_group INTEGER NOT NULL DEFAULT 0,
+      assigned_user_id INTEGER,
+      assigned_user_name TEXT NOT NULL DEFAULT '',
+      last_message_at TEXT,
+      last_message_text TEXT NOT NULL DEFAULT '',
+      last_message_type TEXT NOT NULL DEFAULT '',
+      last_message_direction TEXT NOT NULL DEFAULT '',
+      last_inbound_at TEXT,
+      last_outbound_at TEXT,
+      unanswered_count INTEGER NOT NULL DEFAULT 0,
+      answered_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(chat_type, chat_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chats_last_message ON chats(last_message_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chats_customer ON chats(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_chats_assigned ON chats(assigned_user_id);
+
+    CREATE TABLE IF NOT EXISTS customer_changes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id INTEGER NOT NULL,
+      user_id INTEGER,
+      user_name TEXT NOT NULL DEFAULT '',
+      field TEXT NOT NULL,
+      old_value TEXT NOT NULL DEFAULT '',
+      new_value TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_changes_customer ON customer_changes(customer_id, created_at);
+  `)
+
+  ensureColumn("wazzup_messages", "is_edited", "ALTER TABLE wazzup_messages ADD COLUMN is_edited INTEGER NOT NULL DEFAULT 0", client)
+  ensureColumn("wazzup_messages", "is_deleted", "ALTER TABLE wazzup_messages ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0", client)
+  ensureColumn("wazzup_messages", "forwarded", "ALTER TABLE wazzup_messages ADD COLUMN forwarded INTEGER NOT NULL DEFAULT 0", client)
+  ensureColumn("wazzup_messages", "error_text", "ALTER TABLE wazzup_messages ADD COLUMN error_text TEXT", client)
+  ensureColumn("wazzup_messages", "file_name", "ALTER TABLE wazzup_messages ADD COLUMN file_name TEXT", client)
+
+  const count = client.prepare("SELECT COUNT(*) as count FROM chats").get() as { count: number }
+  if (count.count > 0) {
+    return
+  }
+
+  // Бэкфилл диалогов из ленты: по одной строке на (chat_type, chat_id). Имя и аватар — из
+  // последнего входящего (contact в raw_payload вебхука), клиент — по привязке wazzup_chat_*
+  // или по customer_id сообщений; неотвеченные — входящие после последнего исходящего.
+  client.exec(`
+    INSERT INTO chats (
+      chat_type, chat_id, channel_id, customer_id, name, avatar_uri, phone, is_group,
+      last_message_at, last_message_text, last_message_type, last_message_direction,
+      last_inbound_at, last_outbound_at, unanswered_count, created_at, updated_at
+    )
+    SELECT
+      m.chat_type,
+      m.chat_id,
+      (SELECT channel_id FROM wazzup_messages x
+        WHERE x.chat_type = m.chat_type AND x.chat_id = m.chat_id AND COALESCE(x.channel_id, '') <> ''
+        ORDER BY COALESCE(x.date_time, x.created_at) DESC, x.id DESC LIMIT 1),
+      COALESCE(
+        (SELECT id FROM customers c WHERE c.wazzup_chat_type = m.chat_type AND c.wazzup_chat_id = m.chat_id ORDER BY c.id LIMIT 1),
+        (SELECT x.customer_id FROM wazzup_messages x
+          WHERE x.chat_type = m.chat_type AND x.chat_id = m.chat_id AND x.customer_id IS NOT NULL
+          ORDER BY x.id DESC LIMIT 1)
+      ),
+      COALESCE(
+        NULLIF((SELECT json_extract(x.raw_payload, '$.contact.name') FROM wazzup_messages x
+          WHERE x.chat_type = m.chat_type AND x.chat_id = m.chat_id AND x.direction = 'inbound'
+          ORDER BY COALESCE(x.date_time, x.created_at) DESC, x.id DESC LIMIT 1), ''),
+        NULLIF((SELECT c.name FROM customers c WHERE c.wazzup_chat_type = m.chat_type AND c.wazzup_chat_id = m.chat_id ORDER BY c.id LIMIT 1), ''),
+        m.chat_id
+      ),
+      (SELECT json_extract(x.raw_payload, '$.contact.avatarUri') FROM wazzup_messages x
+        WHERE x.chat_type = m.chat_type AND x.chat_id = m.chat_id AND x.direction = 'inbound'
+        ORDER BY COALESCE(x.date_time, x.created_at) DESC, x.id DESC LIMIT 1),
+      CASE WHEN m.chat_type = 'whatsapp' THEN m.chat_id ELSE COALESCE(
+        (SELECT c.phone FROM customers c WHERE c.wazzup_chat_type = m.chat_type AND c.wazzup_chat_id = m.chat_id ORDER BY c.id LIMIT 1), '') END,
+      CASE WHEN m.chat_type IN ('whatsgroup', 'telegroup', 'maxgroup') THEN 1 ELSE 0 END,
+      MAX(COALESCE(m.date_time, m.created_at)),
+      COALESCE((SELECT x.text FROM wazzup_messages x
+        WHERE x.chat_type = m.chat_type AND x.chat_id = m.chat_id
+        ORDER BY COALESCE(x.date_time, x.created_at) DESC, x.id DESC LIMIT 1), ''),
+      COALESCE((SELECT x.message_type FROM wazzup_messages x
+        WHERE x.chat_type = m.chat_type AND x.chat_id = m.chat_id
+        ORDER BY COALESCE(x.date_time, x.created_at) DESC, x.id DESC LIMIT 1), ''),
+      COALESCE((SELECT x.direction FROM wazzup_messages x
+        WHERE x.chat_type = m.chat_type AND x.chat_id = m.chat_id
+        ORDER BY COALESCE(x.date_time, x.created_at) DESC, x.id DESC LIMIT 1), ''),
+      MAX(CASE WHEN m.direction = 'inbound' THEN COALESCE(m.date_time, m.created_at) END),
+      MAX(CASE WHEN m.direction = 'outbound' THEN COALESCE(m.date_time, m.created_at) END),
+      SUM(CASE WHEN m.direction = 'inbound' AND COALESCE(m.date_time, m.created_at) > COALESCE(
+        (SELECT MAX(COALESCE(x.date_time, x.created_at)) FROM wazzup_messages x
+          WHERE x.chat_type = m.chat_type AND x.chat_id = m.chat_id AND x.direction = 'outbound'), '') THEN 1 ELSE 0 END),
+      MIN(COALESCE(m.date_time, m.created_at)),
+      CURRENT_TIMESTAMP
+    FROM wazzup_messages m
+    WHERE COALESCE(m.chat_type, '') <> '' AND COALESCE(m.chat_id, '') <> ''
+    GROUP BY m.chat_type, m.chat_id
+  `)
+
+  // Ответственный — из открытой сделки этого чата (если была), чтобы «Мои» не опустели после перехода.
+  client.exec(`
+    UPDATE chats SET
+      assigned_user_id = (SELECT d.responsible_user_id FROM deals d
+        WHERE d.wazzup_chat_type = chats.chat_type AND d.wazzup_chat_id = chats.chat_id AND d.status = 'open'
+        ORDER BY d.updated_at DESC, d.id DESC LIMIT 1),
+      assigned_user_name = COALESCE((SELECT d.responsible_user_name FROM deals d
+        WHERE d.wazzup_chat_type = chats.chat_type AND d.wazzup_chat_id = chats.chat_id AND d.status = 'open'
+        ORDER BY d.updated_at DESC, d.id DESC LIMIT 1), '')
+    WHERE EXISTS (SELECT 1 FROM deals d
+      WHERE d.wazzup_chat_type = chats.chat_type AND d.wazzup_chat_id = chats.chat_id AND d.status = 'open'
+        AND d.responsible_user_id IS NOT NULL)
+  `)
+}

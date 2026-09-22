@@ -19,6 +19,11 @@ export function db() {
     database = new Database(dbPath)
     database.pragma("journal_mode = WAL")
     database.pragma("foreign_keys = ON")
+    // LIKE/lower() в SQLite без ICU не знают кириллицу — регистрируем Unicode-строчные буквы для
+    // поиска по имени/тексту (lower_u(name) LIKE lower_u(@search)).
+    database.function("lower_u", { deterministic: true }, (value: unknown) =>
+      value === null || value === undefined ? null : String(value).toLowerCase()
+    )
     migrate(database)
     seedDefaultUsers(database)
     if (isNewDatabase) {

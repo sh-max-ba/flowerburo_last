@@ -216,7 +216,9 @@ type DealForWazzupTarget = Pick<
 >
 
 const provider = "wazzup"
-const wazzupApiBaseUrl = "https://api.wazzup24.com/v3"
+// Базовый URL API. Переопределяется только для локальной песочницы (мок-сервер в E2E) —
+// в проде переменная не задаётся.
+const wazzupApiBaseUrl = String(process.env.WAZZUP_API_BASE_URL ?? "").trim().replace(/\/+$/, "") || "https://api.wazzup24.com/v3"
 const wazzupMessagePath = "/message"
 const wazzupSendUnavailableMessage = "Невозможно отправить: у сделки нет телефона клиента или Wazzup не настроен."
 // Подстраховочный URL вебхука, если NEXT_PUBLIC_APP_URL не задан в окружении.
@@ -959,7 +961,7 @@ export function getWazzupChatProbeForDeal(dealId: number): WazzupChatProbeResult
   return { status: "ok", revision: getWazzupChatRevision(resolution.identity) }
 }
 
-type WazzupMessageRequest = {
+export type WazzupMessageRequest = {
   channelId: string
   chatType: string
   chatId: string
@@ -971,7 +973,7 @@ type WazzupMessageRequest = {
   refMessageId?: string
 }
 
-function buildBouquetMessageText(bouquet: BouquetTemplate) {
+export function buildBouquetMessageText(bouquet: BouquetTemplate) {
   const description = clean(bouquet.description) || "Описание букета пока не заполнено."
 
   return [
@@ -984,7 +986,7 @@ function buildBouquetMessageText(bouquet: BouquetTemplate) {
   ].join("\n")
 }
 
-function getAbsoluteBouquetImageUrl(imagePath: string) {
+export function getAbsoluteBouquetImageUrl(imagePath: string) {
   const appUrl = clean(process.env.NEXT_PUBLIC_APP_URL)
   if (!appUrl) {
     throw new Error("Для отправки фото настройте NEXT_PUBLIC_APP_URL")
@@ -995,7 +997,7 @@ function getAbsoluteBouquetImageUrl(imagePath: string) {
 
 // Wazzup скачивает contentUri по ПУБЛИЧНОМУ URL — относительный путь (наш загруженный файл)
 // абсолютизируем через NEXT_PUBLIC_APP_URL. Уже абсолютные http(s)-ссылки оставляем как есть.
-function toAbsoluteAppUrl(uri: string) {
+export function toAbsoluteAppUrl(uri: string) {
   const value = clean(uri)
   if (!value || /^https?:\/\//i.test(value)) {
     return value
@@ -1014,7 +1016,7 @@ function createCrmMessageId(dealId: number, bouquetId: number, kind: "image" | "
   return `deal-${dealId}-bouquet-${bouquetId}-${kind}`
 }
 
-type PostWazzupMessageResult = {
+export type PostWazzupMessageResult = {
   // Wazzup messageId из ответа 201 { messageId, chatId }. Пустой при repeated (см. ниже).
   messageId: string
   chatId: string
@@ -1022,7 +1024,7 @@ type PostWazzupMessageResult = {
 }
 
 // Переиспользуемая отправка одного сообщения. Возвращает messageId (ключ дедупликации с эхо).
-async function postWazzupMessage(payload: WazzupMessageRequest): Promise<PostWazzupMessageResult> {
+export async function postWazzupMessage(payload: WazzupMessageRequest): Promise<PostWazzupMessageResult> {
   const response = await requestWazzup(wazzupMessagePath, {
     method: "POST",
     headers: {
@@ -1105,7 +1107,7 @@ function safeWazzupMessageErrorMessage(status: number, data: unknown) {
   return `Wazzup вернул HTTP ${status}${code ? `: ${code}` : ""}${description ? ` (${description})` : ""}`
 }
 
-function safeWazzupBouquetSendErrorMessage(error: unknown) {
+export function safeWazzupBouquetSendErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : ""
   if (!message) {
     return "Не удалось отправить букет через Wazzup."
@@ -1625,6 +1627,39 @@ async function withActiveWhatsappChannel(target: Extract<WazzupChatTarget, { sta
       message: error instanceof Error ? error.message : "unknown",
     })
     return target
+  }
+}
+
+// Транспорт канала для типа чата (references/crud-routes.md: transport ↔ chatType). Личный
+// WhatsApp может идти и через WABA (wapi), Telegram — через личный аккаунт (tgapi) или бота.
+const chatTypeTransports: Record<string, string[]> = {
+  whatsapp: ["whatsapp", "wapi"],
+  whatsgroup: ["whatsapp"],
+  instagram: ["instagram"],
+  telegram: ["tgapi", "telegram"],
+  telegroup: ["tgapi"],
+  max: ["max"],
+  maxgroup: ["max"],
+  vk: ["vk"],
+  avito: ["avito"],
+  viber: ["viber"],
+}
+
+// Активный канал Wazzup для отправки в чат данного типа, когда у диалога ещё нет channelId
+// (диалог создан вручную по телефону). Возвращает пустую строку, если подходящего канала нет.
+export async function resolveActiveChannelForChatType(chatType: string): Promise<string> {
+  const transports = chatTypeTransports[clean(chatType)] ?? [clean(chatType)]
+  try {
+    const channels = (await listWazzupChannels()).filter(
+      (channel) => channel.state === "active" && channel.channelId && transports.includes(channel.transport)
+    )
+    return channels[0]?.channelId ?? ""
+  } catch (error) {
+    console.warn("Failed to resolve active Wazzup channel", {
+      chatType,
+      message: error instanceof Error ? error.message : "unknown",
+    })
+    return ""
   }
 }
 

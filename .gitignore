@@ -45,6 +45,8 @@ app.db-wal
 # uploaded customer media (voice messages etc.) — never commit
 public/uploads/voice/*
 !public/uploads/voice/.gitkeep
+public/uploads/chat/*
+!public/uploads/chat/.gitkeep
 
 # runtime logs
 *.log

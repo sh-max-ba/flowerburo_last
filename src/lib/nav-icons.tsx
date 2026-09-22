@@ -11,6 +11,7 @@ import {
   Flower2Icon,
   HistoryIcon,
   LayoutDashboardIcon,
+  MessagesSquareIcon,
   NotebookPenIcon,
   PackageCheckIcon,
   ReceiptTextIcon,
@@ -28,6 +29,7 @@ import type { LucideIcon } from "lucide-react"
 export const NAV_ICONS: Record<string, LucideIcon> = {
   dashboard: LayoutDashboardIcon,
   analytics: ChartSplineIcon,
+  chats: MessagesSquareIcon,
   deals: TagsIcon,
   clients: UserCheckIcon,
   bouquets: Flower2Icon,

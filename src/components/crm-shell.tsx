@@ -76,7 +76,7 @@ const roleLabels: Record<UserRole, string> = {
 
 // Экраны, где в leading поля живут чип смены и звук: касса, стол заказов, готовые, смены.
 const shiftChipSections = new Set<NavSectionId>(["sales", "orders", "order-drafts", "ready-orders", "shifts"])
-const soundSections = new Set<NavSectionId>(["sales", "orders", "order-drafts", "ready-orders", "deals"])
+const soundSections = new Set<NavSectionId>(["sales", "orders", "order-drafts", "ready-orders", "deals", "chats"])
 
 export function CrmShell({
   user,
@@ -212,6 +212,7 @@ export function CrmShell({
                             <span>{item.label}</span>
                           </SidebarMenuButton>
                           {item.id === "deals" ? <IncomingDealsSidebarBadge /> : null}
+                          {item.id === "chats" ? <UnansweredChatsSidebarBadge /> : null}
                           {item.id === "ready-orders" ? <ReadyOrdersSidebarBadge /> : null}
                           {rowAction ? (
                             <SidebarMenuAction
@@ -350,6 +351,9 @@ function DetailBar({ parent, title }: { parent: { label: string; href: string };
 // Действия разделов на строке меню («+» справа): создание без захода в раздел. Состав по роли.
 function buildRowActions(role: UserRole, canAccessCash: boolean): Partial<Record<NavSectionId, { label: string; href: string }>> {
   const actions: Partial<Record<NavSectionId, { label: string; href: string }>> = {}
+  if (canAccessSection("chats", role, canAccessCash)) {
+    actions.chats = { label: "Новый чат", href: "/chats?new=1" }
+  }
   if (canAccessSection("deals", role, canAccessCash)) {
     actions.deals = { label: "Новая сделка", href: "/deals?new=1" }
   }
@@ -408,6 +412,16 @@ function SectionTabs({
 
 function IncomingDealsSidebarBadge() {
   const count = usePolledCount("/api/deals/incoming-count")
+  if (count <= 0) {
+    return null
+  }
+
+  return <SidebarMenuBadge>{count > 99 ? "99+" : count}</SidebarMenuBadge>
+}
+
+// Бейдж «Чаты»: диалоги, ждущие ответа (входящие после нашего последнего сообщения).
+function UnansweredChatsSidebarBadge() {
+  const count = usePolledCount("/api/chats/unanswered-count")
   if (count <= 0) {
     return null
   }

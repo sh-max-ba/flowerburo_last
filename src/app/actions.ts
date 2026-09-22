@@ -12,10 +12,14 @@ import {
   removeDealItem,
   removeDealItemGroup,
   updateCustomer,
+  updateCustomerField,
+  createCustomerFromChat,
   updateDealFields,
   updateDealItem,
   updateDealStage,
+  type CustomerEditableField,
 } from "@/lib/crm"
+import { forwardChatMessage, sendBouquetToChat, sendChatMessage, type SendChatMessageOptions } from "@/lib/chats"
 import {
   connectWazzupWebhookSubscriptions,
   clearWazzupApiKey,
@@ -99,6 +103,11 @@ import {
   updateBouquetTemplate,
   upsertSupplier,
   upsertProduct,
+  assignChat,
+  listUsers,
+  markChatAnswered,
+  getChatById,
+  findOrCreateWhatsappChat,
   type StockDocumentType,
   type UserRole,
   type CurrentUser,
@@ -1226,5 +1235,127 @@ export async function setUserActiveAction(userId: number, isActive: boolean) {
     ["owner"],
     () => setUserActive(userId, isActive),
     isActive ? "Пользователь включен." : "Пользователь отключен."
+  )
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// Единое окно чатов (/chats). Все мутации — owner/manager; отправка идёт через Wazzup на сервере.
+
+function revalidateChats() {
+  revalidatePath("/chats")
+}
+
+export async function sendChatMessageAction(chatId: number, options: SendChatMessageOptions): Promise<ActionResult> {
+  try {
+    const user = await requireActionRole(["owner", "manager"])
+    await sendChatMessage(chatId, user, options)
+    revalidateChats()
+    return { ok: true, message: "Сообщение отправлено" }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Сообщение не отправлено." }
+  }
+}
+
+export async function sendBouquetToChatAction(chatId: number, bouquetId: number): Promise<ActionResult> {
+  try {
+    const user = await requireActionRole(["owner", "manager"])
+    await sendBouquetToChat(chatId, bouquetId, user)
+    revalidateChats()
+    return { ok: true, message: "Букет отправлен в чат" }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Букет не отправлен." }
+  }
+}
+
+export async function forwardChatMessageAction(messageRowId: number, targetChatId: number): Promise<ActionResult> {
+  try {
+    const user = await requireActionRole(["owner", "manager"])
+    await forwardChatMessage(messageRowId, targetChatId, user)
+    revalidateChats()
+    return { ok: true, message: "Сообщение переслано" }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Не удалось переслать." }
+  }
+}
+
+export async function assignChatAction(chatId: number, userId: number | null): Promise<ActionResult> {
+  return runRoleAction(["owner", "manager"], () => {
+    const target = userId === null ? null : listUsers().find((user) => user.id === userId && user.isActive)
+    if (userId !== null && !target) {
+      throw new Error("Сотрудник не найден.")
+    }
+    assignChat(chatId, target ? { id: target.id, name: target.name } : null)
+    revalidateChats()
+  }, userId === null ? "Ответственный снят." : "Ответственный назначен.")
+}
+
+export async function markChatAnsweredAction(chatId: number): Promise<ActionResult> {
+  return runRoleAction(["owner", "manager"], () => {
+    markChatAnswered(chatId)
+    revalidateChats()
+  }, "Диалог отмечен отвеченным.")
+}
+
+export async function updateCustomerFieldAction(
+  customerId: number,
+  field: CustomerEditableField,
+  value: string
+): Promise<DataActionResult<{ value: string; changed: boolean }>> {
+  return runDataAction(
+    ["owner", "manager"],
+    (user) => {
+      const result = updateCustomerField(customerId, field, value, user)
+      revalidateCrm(customerId, null)
+      revalidateChats()
+      return result
+    },
+    "Сохранено.",
+    "Не удалось сохранить."
+  )
+}
+
+export async function createCustomerFromChatAction(chatId: number): Promise<DataActionResult<{ customerId: number }>> {
+  return runDataAction(
+    ["owner", "manager"],
+    () => {
+      const chat = getChatById(chatId)
+      if (!chat) {
+        throw new Error("Диалог не найден.")
+      }
+      if (chat.customerId) {
+        return { customerId: chat.customerId }
+      }
+      const customerId = createCustomerFromChat(chat)
+      revalidateCrm(customerId, null)
+      revalidateChats()
+      return { customerId }
+    },
+    "Клиент создан.",
+    "Не удалось создать клиента."
+  )
+}
+
+export async function openWhatsappChatAction(input: {
+  phone: string
+  name?: string
+  customerId?: number | null
+}): Promise<DataActionResult<{ chatId: number; created: boolean }>> {
+  return runDataAction(
+    ["owner", "manager"],
+    () => {
+      const result = findOrCreateWhatsappChat(input)
+      // Диалог, заведённый вручную, сразу получает карточку клиента (имя + телефон из формы),
+      // чтобы заказ из него создавался без лишнего шага.
+      const chat = getChatById(result.id)
+      if (chat && !chat.customerId) {
+        const customerId = createCustomerFromChat(chat)
+        revalidateCrm(customerId, null)
+      }
+      revalidateChats()
+      return { chatId: result.id, created: result.created }
+    },
+    "Диалог открыт.",
+    "Не удалось открыть диалог."
   )
 }

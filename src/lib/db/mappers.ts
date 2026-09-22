@@ -184,6 +184,11 @@ export function mapWazzupMessage(row: Record<string, unknown>): WazzupMessage {
     quotedMessageId: String(row.quoted_message_id ?? ""),
     quotedText: String(row.quoted_text ?? ""),
     transcript: String(row.transcript ?? ""),
+    isEdited: Number(row.is_edited ?? 0) === 1,
+    isDeleted: Number(row.is_deleted ?? 0) === 1,
+    forwarded: Number(row.forwarded ?? 0) === 1,
+    errorText: String(row.error_text ?? ""),
+    fileName: String(row.file_name ?? ""),
     dateTime: String(row.date_time ?? ""),
     createdAt: String(row.created_at ?? ""),
   }

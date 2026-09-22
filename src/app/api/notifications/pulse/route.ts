@@ -26,7 +26,16 @@ export async function GET() {
     | undefined
 
   let dealSeq = 0
+  let messageSeq = 0
   if (user.role === "owner" || user.role === "manager") {
+    // Новое входящее сообщение в личном чате (группы — шум) — звук «сообщение» в единое окно чатов.
+    const messageRow = client
+      .prepare(
+        `SELECT COALESCE(MAX(id), 0) as seq FROM wazzup_messages
+         WHERE direction = 'inbound' AND COALESCE(chat_type, '') NOT IN ('whatsgroup', 'telegroup', 'maxgroup')`
+      )
+      .get() as { seq: number } | undefined
+    messageSeq = Number(messageRow?.seq ?? 0)
     const dealRow = client
       .prepare(
         "SELECT COALESCE(MAX(id), 0) as seq FROM deals WHERE source IN ('whatsapp', 'instagram', 'telegram')"
@@ -36,7 +45,7 @@ export async function GET() {
   }
 
   return Response.json(
-    { orderSeq: Number(orderRow?.seq ?? 0), dealSeq },
+    { orderSeq: Number(orderRow?.seq ?? 0), dealSeq, messageSeq },
     { headers: noStoreHeaders }
   )
 }

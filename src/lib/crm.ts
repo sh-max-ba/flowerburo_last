@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3"
-import { initDb, listUsers, loadOrderImagesByOrder, type CurrentUser, type Order, type Product, type Sale } from "@/lib/db"
+import { initDb, listUsers, loadOrderImagesByOrder, type CurrentUser, type CustomerOption, type Order, type Product, type Sale } from "@/lib/db"
+import { linkChatCustomer, renameChatsOfCustomer } from "@/lib/db/queries/chats"
 import { mapOrderRow, numberFromRow } from "@/lib/db-row"
 import { parseForm } from "@/lib/forms/parse"
 import { CustomerCreateSchema, CustomerUpdateSchema } from "@/lib/forms/schemas"
@@ -263,10 +264,236 @@ export function updateCustomer(formData: FormData) {
            WHERE customer_id = @id`
         )
         .run({ id, name, phone })
+      renameChatsOfCustomer(id, name, phone, client)
     }
   })
 
   update()
+}
+
+// История правок карточки клиента (кто, когда, какое поле): пишется точечным редактированием
+// из карточки контакта в чате и полной формой клиента.
+export type CustomerChange = {
+  id: number
+  userId: number | null
+  userName: string
+  field: CustomerEditableField
+  oldValue: string
+  newValue: string
+  createdAt: string
+}
+
+export type CustomerEditableField = "name" | "phone" | "defaultDiscountPercent" | "comment" | "instagram"
+
+const customerFieldColumns: Record<CustomerEditableField, string> = {
+  name: "name",
+  phone: "phone",
+  defaultDiscountPercent: "default_discount_percent",
+  comment: "comment",
+  instagram: "instagram",
+}
+
+export function listCustomerChanges(customerId: number, limit = 50): CustomerChange[] {
+  const rows = db()
+    .prepare(
+      `SELECT id, user_id, user_name, field, old_value, new_value, created_at
+       FROM customer_changes
+       WHERE customer_id = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(customerId, Math.max(1, Math.min(limit, 200))) as Array<Record<string, unknown>>
+
+  return rows.map((row) => ({
+    id: toNumber(row.id),
+    userId: row.user_id == null ? null : toNumber(row.user_id),
+    userName: String(row.user_name ?? ""),
+    field: String(row.field ?? "") as CustomerEditableField,
+    oldValue: String(row.old_value ?? ""),
+    newValue: String(row.new_value ?? ""),
+    createdAt: String(row.created_at ?? ""),
+  }))
+}
+
+// Точечная правка одного поля клиента (инлайн-редактирование в карточке контакта). Пишет запись
+// в customer_changes, обновляет снапшоты имени/телефона в сделках и имя диалогов в чатах.
+export function updateCustomerField(
+  customerId: number,
+  field: CustomerEditableField,
+  rawValue: string,
+  currentUser: Pick<CurrentUser, "id" | "name">
+): { changed: boolean; value: string } {
+  const column = customerFieldColumns[field]
+  if (!column) {
+    throw new Error("Неизвестное поле клиента.")
+  }
+  const client = db()
+  const existing = client.prepare("SELECT * FROM customers WHERE id = ?").get(customerId) as
+    | Record<string, unknown>
+    | undefined
+  if (!existing) {
+    throw new Error("Клиент не найден.")
+  }
+
+  let value = clean(rawValue)
+  if (field === "name" && !value) {
+    throw new Error("Имя клиента не может быть пустым.")
+  }
+  if (field === "phone" && value && (normalizePhone(value) ?? "").length < 9) {
+    throw new Error("Телефон слишком короткий.")
+  }
+  if (field === "defaultDiscountPercent") {
+    const percent = Number(value.replace(",", "."))
+    if (!Number.isFinite(percent)) {
+      throw new Error("Скидка — число процентов от 0 до 100.")
+    }
+    value = String(clampPercent(percent))
+  }
+
+  const oldValue =
+    field === "defaultDiscountPercent"
+      ? String(clampPercent(toNumber(existing.default_discount_percent)))
+      : String(existing[column] ?? "")
+  if (oldValue === value) {
+    return { changed: false, value }
+  }
+
+  client.transaction(() => {
+    if (field === "phone") {
+      client
+        .prepare("UPDATE customers SET phone = @value, normalized_phone = @normalized, updated_at = CURRENT_TIMESTAMP WHERE id = @id")
+        .run({ id: customerId, value, normalized: normalizePhone(value) })
+    } else if (field === "defaultDiscountPercent") {
+      client
+        .prepare("UPDATE customers SET default_discount_percent = @value, updated_at = CURRENT_TIMESTAMP WHERE id = @id")
+        .run({ id: customerId, value: Number(value) })
+    } else {
+      client
+        .prepare(`UPDATE customers SET ${column} = @value, updated_at = CURRENT_TIMESTAMP WHERE id = @id`)
+        .run({ id: customerId, value })
+    }
+
+    client
+      .prepare(
+        `INSERT INTO customer_changes (customer_id, user_id, user_name, field, old_value, new_value)
+         VALUES (@customerId, @userId, @userName, @field, @oldValue, @newValue)`
+      )
+      .run({ customerId, userId: currentUser.id, userName: currentUser.name, field, oldValue, newValue: value })
+
+    if (field === "name" || field === "phone") {
+      const name = field === "name" ? value : String(existing.name ?? "")
+      const phone = field === "phone" ? value : String(existing.phone ?? "")
+      client
+        .prepare(
+          `UPDATE deals SET customer_name = @name, customer_phone = @phone, updated_at = CURRENT_TIMESTAMP
+           WHERE customer_id = @id`
+        )
+        .run({ id: customerId, name, phone })
+      renameChatsOfCustomer(customerId, name, phone, client)
+    }
+  })()
+
+  return { changed: true, value }
+}
+
+// Клиент из диалога, у которого его ещё нет (например, диалог создан вручную по телефону).
+export function createCustomerFromChat(chat: {
+  id: number
+  chatType: string
+  chatId: string
+  channelId: string
+  name: string
+  phone: string
+  username: string
+}): number {
+  const name = clean(chat.name) || clean(chat.phone) || clean(chat.chatId)
+  const client = db()
+  const customerId = client.transaction(() => {
+    const id = insertCustomer({
+      name,
+      phone: chat.phone,
+      instagram: chat.chatType === "instagram" ? chat.username || chat.chatId : "",
+      source: chat.chatType,
+    })
+    client
+      .prepare(
+        `UPDATE customers
+         SET wazzup_chat_type = COALESCE(NULLIF(wazzup_chat_type, ''), @chatType),
+          wazzup_chat_id = COALESCE(NULLIF(wazzup_chat_id, ''), @chatId),
+          wazzup_channel_id = COALESCE(NULLIF(wazzup_channel_id, ''), NULLIF(@channelId, '')),
+          updated_at = CURRENT_TIMESTAMP
+         WHERE id = @id`
+      )
+      .run({ id, chatType: chat.chatType, chatId: chat.chatId, channelId: chat.channelId })
+    linkChatCustomer(chat.id, id, client)
+    return id
+  })()
+  return customerId
+}
+
+// Лёгкий список клиентов для комбобокса заказа (как в getDashboardData, но без остального).
+export function listCustomerOptions(): CustomerOption[] {
+  const rows = db()
+    .prepare(
+      `SELECT id, name, COALESCE(phone, '') as phone,
+        COALESCE(default_discount_percent, 0) as defaultDiscountPercent
+       FROM customers
+       ORDER BY name COLLATE NOCASE, id DESC`
+    )
+    .all() as Array<Record<string, unknown>>
+  return rows.map((row) => ({
+    id: toNumber(row.id),
+    name: String(row.name ?? ""),
+    phone: String(row.phone ?? ""),
+    defaultDiscountPercent: clampPercent(toNumber(row.defaultDiscountPercent)),
+  }))
+}
+
+export type CustomerStats = {
+  ordersCount: number
+  ordersTotal: number
+  activeOrdersCount: number
+  cancelledOrdersCount: number
+  salesCount: number
+  salesTotal: number
+  lastOrderAt: string
+  firstContactAt: string
+}
+
+// Сводка по клиенту для карточки контакта в чате: заказы (без отменённых и черновиков), покупки
+// на кассе, последний заказ.
+export function getCustomerStats(customerId: number): CustomerStats {
+  const orders = db()
+    .prepare(
+      `SELECT
+        SUM(CASE WHEN status NOT IN ('Отменен', 'Черновик') THEN 1 ELSE 0 END) as ordersCount,
+        COALESCE(SUM(CASE WHEN status NOT IN ('Отменен', 'Черновик') THEN total ELSE 0 END), 0) as ordersTotal,
+        SUM(CASE WHEN status IN ('Новый', 'В работе', 'Готов', 'Передан курьеру') THEN 1 ELSE 0 END) as activeOrdersCount,
+        SUM(CASE WHEN status = 'Отменен' THEN 1 ELSE 0 END) as cancelledOrdersCount,
+        COALESCE(MAX(CASE WHEN status NOT IN ('Отменен', 'Черновик') THEN created_at END), '') as lastOrderAt
+       FROM orders WHERE customer_id = ?`
+    )
+    .get(customerId) as Record<string, unknown>
+  const sales = db()
+    .prepare(
+      `SELECT COUNT(*) as salesCount, COALESCE(SUM(total), 0) as salesTotal
+       FROM sales WHERE customer_id = ? AND reversed_at IS NULL`
+    )
+    .get(customerId) as Record<string, unknown>
+  const customer = db().prepare("SELECT created_at FROM customers WHERE id = ?").get(customerId) as
+    | { created_at: string }
+    | undefined
+
+  return {
+    ordersCount: toNumber(orders.ordersCount),
+    ordersTotal: toNumber(orders.ordersTotal),
+    activeOrdersCount: toNumber(orders.activeOrdersCount),
+    cancelledOrdersCount: toNumber(orders.cancelledOrdersCount),
+    salesCount: toNumber(sales.salesCount),
+    salesTotal: toNumber(sales.salesTotal),
+    lastOrderAt: String(orders.lastOrderAt ?? ""),
+    firstContactAt: String(customer?.created_at ?? ""),
+  }
 }
 
 export function listCustomerOrders(customerId: number): Order[] {

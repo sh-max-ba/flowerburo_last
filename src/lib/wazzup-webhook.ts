@@ -1,6 +1,7 @@
 import crypto from "node:crypto"
 import type Database from "better-sqlite3"
 import { initDb, listUsers } from "@/lib/db"
+import { touchChatOnMessage } from "@/lib/db/queries/chats"
 import { generateDealNumber, normalizePhone } from "@/lib/crm"
 import { wazzupChatTypeLabel } from "@/lib/labels"
 import { getWazzupSettingsForServer } from "@/lib/wazzup"
@@ -24,6 +25,9 @@ type ChatContext = {
   phone: string
   source: string
   responsibleUserId: string
+  // Аватар и username контакта из вебхука (contact.avatarUri / contact.username) — для списка чатов.
+  avatarUri?: string
+  username?: string
 }
 
 type WebhookProcessingResult = {
@@ -296,6 +300,9 @@ function processMessages(client: Database.Database, messages: unknown[]) {
       })
 
     if (inserted.changes === 0) {
+      // Повторный messageId — правка или удаление сообщения клиентом (W-2): отражаем в ленте, а не
+      // теряем. Прочие дубли (ретраи вебхука) отсекаются как раньше.
+      applyMessageEditOrDelete(client, record, messageId, context)
       continue
     }
 
@@ -318,6 +325,24 @@ function processMessages(client: Database.Database, messages: unknown[]) {
     if (currentDealId) {
       updateDealLastMessage(client, currentDealId, record, context)
     }
+
+    // Строка диалога единого окна чатов: имя/аватар контакта, «последнее сообщение», неотвеченные.
+    touchChatOnMessage(
+      {
+        chatType: context.chatType,
+        chatId: context.chatId,
+        channelId: context.channelId,
+        direction,
+        messageType: clean(record.type) || "text",
+        text: clean(record.text),
+        dateTime: clean(record.dateTime),
+        contact: isEcho
+          ? undefined
+          : { name: context.name, avatarUri: context.avatarUri, phone: context.phone, username: context.username },
+        customerId: customer?.id ?? null,
+      },
+      client
+    )
   }
 
   return { messagesSaved, contactId, dealId }
@@ -327,7 +352,13 @@ function processStatuses(client: Database.Database, statuses: unknown[]) {
   let updated = 0
   // updated_at трогаем, чтобы revision-поллинг собственного чата заметил смену статуса.
   const update = client.prepare(
-    "UPDATE wazzup_messages SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE message_id = ?"
+    `UPDATE wazzup_messages SET status = @status, error_text = COALESCE(@errorText, error_text),
+      updated_at = CURRENT_TIMESTAMP
+     WHERE message_id = @messageId`
+  )
+  const touchChat = client.prepare(
+    `UPDATE chats SET updated_at = CURRENT_TIMESTAMP
+     WHERE (chat_type, chat_id) = (SELECT chat_type, chat_id FROM wazzup_messages WHERE message_id = ?)`
   )
 
   for (const status of statuses) {
@@ -338,8 +369,12 @@ function processStatuses(client: Database.Database, statuses: unknown[]) {
       continue
     }
 
-    const result = update.run(value, messageId)
+    // Причина ошибки доставки (W-6): { error, description } → менеджер видит, почему не ушло.
+    const result = update.run({ status: value, errorText: value === "error" ? deliveryErrorText(record.error) : null, messageId })
     updated += result.changes
+    if (result.changes > 0) {
+      touchChat.run(messageId)
+    }
   }
 
   return updated
@@ -667,7 +702,43 @@ function contextFromMessage(message: JsonRecord): ChatContext {
     phone,
     source: chatTypeToSource(chatType),
     responsibleUserId: clean(message.authorId),
+    avatarUri: clean(contact.avatarUri),
+    username: clean(contact.username),
   }
+}
+
+// Правка/удаление сообщения клиентом приходит тем же messageId с isEdited/isDeleted (и oldInfo).
+// Обновляем текст и флаги на существующей строке, трогаем диалог, чтобы поллинг перерисовал ленту.
+function applyMessageEditOrDelete(client: Database.Database, record: JsonRecord, messageId: string, context: ChatContext) {
+  const isEdited = record.isEdited === true
+  const isDeleted = record.isDeleted === true
+  if (!isEdited && !isDeleted) {
+    return
+  }
+  const result = client
+    .prepare(
+      `UPDATE wazzup_messages
+       SET text = CASE WHEN @isEdited = 1 THEN COALESCE(NULLIF(@text, ''), text) ELSE text END,
+        is_edited = MAX(is_edited, @isEdited),
+        is_deleted = MAX(is_deleted, @isDeleted),
+        updated_at = CURRENT_TIMESTAMP
+       WHERE message_id = @messageId`
+    )
+    .run({ messageId, text: clean(record.text), isEdited: isEdited ? 1 : 0, isDeleted: isDeleted ? 1 : 0 })
+  if (result.changes > 0 && context.chatType && context.chatId) {
+    client
+      .prepare("UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE chat_type = ? AND chat_id = ?")
+      .run(context.chatType, context.chatId)
+  }
+}
+
+// Текст причины ошибки доставки из объекта error вебхука: { error: 'SPAM', description: '...' }.
+function deliveryErrorText(value: unknown): string | null {
+  const record = asRecord(value)
+  const code = clean(record.error)
+  const description = clean(record.description)
+  const text = [code, description].filter(Boolean).join(": ")
+  return text || null
 }
 
 function resolveResponsible(client: Database.Database, responsibleUserId: string) {
