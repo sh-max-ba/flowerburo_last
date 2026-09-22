@@ -118,13 +118,19 @@ export function PeriodPicker({ range, className }: { range: AnalyticsRange; clas
     push({ from, to })
   }
 
-  function handleRangeSelect(selected: DateRange | undefined) {
-    setDraft(selected)
-    if (selected?.from) setFromInput(toISO(selected.from))
-    if (selected?.to) setToInput(toISO(selected.to))
-    if (selected?.from && selected?.to) {
-      applyRange(toISO(selected.from), toISO(selected.to))
+  // Календарь только правит черновик: первый клик — начало, второй — конец, применение — кнопкой
+  // «Показать». Клик при уже выбранном диапазоне начинает новый (иначе библиотека «подвигала» бы
+  // старый и период менялся бы с одного нажатия).
+  function handleRangeSelect(_selected: DateRange | undefined, day: Date) {
+    let next: DateRange
+    if (draft?.from && !draft.to) {
+      next = day < draft.from ? { from: day, to: draft.from } : { from: draft.from, to: day }
+    } else {
+      next = { from: day, to: undefined }
     }
+    setDraft(next)
+    setFromInput(next.from ? toISO(next.from) : "")
+    setToInput(next.to ? toISO(next.to) : "")
   }
 
   function handleDaySelect(selected: Date | undefined) {
@@ -263,7 +269,10 @@ export function PeriodPicker({ range, className }: { range: AnalyticsRange; clas
                         aria-label="Начало периода"
                         value={fromInput}
                         max={range.today}
-                        onChange={(event) => setFromInput(event.target.value)}
+                        onChange={(event) => {
+                          setFromInput(event.target.value)
+                          setDraft({ from: fromISO(event.target.value), to: toInput ? fromISO(toInput) : undefined })
+                        }}
                         className="h-8 rounded-lg bg-muted/55 px-2 text-sm tabular-nums outline-none focus-visible:bg-background focus-visible:ring-3 focus-visible:ring-ring/15"
                       />
                     </label>
@@ -274,11 +283,20 @@ export function PeriodPicker({ range, className }: { range: AnalyticsRange; clas
                         aria-label="Конец периода"
                         value={toInput}
                         max={range.today}
-                        onChange={(event) => setToInput(event.target.value)}
+                        onChange={(event) => {
+                          setToInput(event.target.value)
+                          setDraft({ from: fromInput ? fromISO(fromInput) : undefined, to: fromISO(event.target.value) })
+                        }}
                         className="h-8 rounded-lg bg-muted/55 px-2 text-sm tabular-nums outline-none focus-visible:bg-background focus-visible:ring-3 focus-visible:ring-ring/15"
                       />
                     </label>
-                    <Button type="button" size="sm" variant="secondary" onClick={() => applyRange(fromInput, toInput)} disabled={!fromInput || !toInput}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={fromInput && toInput && (fromInput !== range.from || toInput !== range.to) ? "default" : "secondary"}
+                      onClick={() => applyRange(fromInput, toInput)}
+                      disabled={!fromInput || !toInput}
+                    >
                       Показать
                     </Button>
                   </div>
@@ -295,8 +313,11 @@ export function PeriodPicker({ range, className }: { range: AnalyticsRange; clas
                     classNames={CALENDAR_CLASSNAMES}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Первый клик — начало, второй — конец периода.
-                    {draft?.from && !draft?.to ? " Теперь выберите конец." : ` Выбрано: ${formatRangeLabel(range.from, range.to)} · ${range.days} ${plural(range.days, DAYS_FORMS)}.`}
+                    {draft?.from && !draft?.to
+                      ? `Начало: ${formatDay(toISO(draft.from))}. Теперь нажмите на день окончания.`
+                      : draft?.from && draft.to && (toISO(draft.from) !== range.from || toISO(draft.to) !== range.to)
+                        ? `Выбрано ${formatRangeLabel(toISO(draft.from), toISO(draft.to))} — нажмите «Показать».`
+                        : `Первый клик — начало, второй — конец периода, затем «Показать». Сейчас: ${formatRangeLabel(range.from, range.to)} · ${range.days} ${plural(range.days, DAYS_FORMS)}.`}
                   </p>
                 </div>
               </div>
