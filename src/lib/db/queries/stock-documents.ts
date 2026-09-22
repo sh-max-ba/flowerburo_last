@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3"
-import { fromDatetimeLocalValue } from "@/lib/datetime"
+import { fromDatetimeLocalValue, SHOP_UTC_OFFSET_SQL } from "@/lib/datetime"
 import { numberFromRow } from "@/lib/db-row"
 import type { AllocationMethod, CurrentUser, StockDocumentType, StockOverheadKind } from "../types"
 import { stockOverheadKinds } from "../types"
@@ -7,6 +7,7 @@ import { db } from "../connection"
 import { getProduct, recordStockMovement } from "../ledger"
 import { mapStockDocument, mapStockDocumentItem, mapStockDocumentOverhead, normalizeAllocationMethod } from "../mappers"
 import { clean, parsePositiveInteger, parseStockDocumentType, roundMoney, toNumber } from "../form-parsers"
+import { allocateOverheadShares, landedUnitCostOf } from "@/lib/stock-costing"
 import { getRecomputeCostOnReceipt, getTrackLotsEnabled } from "./app-settings"
 import { maybeCreateReceiptLot, revertLotsForDocument } from "./stock-lots"
 
@@ -15,6 +16,10 @@ export function listStockDocuments(filters?: {
   status?: string
   query?: string
   supplierId?: string
+  dateFrom?: string
+  dateTo?: string
+  sumFrom?: string
+  sumTo?: string
 }) {
   const client = db()
   const conditions: string[] = []
@@ -22,8 +27,24 @@ export function listStockDocuments(filters?: {
   const type = filters?.type && filters.type !== "all" ? filters.type : ""
   const status = filters?.status && filters.status !== "all" ? filters.status : ""
   const query = String(filters?.query ?? "").trim()
-  const supplierId =
-    filters?.supplierId && filters.supplierId !== "all" ? Number(filters.supplierId) : 0
+  // supplier: "all" | "none" (без поставщика) | список id через запятую («1,4,7»).
+  // Множественный выбор — фильтр контрагентов в тулбаре; одиночный id из старых ссылок тоже работает.
+  const supplierRaw = String(filters?.supplierId ?? "").trim()
+  const supplierIds =
+    supplierRaw && supplierRaw !== "all" && supplierRaw !== "none"
+      ? [
+          ...new Set(
+            supplierRaw
+              .split(",")
+              .map((value) => Number(value.trim()))
+              .filter((value) => Number.isInteger(value) && value > 0)
+          ),
+        ]
+      : []
+  // Период по «дате операции» (operation_at, при отсутствии — created_at), приведённой к таймзоне магазина.
+  const dateFrom = String(filters?.dateFrom ?? "").trim()
+  const dateTo = String(filters?.dateTo ?? "").trim()
+  const operationDate = `DATE(COALESCE(stock_documents.operation_at, stock_documents.created_at), '${SHOP_UTC_OFFSET_SQL}')`
 
   if (type) {
     conditions.push("stock_documents.type = @type")
@@ -33,19 +54,50 @@ export function listStockDocuments(filters?: {
     conditions.push("stock_documents.status = @status")
     params.status = status
   }
-  if (supplierId) {
+  if (supplierRaw === "none") {
+    conditions.push("stock_documents.supplier_id IS NULL")
+  } else if (supplierIds.length === 1) {
     conditions.push("stock_documents.supplier_id = @supplierId")
-    params.supplierId = supplierId
+    params.supplierId = supplierIds[0]
+  } else if (supplierIds.length > 1) {
+    // Значения — уже провалидированные целые, поэтому инлайн безопасен (именованных
+    // параметров переменной длины better-sqlite3 не даёт).
+    conditions.push(`stock_documents.supplier_id IN (${supplierIds.join(",")})`)
   }
   if (query) {
     conditions.push("(stock_documents.number LIKE @query OR stock_documents.comment LIKE @query)")
     params.query = `%${query}%`
   }
+  if (dateFrom) {
+    conditions.push(`${operationDate} >= @dateFrom`)
+    params.dateFrom = dateFrom
+  }
+  if (dateTo) {
+    conditions.push(`${operationDate} <= @dateTo`)
+    params.dateTo = dateTo
+  }
+  // Фильтр по сумме документа — по той же величине, что показана в колонке «Сумма»
+  // (итог с накладными расходами, при отсутствии — стоимость товаров).
+  const documentSum = "COALESCE(NULLIF(stock_documents.landed_total, 0), stock_documents.goods_total, 0)"
+  const sumFrom = Number(filters?.sumFrom ?? "")
+  const sumTo = Number(filters?.sumTo ?? "")
+  if (String(filters?.sumFrom ?? "").trim() && Number.isFinite(sumFrom)) {
+    conditions.push(`${documentSum} >= @sumFrom`)
+    params.sumFrom = sumFrom
+  }
+  if (String(filters?.sumTo ?? "").trim() && Number.isFinite(sumTo)) {
+    conditions.push(`${documentSum} <= @sumTo`)
+    params.sumTo = sumTo
+  }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""
   const rows = client
     .prepare(
-      `SELECT stock_documents.*, COUNT(stock_document_items.id) as items_count
+      `SELECT stock_documents.*, COUNT(stock_document_items.id) as items_count,
+        -- Сумма доставки = накладные расходы вида delivery по этому акту (подзапрос, а не JOIN:
+        -- иначе COUNT позиций умножится на число строк расходов).
+        (SELECT COALESCE(SUM(o.amount), 0) FROM stock_document_overheads o
+          WHERE o.document_id = stock_documents.id AND o.kind = 'delivery') as delivery_total
        FROM stock_documents
        LEFT JOIN stock_document_items ON stock_document_items.document_id = stock_documents.id
        ${where}
@@ -77,7 +129,8 @@ export function getStockDocument(documentId: number) {
       `SELECT
         stock_document_items.*,
         products.stock as current_stock,
-        products.reserved as current_reserved
+        products.reserved as current_reserved,
+        products.category_path as current_category
        FROM stock_document_items
        LEFT JOIN products ON products.code = stock_document_items.product_code
        WHERE stock_document_items.document_id = ?
@@ -119,6 +172,7 @@ function buildStockDocumentItems(formData: FormData) {
   const productCodes = formData.getAll("itemProductCode").map((value) => clean(value))
   const qtyValues = formData.getAll("itemQty")
   const unitCostValues = formData.getAll("itemUnitCost")
+  const defectValues = formData.getAll("itemDefectQty")
   const commentValues = formData.getAll("itemComment")
 
   if (!productCodes.length || productCodes.every((code) => !code)) {
@@ -130,16 +184,31 @@ function buildStockDocumentItems(formData: FormData) {
       throw new Error("У каждой позиции акта должен быть товар.")
     }
 
-    // Цена закупки опциональна (по умолчанию 0); не может быть отрицательной.
-    const unitCost = roundMoney(Math.max(0, toNumber(unitCostValues[index])))
+    // Цена закупки/себестоимость опциональна (по умолчанию 0); не может быть отрицательной.
+    // Точность 6 знаков (не 2): при вводе «суммой строки» клиент шлёт цену = сумма / кол-во,
+    // и округление до копеек здесь дало бы расхождение итога (1000 за 3 шт → 999.99).
+    const unitCost = roundUnitCost(Math.max(0, toNumber(unitCostValues[index])))
+    const qty = parsePositiveInteger(qtyValues[index], "Количество")
+    // Брак (только приход; у других типов поля нет → 0): целое 0..qty. На остаток идёт qty − брак.
+    const defectQty = Math.max(0, Math.floor(toNumber(defectValues[index])))
+    if (defectQty > qty) {
+      throw new Error("Брак не может превышать количество в строке.")
+    }
 
     return {
       productCode,
-      qty: parsePositiveInteger(qtyValues[index], "Количество"),
+      qty,
+      defectQty,
       unitCost,
       comment: clean(commentValues[index]),
     }
   })
+}
+
+// Цена за единицу хранится с точностью до 6 знаков (см. buildStockDocumentItems); денежные
+// итоги по-прежнему округляются до копеек через roundMoney.
+function roundUnitCost(value: number) {
+  return Math.round((Number.isFinite(value) ? value : 0) * 1_000_000) / 1_000_000
 }
 
 // Строки накладных расходов документа. Пустые/нулевые строки пропускаются.
@@ -163,41 +232,16 @@ function buildStockDocumentOverheads(formData: FormData) {
   return overheads
 }
 
-// Распределение суммы накладных расходов по позициям: вес = стоимость строки (по стоимости) или
-// количество (по количеству); при нулевой сумме весов — падаем на распределение по количеству.
-// Остаток округления добавляем к строке с наибольшим весом — сумма долей == overheadTotal ровно.
+// Распределение суммы накладных расходов по позициям. Сама формула (веса, фолбэк, остаток
+// округления) — в общем модуле stock-costing.ts, тот же расчёт использует живой предпросмотр в
+// формах акта. Здесь только привязка долей к id строк.
 function allocateOverhead(
   lines: Array<{ id: number; qty: number; lineValue: number }>,
   overheadTotal: number,
   method: AllocationMethod
 ): Map<number, number> {
+  const shares = allocateOverheadShares(lines, overheadTotal, method)
   const allocated = new Map<number, number>()
-  if (overheadTotal <= 0 || lines.length === 0) {
-    return allocated
-  }
-
-  let weights = lines.map((line) => (method === "by_qty" ? line.qty : line.lineValue))
-  let sumWeights = weights.reduce((a, b) => a + b, 0)
-  if (sumWeights <= 0) {
-    weights = lines.map((line) => line.qty)
-    sumWeights = weights.reduce((a, b) => a + b, 0)
-  }
-  if (sumWeights <= 0) {
-    return allocated
-  }
-
-  const shares = weights.map((weight) => roundMoney((overheadTotal * weight) / sumWeights))
-  const assigned = roundMoney(shares.reduce((a, b) => a + b, 0))
-  const remainder = roundMoney(overheadTotal - assigned)
-  if (remainder !== 0) {
-    let maxIndex = 0
-    for (let i = 1; i < weights.length; i += 1) {
-      if (weights[i] > weights[maxIndex]) {
-        maxIndex = i
-      }
-    }
-    shares[maxIndex] = roundMoney(shares[maxIndex] + remainder)
-  }
   lines.forEach((line, index) => allocated.set(line.id, shares[index]))
 
   return allocated
@@ -243,6 +287,8 @@ function saveStockDocumentDraftInTransaction(
   const overheads = isStockIn ? buildStockDocumentOverheads(input.formData) : []
   const allocationMethod = isStockIn ? normalizeAllocationMethod(input.formData.get("allocationMethod")) : "by_value"
   const overheadTotal = roundMoney(overheads.reduce((sum, overhead) => sum + overhead.amount, 0))
+  // Оплачено поставщику (v23) — только у прихода; долг по акту = goods_total − paid_amount.
+  const paidAmount = isStockIn ? roundMoney(Math.max(0, toNumber(input.formData.get("paidAmount")))) : 0
   let documentId = input.documentId ?? null
 
   if (documentId) {
@@ -260,12 +306,17 @@ function saveStockDocumentDraftInTransaction(
     if (String(existing.type) === "count") {
       throw new Error("Это инвентаризация — редактируйте её в разделе инвентаризации.")
     }
+    // У корректировки тип жёстко равен типу исходного акта: проведение откатывает исходный по его
+    // типу и применяет позиции по типу корректировки — смена типа разъехалась бы с откатом.
+    if (existing.corrects_document_id != null && documentType !== String(existing.type)) {
+      throw new Error("У корректировки нельзя менять тип акта.")
+    }
 
     client
       .prepare(
         `UPDATE stock_documents
          SET type = ?, supplier_id = ?, supplier_name = ?, comment = ?, operation_at = ?,
-             overhead_total = ?, allocation_method = ?
+             overhead_total = ?, allocation_method = ?, paid_amount = ?
          WHERE id = ?`
       )
       .run(
@@ -276,6 +327,7 @@ function saveStockDocumentDraftInTransaction(
         operationAt,
         overheadTotal,
         allocationMethod,
+        paidAmount,
         documentId
       )
     client.prepare("DELETE FROM stock_document_items WHERE document_id = ?").run(documentId)
@@ -285,10 +337,10 @@ function saveStockDocumentDraftInTransaction(
       .prepare(
         `INSERT INTO stock_documents (
           number, type, status, supplier_id, supplier_name, comment, operation_at,
-          overhead_total, allocation_method, created_by_user_id, created_by_name
+          overhead_total, allocation_method, paid_amount, created_by_user_id, created_by_name
         ) VALUES (
           @number, @type, 'draft', @supplierId, @supplierName, @comment, @operationAt,
-          @overheadTotal, @allocationMethod, @createdByUserId, @createdByName
+          @overheadTotal, @allocationMethod, @paidAmount, @createdByUserId, @createdByName
         )`
       )
       .run({
@@ -300,6 +352,7 @@ function saveStockDocumentDraftInTransaction(
         operationAt,
         overheadTotal,
         allocationMethod,
+        paidAmount,
         createdByUserId: input.currentUser.id,
         createdByName: input.currentUser.name,
       })
@@ -308,9 +361,9 @@ function saveStockDocumentDraftInTransaction(
 
   const insertItem = client.prepare(
     `INSERT INTO stock_document_items (
-      document_id, product_code, product_name, qty, unit_cost, comment
+      document_id, product_code, product_name, qty, unit_cost, defect_qty, comment
     ) VALUES (
-      @documentId, @productCode, @productName, @qty, @unitCost, @comment
+      @documentId, @productCode, @productName, @qty, @unitCost, @defectQty, @comment
     )`
   )
 
@@ -326,6 +379,7 @@ function saveStockDocumentDraftInTransaction(
       productName: String(product.name),
       qty: item.qty,
       unitCost: item.unitCost,
+      defectQty: item.defectQty,
       comment: item.comment,
     })
   }
@@ -393,21 +447,33 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
   const lines = items.map((item) => {
     const qty = parsePositiveInteger(String(item.qty), "Количество")
     const unitCost = numberFromRow(item.unit_cost)
-    return { item, qty, unitCost, lineValue: qty * unitCost }
+    // Брак — только приход: на склад входит годное (qty − брак), но ОПЛАЧЕНО всё количество.
+    // Сумма строки — оплаченная (qty × цена), брак не уменьшает её, а поднимает себестоимость
+    // единицы годного (см. landedUnitCostOf).
+    const defectQty =
+      type === "stock_in" ? Math.max(0, Math.min(qty, Math.floor(numberFromRow(item.defect_qty)))) : 0
+    const effectiveQty = qty - defectQty
+    return { item, qty, defectQty, effectiveQty, unitCost, lineValue: qty * unitCost }
   })
   const goodsTotal = roundMoney(lines.reduce((sum, line) => sum + line.lineValue, 0))
 
   const allocated =
     type === "stock_in"
       ? allocateOverhead(
-          lines.map((line) => ({ id: Number(line.item.id), qty: line.qty, lineValue: line.lineValue })),
+          // Накладные ложатся только на строки, у которых есть годное (иначе доля потерялась бы —
+          // ей не на что лечь). Вес строки — полное оплаченное количество/стоимость.
+          lines.map((line) => ({
+            id: Number(line.item.id),
+            qty: line.effectiveQty > 0 ? line.qty : 0,
+            lineValue: line.effectiveQty > 0 ? line.lineValue : 0,
+          })),
           overheadTotal,
           allocationMethod
         )
       : new Map<number, number>()
 
   for (const line of lines) {
-    const { item, qty, unitCost } = line
+    const { item, qty, effectiveQty, unitCost } = line
     const productCode = String(item.product_code)
     const product = getProduct(client, productCode)
     if (!product) {
@@ -418,12 +484,16 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
     const beforeReserved = numberFromRow(product.reserved)
     // type здесь только stock_in|stock_out (count отсеян гейтом выше) — сужаем для StockMovementType.
     const movementType = type === "stock_in" ? "stock_in" : "stock_out"
-    const movementQty = type === "stock_in" ? qty : -qty
+    // Приход зачисляет только годное (qty − брак); списание уводит весь qty.
+    const movementQty = type === "stock_in" ? effectiveQty : -qty
     const afterStock = beforeStock + movementQty
 
     const allocatedOverhead = allocated.get(Number(item.id)) ?? 0
-    // landed-себестоимость единицы = (стоимость закупки строки + доля накладных) / количество.
-    const landedUnitCost = type === "stock_in" ? roundMoney((qty * unitCost + allocatedOverhead) / qty) : null
+    // Себестоимость единицы годного = (оплачено за ВСЁ количество + доля накладных) / годное:
+    // стоимость брака не пропадает, а размазывается по годным единицам (формула в stock-costing.ts).
+    // Вся строка — брак (effectiveQty = 0): на склад/себестоимость ничего не идёт, landed = NULL.
+    const landedUnitCost =
+      type === "stock_in" ? landedUnitCostOf({ qty, effectiveQty, unitCost, allocatedOverhead }) : null
 
     // Средневзвешенный пересчёт себестоимости — только приход, при флаге и landed > 0. Снимки
     // cost_before/after/stock_before_cost нужны для будущей корректировки; NULL — позиция не влияла.
@@ -435,8 +505,8 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
     if (recomputeCost && type === "stock_in" && landedUnitCost !== null && landedUnitCost > 0) {
       const basis = beforeStock > 0 ? beforeStock : 0
       newCost =
-        basis + qty > 0
-          ? roundMoney((basis * oldCost + qty * landedUnitCost) / (basis + qty))
+        basis + effectiveQty > 0
+          ? roundMoney((basis * oldCost + effectiveQty * landedUnitCost) / (basis + effectiveQty))
           : roundMoney(landedUnitCost)
       costBefore = oldCost
       costAfter = newCost
@@ -455,24 +525,27 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
       )
       .run(beforeStock, afterStock, allocatedOverhead, landedUnitCost, costBefore, costAfter, stockBeforeCost, item.id)
 
-    recordStockMovement(client, {
-      productCode,
-      type: movementType,
-      qty: movementQty,
-      beforeStock,
-      afterStock,
-      beforeReserved,
-      afterReserved: beforeReserved,
-      documentId,
-      userId: currentUser.id,
-      comment: `Акт ${String(document.number)}`,
-    })
+    // Нулевое движение (вся строка — брак) в журнал не пишем: остаток не менялся.
+    if (movementQty !== 0) {
+      recordStockMovement(client, {
+        productCode,
+        type: movementType,
+        qty: movementQty,
+        beforeStock,
+        afterStock,
+        beforeReserved,
+        afterReserved: beforeReserved,
+        documentId,
+        userId: currentUser.id,
+        comment: `Акт ${String(document.number)}`,
+      })
+    }
 
-    // Партия по строке прихода (если включён учёт по партиям и товар учитывается по партиям).
-    if (type === "stock_in" && trackLotsEnabled) {
+    // Партия по строке прихода — только на годное (если включён учёт по партиям).
+    if (type === "stock_in" && trackLotsEnabled && effectiveQty > 0) {
       maybeCreateReceiptLot(client, {
         product,
-        qty,
+        qty: effectiveQty,
         landedUnitCost,
         documentId,
         supplierId: documentSupplierId,
@@ -500,10 +573,10 @@ function postStockDocumentInTransaction(client: Database.Database, documentId: n
     .run(currentUser.id, currentUser.name, goodsTotal, landedTotal, documentId)
 }
 
-// Проведение корректировки: откатываем влияние исходного акта на остаток и применяем исправленные
-// позиции. Себестоимость (products.cost_price) НЕ пересчитывается — точное переигрывание
-// средневзвешенной невозможно (начальные остатки не в журнале); при необходимости правится вручную.
-// Исходный акт остаётся в истории (статус 'corrected'), журнал движений append-only.
+// Проведение корректировки (приход и списание): откатываем влияние исходного акта на остаток и
+// применяем исправленные позиции. Себестоимость (products.cost_price) НЕ пересчитывается — точное
+// переигрывание средневзвешенной невозможно (начальные остатки не в журнале); при необходимости
+// правится вручную. Исходный акт остаётся в истории (статус 'corrected'), журнал движений append-only.
 function postStockCorrectionInTransaction(client: Database.Database, correctionId: number, currentUser: CurrentUser) {
   const correction = client.prepare("SELECT * FROM stock_documents WHERE id = ?").get(correctionId) as
     | Record<string, unknown>
@@ -531,6 +604,13 @@ function postStockCorrectionInTransaction(client: Database.Database, correctionI
   if (original.corrected_by_document_id != null) {
     throw new Error("Этот акт уже скорректирован.")
   }
+  // Тип фиксируется при создании корректировки и защищён гейтом в save-функции; сверяем на случай
+  // прямых правок БД — формулы отката/применения ниже зависят от типа.
+  const correctionType = parseStockDocumentType(String(correction.type))
+  if (correctionType === "count" || correctionType !== parseStockDocumentType(String(original.type))) {
+    throw new Error("Тип корректировки не совпадает с типом исходного акта.")
+  }
+  const isStockIn = correctionType === "stock_in"
 
   const correctionItems = client
     .prepare("SELECT * FROM stock_document_items WHERE document_id = ? ORDER BY id")
@@ -545,22 +625,29 @@ function postStockCorrectionInTransaction(client: Database.Database, correctionI
   const origNumber = String(original.number)
   const corrNumber = String(correction.number)
 
-  // 1) Откат остатка исходного прихода: на каждую позицию -origQty.
+  // 1) Откат остатка исходного акта. Приход заносил на склад только годное (qty − брак) — снимаем
+  // ровно его (иначе строка с браком увела бы остаток в минус на величину брака). Списание уводило
+  // полное qty — возвращаем его целиком.
   for (const item of originalItems) {
     const productCode = String(item.product_code)
-    const qty = numberFromRow(item.qty)
+    const originalDefect = isStockIn ? Math.max(0, Math.floor(numberFromRow(item.defect_qty))) : 0
+    const affectedQty = Math.max(0, numberFromRow(item.qty) - originalDefect)
+    if (affectedQty === 0) {
+      continue
+    }
+    const revertDelta = isStockIn ? -affectedQty : affectedQty
     const product = getProduct(client, productCode)
     if (!product) {
       continue
     }
     const beforeStock = numberFromRow(product.stock)
     const beforeReserved = numberFromRow(product.reserved)
-    const afterStock = beforeStock - qty
+    const afterStock = beforeStock + revertDelta
     client.prepare("UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE code = ?").run(afterStock, productCode)
     recordStockMovement(client, {
       productCode,
       type: "adjustment",
-      qty: -qty,
+      qty: revertDelta,
       beforeStock,
       afterStock,
       beforeReserved,
@@ -571,16 +658,18 @@ function postStockCorrectionInTransaction(client: Database.Database, correctionI
     })
   }
 
-  // Откат партий исходного акта (если создавались) — безусловно, по document_id. Новые партии для
-  // исправленных строк создаются ниже при включённом учёте по партиям.
-  revertLotsForDocument(client, originalId, currentUser, `Откат партии: корректировка ${corrNumber}`)
+  // Откат партий исходного акта (если создавались) — по document_id. Партии есть только у приходов;
+  // новые партии для исправленных строк создаются ниже при включённом учёте по партиям.
+  if (isStockIn) {
+    revertLotsForDocument(client, originalId, currentUser, `Откат партии: корректировка ${corrNumber}`)
+  }
   const trackLotsEnabled = getTrackLotsEnabled(client)
   const correctionReceivedAt = correction.operation_at == null ? null : String(correction.operation_at)
   const correctionSupplierId = correction.supplier_id == null ? null : numberFromRow(correction.supplier_id)
   const correctionSupplierName = String(correction.supplier_name ?? "")
 
-  // 2) Применение исправленных позиций: +newQty. Накладные расходы распределяем для отображения
-  // (себестоимость не трогаем).
+  // 2) Применение исправленных позиций: приход — +годное, списание — −qty. Накладные расходы
+  // (только приход) распределяем для отображения; себестоимость не трогаем.
   const overheadRows = client
     .prepare("SELECT amount FROM stock_document_overheads WHERE document_id = ?")
     .all(correctionId) as Array<Record<string, unknown>>
@@ -590,17 +679,27 @@ function postStockCorrectionInTransaction(client: Database.Database, correctionI
   const lines = correctionItems.map((item) => {
     const qty = parsePositiveInteger(String(item.qty), "Количество")
     const unitCost = numberFromRow(item.unit_cost)
-    return { item, qty, unitCost, lineValue: qty * unitCost }
+    // Как и в обычном проведении: брак есть только у прихода (оплачено всё количество, на склад
+    // идёт годное qty − брак); у списания defect всегда 0 и уходит полное qty.
+    const defectQty = isStockIn ? Math.max(0, Math.min(qty, Math.floor(numberFromRow(item.defect_qty)))) : 0
+    const effectiveQty = qty - defectQty
+    return { item, qty, effectiveQty, unitCost, lineValue: qty * unitCost }
   })
   const goodsTotal = roundMoney(lines.reduce((sum, line) => sum + line.lineValue, 0))
-  const allocated = allocateOverhead(
-    lines.map((line) => ({ id: Number(line.item.id), qty: line.qty, lineValue: line.lineValue })),
-    overheadTotal,
-    allocationMethod
-  )
+  const allocated = isStockIn
+    ? allocateOverhead(
+        lines.map((line) => ({
+          id: Number(line.item.id),
+          qty: line.effectiveQty > 0 ? line.qty : 0,
+          lineValue: line.effectiveQty > 0 ? line.lineValue : 0,
+        })),
+        overheadTotal,
+        allocationMethod
+      )
+    : new Map<number, number>()
 
   for (const line of lines) {
-    const { item, qty, unitCost } = line
+    const { item, qty, effectiveQty, unitCost } = line
     const productCode = String(item.product_code)
     const product = getProduct(client, productCode)
     if (!product) {
@@ -608,9 +707,10 @@ function postStockCorrectionInTransaction(client: Database.Database, correctionI
     }
     const beforeStock = numberFromRow(product.stock)
     const beforeReserved = numberFromRow(product.reserved)
-    const afterStock = beforeStock + qty
+    const movementDelta = isStockIn ? effectiveQty : -qty
+    const afterStock = beforeStock + movementDelta
     const allocatedOverhead = allocated.get(Number(item.id)) ?? 0
-    const landedUnitCost = roundMoney((qty * unitCost + allocatedOverhead) / qty)
+    const landedUnitCost = isStockIn ? landedUnitCostOf({ qty, effectiveQty, unitCost, allocatedOverhead }) : null
 
     client.prepare("UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE code = ?").run(afterStock, productCode)
     client
@@ -620,24 +720,27 @@ function postStockCorrectionInTransaction(client: Database.Database, correctionI
          WHERE id = ?`
       )
       .run(beforeStock, afterStock, allocatedOverhead, landedUnitCost, item.id)
-    recordStockMovement(client, {
-      productCode,
-      type: "adjustment",
-      qty,
-      beforeStock,
-      afterStock,
-      beforeReserved,
-      afterReserved: beforeReserved,
-      documentId: correctionId,
-      userId: currentUser.id,
-      comment: `Корректировка акта ${origNumber}`,
-    })
+    // Вся строка прихода — брак: остаток не меняется, нулевое движение в журнал не пишем.
+    if (movementDelta !== 0) {
+      recordStockMovement(client, {
+        productCode,
+        type: "adjustment",
+        qty: movementDelta,
+        beforeStock,
+        afterStock,
+        beforeReserved,
+        afterReserved: beforeReserved,
+        documentId: correctionId,
+        userId: currentUser.id,
+        comment: `Корректировка акта ${origNumber}`,
+      })
+    }
 
-    // Новая партия по исправленной строке (привязана к корректировке).
-    if (trackLotsEnabled) {
+    // Новая партия по исправленной строке (привязана к корректировке) — только приход и только годное.
+    if (isStockIn && trackLotsEnabled && effectiveQty > 0) {
       maybeCreateReceiptLot(client, {
         product,
-        qty,
+        qty: effectiveQty,
         landedUnitCost,
         documentId: correctionId,
         supplierId: correctionSupplierId,
@@ -665,8 +768,10 @@ function postStockCorrectionInTransaction(client: Database.Database, correctionI
     .run(correctionId, originalId)
 }
 
-// Создаёт черновик корректировки по проведённому приходному акту: копирует позиции (с ценами),
-// накладные расходы, поставщика и метод распределения. Возвращает id нового черновика.
+// Создаёт черновик корректировки по проведённому акту (приход или списание): копирует позиции
+// (с ценами), накладные расходы, поставщика и метод распределения. Тип корректировки наследуется
+// от исходного. Если незакрытый черновик корректировки уже существует — возвращает его (повторное
+// нажатие «Редактировать» продолжает начатую правку, а не плодит дубликаты).
 export function createStockCorrectionDraft(originalDocumentId: number, currentUser: CurrentUser) {
   const client = db()
   const run = client.transaction(() => {
@@ -676,35 +781,51 @@ export function createStockCorrectionDraft(originalDocumentId: number, currentUs
     if (!original) {
       throw new Error("Акт склада не найден.")
     }
-    if (parseStockDocumentType(String(original.type)) !== "stock_in") {
-      throw new Error("Корректировать можно только приходный акт.")
+    const originalType = parseStockDocumentType(String(original.type))
+    if (originalType === "count") {
+      throw new Error("Инвентаризацию нельзя корректировать — проведите новую инвентаризацию.")
+    }
+    // Сначала точная причина: у скорректированного акта status уже не 'posted', и generic-сообщение
+    // «можно только проведённый» скрывало бы, что исправление уже существует.
+    if (original.corrected_by_document_id != null) {
+      throw new Error("Этот акт уже скорректирован.")
     }
     if (String(original.status) !== "posted") {
       throw new Error("Корректировать можно только проведённый акт.")
     }
-    if (original.corrected_by_document_id != null) {
-      throw new Error("Этот акт уже скорректирован.")
+
+    const existingDraft = client
+      .prepare("SELECT id FROM stock_documents WHERE corrects_document_id = ? AND status = 'draft' ORDER BY id DESC LIMIT 1")
+      .get(originalDocumentId) as { id: number } | undefined
+    if (existingDraft) {
+      return Number(existingDraft.id)
     }
 
-    const number = generateStockDocumentNumberInTransaction(client, "stock_in")
+    const number = generateStockDocumentNumberInTransaction(client, originalType)
     const inserted = client
       .prepare(
         `INSERT INTO stock_documents (
           number, type, status, supplier_id, supplier_name, comment, operation_at,
-          overhead_total, allocation_method, corrects_document_id, created_by_user_id, created_by_name
+          overhead_total, allocation_method, paid_amount, corrects_document_id,
+          created_by_user_id, created_by_name
         ) VALUES (
-          @number, 'stock_in', 'draft', @supplierId, @supplierName, @comment, @operationAt,
-          @overheadTotal, @allocationMethod, @correctsId, @createdByUserId, @createdByName
+          @number, @type, 'draft', @supplierId, @supplierName, @comment, @operationAt,
+          @overheadTotal, @allocationMethod, @paidAmount, @correctsId,
+          @createdByUserId, @createdByName
         )`
       )
       .run({
         number,
+        type: originalType,
         supplierId: original.supplier_id ?? null,
         supplierName: String(original.supplier_name ?? ""),
         comment: String(original.comment ?? ""),
         operationAt: original.operation_at ?? null,
         overheadTotal: numberFromRow(original.overhead_total),
         allocationMethod: normalizeAllocationMethod(original.allocation_method),
+        // Оплату переносим в корректировку: исходный акт получает статус corrected и из долга
+        // выпадает — иначе уже уплаченная сумма «потерялась» бы и долг вырос.
+        paidAmount: numberFromRow(original.paid_amount),
         correctsId: originalDocumentId,
         createdByUserId: currentUser.id,
         createdByName: currentUser.name,
@@ -715,8 +836,8 @@ export function createStockCorrectionDraft(originalDocumentId: number, currentUs
       .prepare("SELECT * FROM stock_document_items WHERE document_id = ? ORDER BY id")
       .all(originalDocumentId) as Array<Record<string, unknown>>
     const insertItem = client.prepare(
-      `INSERT INTO stock_document_items (document_id, product_code, product_name, qty, unit_cost, comment)
-       VALUES (@documentId, @productCode, @productName, @qty, @unitCost, @comment)`
+      `INSERT INTO stock_document_items (document_id, product_code, product_name, qty, unit_cost, defect_qty, comment)
+       VALUES (@documentId, @productCode, @productName, @qty, @unitCost, @defectQty, @comment)`
     )
     for (const item of items) {
       insertItem.run({
@@ -725,6 +846,8 @@ export function createStockCorrectionDraft(originalDocumentId: number, currentUs
         productName: String(item.product_name ?? ""),
         qty: numberFromRow(item.qty),
         unitCost: numberFromRow(item.unit_cost),
+        // Брак копируем: иначе корректировка «теряла» бы брак исходного акта и заносила его на склад.
+        defectQty: numberFromRow(item.defect_qty),
         comment: String(item.comment ?? ""),
       })
     }
@@ -791,6 +914,17 @@ export function createAndPostStockDocument(formData: FormData, type: StockDocume
   })
 
   return createAndPost()
+}
+
+// Незакрытый черновик корректировки по акту (если есть) — чтобы страница акта вела «Редактировать»
+// в уже начатую корректировку, а не предлагала создать новую.
+export function getDraftCorrectionId(documentId: number): number | null {
+  const client = db()
+  const row = client
+    .prepare("SELECT id FROM stock_documents WHERE corrects_document_id = ? AND status = 'draft' ORDER BY id DESC LIMIT 1")
+    .get(documentId) as { id: number } | undefined
+
+  return row ? Number(row.id) : null
 }
 
 export function cancelStockDocument(documentId: number) {

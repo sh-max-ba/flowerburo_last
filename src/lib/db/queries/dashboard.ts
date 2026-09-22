@@ -15,6 +15,7 @@ import type {
 } from "@/lib/db-row"
 import { normalizeDiscountType } from "@/lib/pricing"
 import type { DashboardData, Order, OrderItem, ProductRow } from "../types"
+import { activeDealOrderStatuses } from "../types"
 import type Database from "better-sqlite3"
 import { db } from "../connection"
 import { getDraftPriceChanges } from "../domain/order-lifecycle"
@@ -24,9 +25,13 @@ import { listUsers } from "./users"
 import { listSuppliers } from "./suppliers"
 import { listBouquetTemplates } from "./bouquets"
 import { historyOperationsQuery, stockMovementsQuery } from "./history"
+import { loadOrderImagesByOrder } from "./order-images"
 
 export function getDashboardData(): DashboardData {
   const client = db()
+  // Без LIMIT: раньше стоял `LIMIT 234` — ровно столько товаров было в первичном импорте из
+  // МойСклад. Каталог вырос, и позиции, попадавшие в хвост сортировки (нормальный остаток +
+  // конец алфавита), исчезали из кассы, стола заказов, букетов, склада и актов.
   const products = (
     client
       .prepare(
@@ -34,8 +39,7 @@ export function getDashboardData(): DashboardData {
          WHERE COALESCE(is_active, 1) = 1
          ORDER BY
           CASE WHEN stock - reserved < 0 THEN 0 WHEN stock - reserved <= 3 THEN 1 ELSE 2 END,
-          name COLLATE NOCASE
-         LIMIT 234`
+          name COLLATE NOCASE`
       )
       .all() as ProductRow[]
   ).map(mapProductRow)
@@ -81,20 +85,37 @@ export function getDashboardData(): DashboardData {
   ).map((shift) => mapShift(shift, client))
   const shiftDetails = shifts.map((shift) => getShiftDetails(shift.id, client))
 
+  // Активные заказы отдаём ЦЕЛИКОМ. Раньше на весь список стоял общий `LIMIT 80`, и окно забивали
+  // закрытые заказы: 21 незакрытый заказ не показывался на столе вообще — и закрыть его было нечем.
+  // Лимит оставлен только на закрытые (Выдан/Отменен): это лента истории, её хвост на столе не нужен.
+  const closedOrdersLimit = 80
+  const activeStatusPlaceholders = activeDealOrderStatuses.map(() => "?").join(", ")
   const orderRows = client
     .prepare(
       `SELECT ${ORDER_LIST_COLUMNS}
-       FROM orders
-       WHERE status != 'Черновик'
-       ORDER BY due_at ASC, created_at DESC
-       LIMIT 80`
+         FROM orders
+        WHERE status IN (${activeStatusPlaceholders})
+       UNION ALL
+       SELECT * FROM (
+         SELECT ${ORDER_LIST_COLUMNS}
+           FROM orders
+          WHERE status != 'Черновик' AND status NOT IN (${activeStatusPlaceholders})
+          ORDER BY COALESCE(completed_at, updated_at, created_at) DESC
+          LIMIT ${closedOrdersLimit}
+       )
+       ORDER BY dueAt ASC, createdAt DESC`
     )
-    .all() as Array<Record<string, unknown>>
+    .all(...activeDealOrderStatuses, ...activeDealOrderStatuses) as Array<Record<string, unknown>>
 
-  const itemsByOrder = loadOrderItemsByOrder(client, orderRows.map((order) => numberFromRow(order.id)))
+  const orderIds = orderRows.map((order) => numberFromRow(order.id))
+  const itemsByOrder = loadOrderItemsByOrder(client, orderIds)
+  const imagesByOrder = loadOrderImagesByOrder(client, orderIds)
 
   const orders = orderRows
-    .map((row) => mapOrderRow(row, itemsByOrder.get(numberFromRow(row.id)) ?? []))
+    .map((row) => {
+      const orderId = numberFromRow(row.id)
+      return mapOrderRow(row, itemsByOrder.get(orderId) ?? [], imagesByOrder.get(orderId) ?? [])
+    })
     .sort((left, right) => orderStatusSort(left.status) - orderStatusSort(right.status))
 
   const movements = (client
@@ -105,13 +126,14 @@ export function getDashboardData(): DashboardData {
     .prepare(stockMovementsQuery(120))
     .all() as MovementRow[]).map(rowToMovement)
 
+  // Без LIMIT по той же причине, что и товары выше: клиент, не попавший в выдачу, просто
+  // перестаёт находиться в кассе и заказах, без всякой ошибки. Строки лёгкие (4 поля).
   const customers = (client
     .prepare(
       `SELECT id, name, COALESCE(phone, '') as phone,
         COALESCE(default_discount_percent, 0) as defaultDiscountPercent
        FROM customers
-       ORDER BY name COLLATE NOCASE, id DESC
-       LIMIT 200`
+       ORDER BY name COLLATE NOCASE, id DESC`
     )
     .all() as CustomerOptionRow[]).map(rowToCustomerOption)
 
@@ -161,6 +183,7 @@ const ORDER_LIST_COLUMNS = `id, number, customer_id as customerId, deal_id as de
   COALESCE(NULLIF(total_before_discount, 0), total) as totalBeforeDiscount,
   total, COALESCE(prepaid, 0) as prepaid,
   COALESCE(paid, 0) as paid, draft_prepaid_method as draftPrepaidMethod,
+  (SELECT COALESCE(SUM(amount), 0) FROM order_pending_prepayments WHERE order_id = orders.id) as pendingPrepaid,
   COALESCE(delivery_price, 0) as deliveryPrice,
   COALESCE(courier_payout, 0) as courierPayout,
   COALESCE(delivery_payout_paid, 0) as deliveryPayoutPaid,
@@ -236,9 +259,12 @@ export function listOrderDrafts(): DraftOrderView[] {
   const orderRows = client
     .prepare(`SELECT ${ORDER_LIST_COLUMNS} FROM orders WHERE status = 'Черновик' ORDER BY created_at DESC LIMIT 200`)
     .all() as Array<Record<string, unknown>>
-  const itemsByOrder = loadOrderItemsByOrder(client, orderRows.map((order) => numberFromRow(order.id)))
+  const orderIds = orderRows.map((order) => numberFromRow(order.id))
+  const itemsByOrder = loadOrderItemsByOrder(client, orderIds)
+  const imagesByOrder = loadOrderImagesByOrder(client, orderIds)
   return orderRows.map((row) => {
-    const order = mapOrderRow(row, itemsByOrder.get(numberFromRow(row.id)) ?? [])
+    const orderId = numberFromRow(row.id)
+    const order = mapOrderRow(row, itemsByOrder.get(orderId) ?? [], imagesByOrder.get(orderId) ?? [])
     return { ...order, priceChanges: getDraftPriceChanges(order.id) }
   })
 }

@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3"
-import { initDb, listUsers, type CurrentUser, type Order, type Product, type Sale } from "@/lib/db"
-import { mapOrderRow } from "@/lib/db-row"
+import { initDb, listUsers, loadOrderImagesByOrder, type CurrentUser, type Order, type Product, type Sale } from "@/lib/db"
+import { mapOrderRow, numberFromRow } from "@/lib/db-row"
 import { parseForm } from "@/lib/forms/parse"
 import { CustomerCreateSchema, CustomerUpdateSchema } from "@/lib/forms/schemas"
 import {
@@ -164,11 +164,16 @@ export function listCustomers(options: { search?: string } = {}) {
   const conditions: string[] = []
 
   if (search) {
-    conditions.push(
-      "(customers.name LIKE @search OR customers.phone LIKE @search OR customers.normalized_phone LIKE @phone)"
-    )
+    const nameOrPhone = ["customers.name LIKE @search", "customers.phone LIKE @search"]
     params.search = `%${search}%`
-    params.phone = `%${search.replace(/\D/g, "")}%`
+    // normalized_phone подключается только когда в запросе есть цифры: пустой паттерн ('%%')
+    // матчил всех клиентов с телефоном на любой текстовый запрос.
+    const digits = search.replace(/\D/g, "")
+    if (digits) {
+      nameOrPhone.push("customers.normalized_phone LIKE @phone")
+      params.phone = `%${digits}%`
+    }
+    conditions.push(`(${nameOrPhone.join(" OR ")})`)
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""
@@ -323,7 +328,12 @@ export function listDealOrders(dealId: number): Order[] {
     )
     .all(dealId) as Array<Record<string, unknown>>
 
-  return rows.map((row) => mapOrderRow(row))
+  // Изображения нужны карточке сделки (показ у активного заказа и предзаполнение «Изменить заказ»).
+  const imagesByOrder = loadOrderImagesByOrder(
+    db(),
+    rows.map((row) => numberFromRow(row.id))
+  )
+  return rows.map((row) => mapOrderRow(row, [], imagesByOrder.get(numberFromRow(row.id)) ?? []))
 }
 
 export function listCustomerSales(customerId: number): Sale[] {

@@ -27,6 +27,8 @@ public/uploads/products/*
 !public/uploads/products/.gitkeep
 public/uploads/bouquets/*
 !public/uploads/bouquets/.gitkeep
+public/uploads/orders/*
+!public/uploads/orders/.gitkeep
 
 # misc
 .DS_Store

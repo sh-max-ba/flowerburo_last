@@ -11,6 +11,7 @@ import { DealOrderInputSchema, DealOrderUpdateInputSchema, DealPaymentInputSchem
 import { calculateComponentLineTotal, itemsForCommercialTotals } from "../queries/commercial"
 import { requireOpenShift } from "../queries/shifts"
 import { getAllowOversellOrders } from "../queries/app-settings"
+import { syncOrderImagesFromForm } from "../queries/order-images"
 import { buildOrderItems } from "./order-lifecycle"
 
 export function createOrderFromDeal(formData: FormData, currentUser: CurrentUser) {
@@ -234,6 +235,8 @@ export function createOrderFromDeal(formData: FormData, currentUser: CurrentUser
       })
     }
 
+    syncOrderImagesFromForm(client, orderId, formData)
+
     const orderStage = client
       .prepare(
         `SELECT id FROM deal_stages
@@ -450,6 +453,8 @@ export function updateOrderFromDeal(formData: FormData, currentUser: CurrentUser
         userId: currentUser.id,
       })
 
+    syncOrderImagesFromForm(client, orderId, formData)
+
     // Синхронизируем итоги сделки с заказом (deal_items уже переписаны выше).
     client
       .prepare(
@@ -619,6 +624,8 @@ export function updateOrder(
         courierPayout,
         userId: currentUser.id,
       })
+
+    syncOrderImagesFromForm(client, orderId, formData)
   })
 
   update()

@@ -19,7 +19,13 @@ import { paymentMethods } from "../types"
 import type { PaymentMethod } from "../types"
 import { calculateComponentLineTotal, itemsForCommercialTotals, resolveCashCustomer } from "../queries/commercial"
 import { requireOpenShift } from "../queries/shifts"
+import {
+  addPendingPrepayment,
+  discardPendingPrepayments,
+  postPendingPrepayments,
+} from "../queries/pending-prepayments"
 import { getAllowOversellOrders } from "../queries/app-settings"
+import { deleteOrderImagesForOrder, syncOrderImagesFromForm } from "../queries/order-images"
 
 export function buildOrderItems(client: Database.Database, formData: FormData) {
   const productCodes = formData.getAll("itemProductCode").map((value) => clean(value))
@@ -86,7 +92,7 @@ export function buildOrderItems(client: Database.Database, formData: FormData) {
   })
 }
 
-export function createOrder(formData: FormData, currentUser: CurrentUser) {
+export function createOrder(formData: FormData, currentUser: CurrentUser): { orderId: number; prepaid: number } {
   const client = db()
   const customerSnapshot = resolveCashCustomer(client, formData)
   const customer = customerSnapshot.name || clean(formData.get("customer")) || clean(formData.get("customer_name"))
@@ -113,7 +119,10 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
       throw new Error("Предоплата не может быть больше суммы заказа.")
     }
 
-    const shift = prepaid > 0 ? requireOpenShift(client) : null
+    // Предоплата (возможно смешанная) — ОТЛОЖЕННАЯ: части разбираем и проверяем сейчас, а в кассу
+    // проводим при выдаче заказа, в смену выдачи (см. queries/pending-prepayments). Открытая смена
+    // для создания заказа с предоплатой поэтому не нужна.
+    const prepaidParts = prepaid > 0 ? parsePaymentParts(formData, prepaid) : []
     const order = client
       .prepare(
         `INSERT INTO orders (
@@ -195,31 +204,32 @@ export function createOrder(formData: FormData, currentUser: CurrentUser) {
       })
     }
 
-    if (shift && prepaid > 0) {
-      // Предоплата, возможно смешанная: одна проводка на каждую часть со своим способом.
-      for (const part of parsePaymentParts(formData, prepaid)) {
-        recordCashTransaction(client, {
-          shiftId: shift.id,
-          orderId,
-          customerId: customerSnapshot.id,
-          userId: currentUser.id,
-          type: "prepayment",
-          paymentMethod: part.method,
-          amount: part.amount,
-          comment: `Предоплата по заказу ${number}`,
-        })
-      }
+    // Изображения-референсы: загружены заранее, здесь только привязываем к созданному заказу.
+    syncOrderImagesFromForm(client, orderId, formData)
+
+    // Части предоплаты запоминаем (способ + сумма + кто принял); кассовая проводка — при выдаче.
+    for (const part of prepaidParts) {
+      addPendingPrepayment(client, {
+        orderId,
+        userId: currentUser.id,
+        paymentMethod: part.method,
+        amount: part.amount,
+      })
     }
 
     addMovement(client, {
       userId: currentUser.id,
       type: "order_create",
       total,
-      note: `Создан заказ ${number}: ${customer}`,
+      note:
+        `Создан заказ ${number}: ${customer}` +
+        (prepaid > 0 ? ` (предоплата ${roundMoney(prepaid)} — в кассу при выдаче)` : ""),
     })
+    return orderId
   })
 
-  saveOrder()
+  const orderId = saveOrder()
+  return { orderId, prepaid: roundMoney(prepaid) }
 }
 
 // Мягкий разбор позиций черновика: пропускаем пустые строки и несуществующие товары / qty<=0,
@@ -283,7 +293,8 @@ function parseDraftFields(formData: FormData) {
     orderDiscountValue: Math.max(0, toNumber(formData.get("orderDiscountValue"))),
     // Предоплата черновика — НАМЕРЕНИЕ: сумма и способ хранятся в черновике, в кассу ничего
     // не проводится (по решению клиента вся сумма попадает в учёт в «конечной» смене).
-    // Проводка предоплаты создаётся при отправке в работу — см. finalizeOrderDraft.
+    // При отправке в работу намерение становится отложенной предоплатой заказа (см.
+    // finalizeOrderDraft), а кассовая проводка создаётся при выдаче заказа — в смену выдачи.
     // total'ом не ограничиваем: у черновика состав может быть пустым/неполным.
     prepaid: Math.max(0, toNumber(formData.get("prepaid"))),
     prepaidMethod: parseDraftPrepaidMethod(formData),
@@ -291,7 +302,7 @@ function parseDraftFields(formData: FormData) {
 }
 
 // Черновик хранит ОДИН способ предоплаты-намерения (draft_prepaid_method): смешанную тихо
-// урезать до первого способа нельзя — при отправке в работу провелось бы не то, что обещали.
+// урезать до первого способа нельзя — при выдаче провелось бы не то, что обещали.
 function parseDraftPrepaidMethod(formData: FormData) {
   if (clean(formData.get("paymentMethod2"))) {
     throw new Error(
@@ -395,6 +406,7 @@ export function createOrderDraft(formData: FormData, currentUser: CurrentUser) {
     const number = generateOrderNumber(orderId)
     client.prepare("UPDATE orders SET number = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(number, orderId)
     writeDraftItems(client, orderId, items)
+    syncOrderImagesFromForm(client, orderId, formData)
     return orderId
   })
 
@@ -405,8 +417,19 @@ export function createOrderDraft(formData: FormData, currentUser: CurrentUser) {
 export function updateOrderDraft(orderId: number, formData: FormData, currentUser: CurrentUser) {
   const client = db()
   const save = client.transaction(() => {
-    const head = client.prepare("SELECT status, is_reserved FROM orders WHERE id = ?").get(orderId) as
-      | { status: string; is_reserved: number }
+    const head = client
+      .prepare(
+        "SELECT status, customer_id, customer, phone, order_discount_type, order_discount_value FROM orders WHERE id = ?"
+      )
+      .get(orderId) as
+      | {
+          status: string
+          customer_id: number | null
+          customer: string | null
+          phone: string | null
+          order_discount_type: string | null
+          order_discount_value: number | null
+        }
       | undefined
     if (!head) {
       throw new Error("Заказ не найден.")
@@ -415,18 +438,28 @@ export function updateOrderDraft(orderId: number, formData: FormData, currentUse
       throw new Error("Редактировать так можно только черновик.")
     }
     const customerSnapshot = resolveCashCustomer(client, formData)
-    const customer = customerSnapshot.name || clean(formData.get("customer")) || clean(formData.get("customer_name"))
+    // Имя и привязку клиента берём из формы; если форма их не прислала (старая вкладка без поля имени) —
+    // сохраняем уже записанные в черновике, чтобы правка прочих полей не сбрасывала клиента.
+    const customer = customerSnapshot.name || String(head.customer ?? "")
     if (!customer) {
       throw new Error("Укажите имя клиента.")
     }
-    const phone = customerSnapshot.phone || clean(formData.get("phone"))
+    const phone = customerSnapshot.phone || String(head.phone ?? "")
+    const customerId = customerSnapshot.id ?? (head.customer_id != null ? Number(head.customer_id) : null)
     const fields = parseDraftFields(formData)
     const items = buildDraftOrderItems(client, formData)
-    const totals = calculateCommercialTotals(
-      itemsForCommercialTotals(items),
-      fields.orderDiscountType,
-      fields.orderDiscountValue
-    )
+    // Скидку на чек трогаем ТОЛЬКО если форма прислала поле (как prepaid ниже и как updateOrder):
+    // старая вкладка без поля «Скидка на чек» не должна молча обнулять уже записанную скидку.
+    const discountType = formData.has("orderDiscountType")
+      ? fields.orderDiscountType
+      : normalizeDiscountType(String(head.order_discount_type ?? "none"))
+    const discountValue =
+      discountType === "none"
+        ? 0
+        : formData.has("orderDiscountValue")
+          ? fields.orderDiscountValue
+          : numberFromRow(head.order_discount_value)
+    const totals = calculateCommercialTotals(itemsForCommercialTotals(items), discountType, discountValue)
     const total = totals.total + fields.deliveryPrice
     client
       .prepare(
@@ -442,7 +475,7 @@ export function updateOrderDraft(orderId: number, formData: FormData, currentUse
       .run({
         orderId,
         updatedByUserId: currentUser.id,
-        customerId: customerSnapshot.id,
+        customerId,
         customer,
         phone,
         recipientPhone: fields.recipientPhone,
@@ -452,8 +485,8 @@ export function updateOrderDraft(orderId: number, formData: FormData, currentUse
         dueAt: fields.dueAt,
         itemsTotalBeforeDiscount: totals.itemsTotalBeforeDiscount,
         itemsDiscountTotal: totals.itemsDiscountTotal,
-        orderDiscountType: fields.orderDiscountType,
-        orderDiscountValue: fields.orderDiscountValue,
+        orderDiscountType: discountType,
+        orderDiscountValue: discountValue,
         orderDiscountAmount: totals.dealDiscountAmount,
         totalBeforeDiscount: totals.itemsTotalBeforeDiscount + fields.deliveryPrice,
         total,
@@ -469,6 +502,7 @@ export function updateOrderDraft(orderId: number, formData: FormData, currentUse
         .run(fields.prepaid, fields.prepaid > 0 ? fields.prepaidMethod : null, orderId)
     }
     writeDraftItems(client, orderId, items)
+    syncOrderImagesFromForm(client, orderId, formData)
     return orderId
   })
   return save()
@@ -500,7 +534,7 @@ export function finalizeOrderDraft(
   orderId: number,
   currentUser: CurrentUser,
   options: { priceMode?: "keep" | "current" } = {}
-) {
+): { prepaid: number } {
   const client = db()
   const priceMode = options.priceMode === "current" ? "current" : "keep"
   const run = client.transaction(() => {
@@ -564,7 +598,6 @@ export function finalizeOrderDraft(
     if (prepaid > total && total >= 0) {
       throw new Error("Предоплата не может быть больше суммы заказа.")
     }
-    const shift = prepaid > 0 ? requireOpenShift(client) : null
 
     // Обновляем цены/итоги позиций (на случай priceMode='current' или пересчёта скидок).
     const updateItem = client.prepare(
@@ -607,18 +640,15 @@ export function finalizeOrderDraft(
       })
     }
 
-    if (shift && prepaid > 0) {
-      // Момент, когда предоплата-намерение черновика становится деньгами в кассе: проводим
-      // в ТЕКУЩУЮ смену способом, выбранным при сохранении черновика (draft_prepaid_method).
-      recordCashTransaction(client, {
-        shiftId: shift.id,
+    if (prepaid > 0) {
+      // Предоплата-намерение черновика становится ОТЛОЖЕННОЙ предоплатой заказа: способ — тот,
+      // что выбран при сохранении черновика (draft_prepaid_method), принял — кто отправил в работу.
+      // В кассу проведётся при выдаче заказа, в смену выдачи (как у заказа, созданного напрямую).
+      addPendingPrepayment(client, {
         orderId,
-        customerId: order.customer_id == null ? null : numberFromRow(order.customer_id),
         userId: currentUser.id,
-        type: "prepayment",
         paymentMethod: parsePaymentMethod(String(order.draft_prepaid_method ?? "") || "cash"),
         amount: prepaid,
-        comment: `Предоплата по заказу ${number} (из черновика)`,
       })
     }
 
@@ -626,11 +656,14 @@ export function finalizeOrderDraft(
       userId: currentUser.id,
       type: "order_status",
       total,
-      note: `Заказ ${number}: отправлен в работу`,
+      note:
+        `Заказ ${number}: отправлен в работу` +
+        (prepaid > 0 ? ` (предоплата ${roundMoney(prepaid)} — в кассу при выдаче)` : ""),
     })
+    return roundMoney(prepaid)
   })
 
-  run()
+  return { prepaid: run() }
 }
 
 // Физическое удаление черновика (резерва/оплат нет — освобождать нечего: предоплата черновика
@@ -650,6 +683,7 @@ export function deleteDraftOrder(orderId: number, currentUser: CurrentUser) {
       throw new Error("Удалять можно только черновик.")
     }
     client.prepare("DELETE FROM order_items WHERE order_id = ?").run(orderId)
+    deleteOrderImagesForOrder(client, orderId)
     client.prepare("DELETE FROM orders WHERE id = ?").run(orderId)
     const prepaidNote = numberFromRow(head.prepaid) > 0 ? `, предоплата-намерение ${numberFromRow(head.prepaid)} не проводилась` : ""
     addMovement(client, {
@@ -868,7 +902,7 @@ function applyOrderPayment(
 
 export function completePickupOrder(orderId: number, formData: FormData, currentUser: CurrentUser) {
   const client = db()
-  let acceptedPayment = false
+  const result = { acceptedPayment: false, paidCourier: false, postedPrepaid: 0 }
 
   const complete = client.transaction(() => {
     let { order } = getOrderWithItems(client, orderId)
@@ -878,9 +912,19 @@ export function completePickupOrder(orderId: number, formData: FormData, current
 
     // Выручка по заказу садится на смену завершения, поэтому выдача требует открытой смены.
     const shift = requireOpenShift(client)
+    // Отложенная предоплата (принята при создании) проводится в кассу ИМЕННО сейчас — в смену
+    // выдачи, до доплаты, чтобы в ленте кассы предоплата шла раньше доплаты.
+    result.postedPrepaid = postPendingPrepayments(client, {
+      orderId,
+      orderNumber: String(order.number ?? `#${orderId}`),
+      shiftId: shift.id,
+      customerId: numberFromRow(order.customer_id) || null,
+      dealId: numberFromRow(order.deal_id) || null,
+      fallbackUserId: currentUser.id,
+    })
     const beforeBalance = numberFromRow(order.total) - numberFromRow(order.paid)
     if (beforeBalance > 0) {
-      acceptedPayment = applyOrderPayment(client, orderId, formData, shift.id, currentUser) > 0
+      result.acceptedPayment = applyOrderPayment(client, orderId, formData, shift.id, currentUser) > 0
     }
 
     order = getOrderWithItems(client, orderId).order
@@ -905,12 +949,12 @@ export function completePickupOrder(orderId: number, formData: FormData, current
   })
 
   complete()
-  return acceptedPayment
+  return result
 }
 
 export function handOrderToCourier(orderId: number, formData: FormData, currentUser: CurrentUser) {
   const client = db()
-  const result = { acceptedPayment: false, paidCourier: false }
+  const result = { acceptedPayment: false, paidCourier: false, postedPrepaid: 0 }
 
   const handOver = client.transaction(() => {
     let { order } = getOrderWithItems(client, orderId)
@@ -924,6 +968,15 @@ export function handOrderToCourier(orderId: number, formData: FormData, currentU
       numberFromRow(order.courier_payout) > 0 && Number(order.delivery_payout_paid ?? 0) !== 1 && wantsCourierCash
     // Передача — завершение заказа: выручка садится на смену завершения, поэтому нужна открытая смена.
     const shift = requireOpenShift(client)
+    // Отложенная предоплата (принята при создании) проводится в кассу в смену передачи курьеру.
+    result.postedPrepaid = postPendingPrepayments(client, {
+      orderId,
+      orderNumber: String(order.number ?? `#${orderId}`),
+      shiftId: shift.id,
+      customerId: numberFromRow(order.customer_id) || null,
+      dealId: numberFromRow(order.deal_id) || null,
+      fallbackUserId: currentUser.id,
+    })
 
     if (needsPayment) {
       result.acceptedPayment = applyOrderPayment(client, orderId, formData, shift.id, currentUser) > 0
@@ -981,21 +1034,31 @@ export function handOrderToCourier(orderId: number, formData: FormData, currentU
 // Возврат клиенту денег, фактически полученных по заказу, при его отмене.
 // Возвращает сумму тем же способом оплаты, которым она поступала (это важно для
 // expectedCash: в кассу влияет только cash_refund со способом "cash").
+// Отложенная (ещё не проведённая) предоплата в кассу не попадала — по ней кассовой операции
+// нет: части снимаются, а сумма возвращается отдельно (pendingReturned) для сообщения менеджеру.
 function refundOrderPayments(
   client: Database.Database,
   orderId: number,
   order: Record<string, unknown>,
-  currentUser: CurrentUser
-) {
+  currentUser: CurrentUser,
+  reason = ""
+): { refunded: number; pendingReturned: number; pendingParts: Array<{ paymentMethod: PaymentMethod; amount: number }> } {
   const orderPaid = roundMoney(numberFromRow(order.paid))
   if (orderPaid <= 0.009) {
-    return 0
+    return { refunded: 0, pendingReturned: 0, pendingParts: [] }
   }
 
-  const shift = requireOpenShift(client)
   const customerId = numberFromRow(order.customer_id) || null
   const dealId = numberFromRow(order.deal_id) || null
   const orderLabel = String(order.number ?? `#${orderId}`)
+  const reasonSuffix = reason ? `. Причина: ${reason}` : ""
+
+  // Непроведённая предоплата: из paid вычитаем, через кассу не возвращаем (денег в кассе не было).
+  const pendingParts = discardPendingPrepayments(client, orderId)
+  const pendingReturned = roundMoney(pendingParts.reduce((sum, part) => sum + part.amount, 0))
+  const postedPaid = roundMoney(Math.max(0, orderPaid - pendingReturned))
+  // Открытая смена нужна только для кассового возврата проведённых денег.
+  const shift = postedPaid > 0.009 ? requireOpenShift(client) : null
 
   // Группируем приходы по способу И смене прихода: возврат зеркалит способ, а source_shift_id
   // = смена, в которой деньги были получены (по ней нетируется выручка прошлой смены, решение №3).
@@ -1009,7 +1072,7 @@ function refundOrderPayments(
     )
     .all(orderId) as Array<{ paymentMethod: PaymentMethod; sourceShiftId: number; amount: number }>
 
-  let remaining = orderPaid
+  let remaining = postedPaid
   // Возврат проводится в ТЕКУЩЕЙ открытой смене (физически деньги выходят сейчас — shift.id,
   // по нему считается expectedCash). source_shift_id = смена исходного прихода. Для возврата
   // в той же смене source == текущая → пометки нет и поведение прежнее.
@@ -1018,18 +1081,19 @@ function refundOrderPayments(
     if (value <= 0.009) {
       return
     }
-    const crossShiftNote = sourceShiftId && sourceShiftId !== shift.id ? ` (за смену #${sourceShiftId})` : ""
+    const currentShift = shift ?? requireOpenShift(client)
+    const crossShiftNote = sourceShiftId && sourceShiftId !== currentShift.id ? ` (за смену #${sourceShiftId})` : ""
     recordCashTransaction(client, {
-      shiftId: shift.id,
+      shiftId: currentShift.id,
       orderId,
       customerId,
       dealId,
       userId: currentUser.id,
-      sourceShiftId: sourceShiftId ?? shift.id,
+      sourceShiftId: sourceShiftId ?? currentShift.id,
       type: "cash_refund",
       paymentMethod,
       amount: value,
-      comment: `Возврат при отмене заказа ${orderLabel}${suffix}${crossShiftNote}`,
+      comment: `Возврат при отмене заказа ${orderLabel}${suffix}${crossShiftNote}${reasonSuffix}`,
     })
     remaining = roundMoney(remaining - value)
   }
@@ -1066,14 +1130,22 @@ function refundOrderPayments(
       .run(orderPaid, dealId)
   }
 
-  return orderPaid
+  return {
+    refunded: postedPaid,
+    pendingReturned,
+    pendingParts: pendingParts.map((part) => ({ paymentMethod: part.paymentMethod, amount: part.amount })),
+  }
 }
 
-export function cancelOrder(orderId: number, currentUser: CurrentUser) {
+export function cancelOrder(orderId: number, currentUser: CurrentUser, reason = "") {
   const client = db()
+  const cleanReason = reason.trim().slice(0, 300)
+  const reasonSuffix = cleanReason ? `. Причина: ${cleanReason}` : ""
   let alreadyBuilt = false
   let dealId: number | null = null
   let refunded = 0
+  let pendingReturned = 0
+  let pendingParts: Array<{ paymentMethod: PaymentMethod; amount: number }> = []
 
   const cancel = client.transaction(() => {
     const { order, items } = getOrderWithItems(client, orderId)
@@ -1094,7 +1166,10 @@ export function cancelOrder(orderId: number, currentUser: CurrentUser) {
       alreadyBuilt = true
     }
 
-    refunded = refundOrderPayments(client, orderId, order, currentUser)
+    const refundResult = refundOrderPayments(client, orderId, order, currentUser, cleanReason)
+    refunded = refundResult.refunded
+    pendingReturned = refundResult.pendingReturned
+    pendingParts = refundResult.pendingParts
 
     client
       .prepare(
@@ -1103,13 +1178,17 @@ export function cancelOrder(orderId: number, currentUser: CurrentUser) {
          WHERE id = ?`
       )
       .run(currentUser.id, orderId)
+    const pendingNote =
+      pendingReturned > 0.009
+        ? ` (предоплата ${pendingReturned} в кассу не проводилась — возврат клиенту без кассовой операции)`
+        : ""
     addMovement(client, {
       userId: currentUser.id,
       type: "order_status",
-      note: `Заказ #${orderId}: Отменен`,
+      note: `Заказ #${orderId}: Отменен${pendingNote}${reasonSuffix}`,
     })
   })
 
   cancel()
-  return { alreadyBuilt, dealId, refunded }
+  return { alreadyBuilt, dealId, refunded, pendingReturned, pendingParts }
 }

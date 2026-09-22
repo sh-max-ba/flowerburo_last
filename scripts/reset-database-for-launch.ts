@@ -6,6 +6,8 @@ const dbPath = path.join(process.cwd(), "app.db")
 const tablesToClear = [
   "sale_items",
   "order_items",
+  "order_images",
+  "order_pending_prepayments",
   "deal_items",
   "deal_bouquet_messages",
   "bouquet_template_items",

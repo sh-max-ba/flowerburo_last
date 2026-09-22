@@ -4,6 +4,7 @@ import type {
   CustomerOption,
   Movement,
   Order,
+  OrderImage,
   OrderItem,
   OrderStatus,
   PaymentMethod,
@@ -93,7 +94,7 @@ export function mapProductRow(row: Row): Product {
   }
 }
 
-export function mapOrderRow(row: Row, items: OrderItem[] = []): Order {
+export function mapOrderRow(row: Row, items: OrderItem[] = [], images: OrderImage[] = []): Order {
   return {
     id: numberFromRow(row.id),
     number: row.number === null ? null : String(row.number ?? ""),
@@ -118,6 +119,8 @@ export function mapOrderRow(row: Row, items: OrderItem[] = []): Order {
     total: numberFromRow(row.total),
     prepaid: numberFromRow(row.prepaid),
     paid: numberFromRow(row.paid),
+    // Выборки без колонки pendingPrepaid (CRM-списки) дают 0 — там сумма не показывается.
+    pendingPrepaid: numberFromRow(row.pendingPrepaid),
     draftPrepaidMethod: row.draftPrepaidMethod == null ? null : String(row.draftPrepaidMethod),
     deliveryPrice: numberFromRow(row.deliveryPrice),
     courierPayout: numberFromRow(row.courierPayout),
@@ -132,6 +135,7 @@ export function mapOrderRow(row: Row, items: OrderItem[] = []): Order {
     updatedAt: row.updatedAt === null ? null : String(row.updatedAt ?? ""),
     isModified: numberFromRow(row.isModified) === 1,
     items,
+    images,
   }
 }
 

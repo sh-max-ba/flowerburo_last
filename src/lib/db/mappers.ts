@@ -1,4 +1,5 @@
 import { numberFromRow } from "@/lib/db-row"
+import { roundMoney } from "./form-parsers"
 import type {
   AllocationMethod,
   BouquetTemplate,
@@ -204,6 +205,7 @@ export function mapStockDocumentItem(row: Record<string, unknown>): StockDocumen
     productCode: String(row.product_code ?? ""),
     productName: String(row.product_name ?? ""),
     qty: numberFromRow(row.qty),
+    defectQty: numberFromRow(row.defect_qty),
     unitCost: numberFromRow(row.unit_cost),
     allocatedOverhead: numberFromRow(row.allocated_overhead),
     landedUnitCost: row.landed_unit_cost == null ? null : numberFromRow(row.landed_unit_cost),
@@ -219,6 +221,8 @@ export function mapStockDocumentItem(row: Record<string, unknown>): StockDocumen
     currentStock: row.current_stock === null || row.current_stock === undefined ? null : numberFromRow(row.current_stock),
     currentReserved:
       row.current_reserved === null || row.current_reserved === undefined ? null : numberFromRow(row.current_reserved),
+    currentCategory:
+      row.current_category === null || row.current_category === undefined ? null : String(row.current_category),
     comment: String(row.comment ?? ""),
     createdAt: String(row.created_at ?? ""),
   }
@@ -278,6 +282,8 @@ export function mapStockDocument(
   items: StockDocumentItem[] = [],
   overheads: StockDocumentOverhead[] = []
 ): StockDocument {
+  const paidAmount = roundMoney(numberFromRow(row.paid_amount))
+
   return {
     id: numberFromRow(row.id),
     number: String(row.number ?? ""),
@@ -291,6 +297,20 @@ export function mapStockDocument(
     allocationMethod: normalizeAllocationMethod(row.allocation_method),
     goodsTotal: numberFromRow(row.goods_total),
     landedTotal: numberFromRow(row.landed_total),
+    paidAmount,
+    // delivery_total приходит из SQL в списках; в одиночных выборках считаем по строкам расходов.
+    deliveryTotal:
+      row.delivery_total === null || row.delivery_total === undefined
+        ? roundMoney(
+            overheads.reduce((sum, overhead) => (overhead.kind === "delivery" ? sum + overhead.amount : sum), 0)
+          )
+        : numberFromRow(row.delivery_total),
+    // Долг только у проведённого прихода: у черновика goods_total ещё 0, у отменённого и
+    // скорректированного акта долга нет (скорректированный заменён новым документом).
+    supplierDebt:
+      normalizeStockDocumentType(row.type) === "stock_in" && normalizeStockDocumentStatus(row.status) === "posted"
+        ? Math.max(0, roundMoney(numberFromRow(row.goods_total) - paidAmount))
+        : 0,
     correctsDocumentId:
       row.corrects_document_id === null || row.corrects_document_id === undefined
         ? null

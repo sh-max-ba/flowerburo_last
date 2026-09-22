@@ -205,7 +205,7 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
         CASE WHEN (stock - reserved) < 0 THEN 0 ELSE 1 END,
         (stock - reserved) ASC,
         name COLLATE NOCASE
-       LIMIT 7`
+       LIMIT 5`
     )
     .all() as Array<{ name: string; available: number }>
 
@@ -228,7 +228,9 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
        SELECT COUNT(*) as count
        FROM deals
        LEFT JOIN deal_stages ON deal_stages.id = deals.stage_id
-       WHERE deals.source = 'whatsapp'
+       -- «Входящая» = сделка, привязанная к чату (вебхук всегда проставляет wazzup_chat_id);
+       -- фильтр по source ловил только личный WhatsApp и терял whatsgroup/telegram/instagram.
+       WHERE COALESCE(deals.wazzup_chat_id, '') != ''
         AND deals.status = 'open'
         AND deals.order_id IS NULL
         AND COALESCE(deal_stages.is_closed, 0) != 1

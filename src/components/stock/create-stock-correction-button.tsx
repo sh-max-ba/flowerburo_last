@@ -24,7 +24,7 @@ export function CreateStockCorrectionButton({ documentId }: { documentId: number
 
   return (
     <Button type="button" disabled={pending} onClick={create}>
-      Создать корректировку
+      Редактировать акт
     </Button>
   )
 }

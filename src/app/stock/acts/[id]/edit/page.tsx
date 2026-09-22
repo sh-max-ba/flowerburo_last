@@ -36,6 +36,10 @@ export default async function EditStockActPage({ params }: PageProps<"/stock/act
   const suppliers = data.suppliers.filter(
     (supplier) => supplier.isActive || supplier.id === document.supplierId
   )
+  // Для черновика корректировки предпросмотр «остаток → станет» считаем от остатка с учётом отката
+  // исходного акта — именно так проведение и пересчитает склад. Без поправки редактирование списания
+  // почти всегда ложно пугало бы «уйдёт в минус» (текущий остаток уже уменьшен исходным актом).
+  const products = applyCorrectionRevert(data.products, document.correctsDocumentId)
 
   return (
     <CrmShell
@@ -51,7 +55,7 @@ export default async function EditStockActPage({ params }: PageProps<"/stock/act
             К акту
           </Link>
         </div>
-        <StockDocumentForm document={document} products={data.products} suppliers={suppliers} />
+        <StockDocumentForm document={document} products={products} suppliers={suppliers} />
       </div>
     </CrmShell>
   )
@@ -63,4 +67,32 @@ function getStockDocumentOrNull(documentId: number) {
   } catch {
     return null
   }
+}
+
+// Остатки товаров «как будто исходный акт откатан» — базовая линия для формы корректировки.
+// Приход заносил годное (qty − брак) → снимаем его; списание уводило qty → возвращаем.
+function applyCorrectionRevert(
+  products: ReturnType<typeof getDashboardData>["products"],
+  correctsDocumentId: number | null
+) {
+  if (correctsDocumentId == null) {
+    return products
+  }
+  const original = getStockDocumentOrNull(correctsDocumentId)
+  if (!original || original.status !== "posted") {
+    return products
+  }
+  const deltas = new Map<string, number>()
+  for (const item of original.items) {
+    const delta = original.type === "stock_in" ? -(item.qty - item.defectQty) : item.qty
+    deltas.set(item.productCode, (deltas.get(item.productCode) ?? 0) + delta)
+  }
+
+  return products.map((product) => {
+    const delta = deltas.get(product.code)
+    if (!delta) {
+      return product
+    }
+    return { ...product, stock: product.stock + delta, available: product.available + delta }
+  })
 }

@@ -19,6 +19,12 @@ import {
   migrateStockLots,
   migrateStockInventory,
   migrateOrderDraftPrepayment,
+  migrateInventoryCategoryTemplates,
+  migrateStockDefectQty,
+  migrateCrmListIndexes,
+  migrateStockSupplierPayment,
+  migrateOrderImages,
+  migrateOrderPendingPrepayments,
 } from "./schema"
 import { seedDefaultDealPipeline } from "./seed"
 
@@ -47,6 +53,12 @@ export const MIGRATIONS: Migration[] = [
   { version: 17, up: migrateStockLots },
   { version: 18, up: migrateStockInventory },
   { version: 19, up: migrateOrderDraftPrepayment },
+  { version: 20, up: migrateInventoryCategoryTemplates },
+  { version: 21, up: migrateStockDefectQty },
+  { version: 22, up: migrateCrmListIndexes },
+  { version: 23, up: migrateStockSupplierPayment },
+  { version: 24, up: migrateOrderImages },
+  { version: 25, up: migrateOrderPendingPrepayments },
 ]
 
 export function migrate(client: Database.Database) {

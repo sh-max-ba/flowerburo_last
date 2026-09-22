@@ -16,6 +16,7 @@ import type {
   ShiftSummary,
 } from "../types"
 import { db } from "../connection"
+import { sumAllPendingPrepayments } from "./pending-prepayments"
 
 export function mapShift(row: ShiftRow, client: Database.Database, precomputedSummary?: ShiftSummary): Shift {
   const id = numberFromRow(row.id)
@@ -173,6 +174,7 @@ export function calculateShiftSummary(shiftId: number, client: Database.Database
     deferredPrepayments: 0,
     revenueReceivedInOtherShifts: 0,
     draftPrepaidTotal: 0,
+    pendingPrepaidTotal: 0,
     deliveryPaidCount: 0,
     deliveryPaidTotal: 0,
     deliveryFreeCount: 0,
@@ -270,6 +272,11 @@ export function calculateShiftSummary(shiftId: number, client: Database.Database
     .prepare("SELECT COALESCE(SUM(prepaid), 0) as v FROM orders WHERE status = 'Черновик' AND prepaid > 0")
     .get() as { v: number }
   summary.draftPrepaidTotal = numberFromRow(draftPrepaidRow.v)
+
+  // Отложенные предоплаты заказов в работе: приняты при создании, но в кассу проводятся при
+  // выдаче (в смену выдачи). Тоже справочно и глобально «на сейчас» — объясняет, почему
+  // предоплаты по ещё не выданным заказам не видны ни в кассе, ни в выручке этой смены.
+  summary.pendingPrepaidTotal = sumAllPendingPrepayments(client)
 
   // Доставка за смену — по заказам, завершённым (выданным/переданным курьеру) в эту смену,
   // тот же якорь completed_shift_id, что у выручки. Платная: тип «доставка» и цена > 0;

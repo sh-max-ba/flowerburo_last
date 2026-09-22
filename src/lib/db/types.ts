@@ -286,6 +286,19 @@ export type OrderItem = {
   total: number
 }
 
+// Изображение, прикреплённое к заказу (референс для флориста). Оригинал нормализован в webp
+// (см. /api/orders/images), thumbPath — уменьшенная копия для карточек.
+export type OrderImage = {
+  id: number
+  orderId: number | null
+  imagePath: string
+  thumbPath: string
+  originalName: string
+  width: number
+  height: number
+  createdAt: string
+}
+
 export type Order = {
   id: number
   number: string | null
@@ -310,7 +323,11 @@ export type Order = {
   totalBeforeDiscount: number
   prepaid: number
   paid: number
-  // Способ предоплаты-намерения черновика (проводится при отправке в работу); у обычных заказов null.
+  // Отложенная предоплата: принята при создании, но в кассу ещё не проведена (проводится при
+  // выдаче, в смену выдачи). Входит в paid. 0 — предоплаты нет или она уже в кассе.
+  pendingPrepaid: number
+  // Способ предоплаты-намерения черновика (при отправке в работу становится отложенной
+  // предоплатой заказа и проводится в кассу при выдаче); у обычных заказов null.
   draftPrepaidMethod: string | null
   deliveryPrice: number
   courierPayout: number
@@ -325,6 +342,7 @@ export type Order = {
   updatedAt: string | null
   isModified: boolean
   items: OrderItem[]
+  images: OrderImage[]
 }
 
 export type Movement = {
@@ -356,6 +374,8 @@ export type StockDocumentItem = {
   productCode: string
   productName: string
   qty: number
+  // Брак в приходной строке (v21): на остаток идёт только годное (qty − defectQty); брак — для отчётности.
+  defectQty: number
   unitCost: number
   allocatedOverhead: number
   landedUnitCost: number | null
@@ -373,6 +393,9 @@ export type StockDocumentItem = {
   applied: boolean
   currentStock: number | null
   currentReserved: number | null
+  // Категория товара из живой карточки (JOIN products) — для группировки в инвентаризации.
+  // null — товар удалён; "" — без категории.
+  currentCategory: string | null
   comment: string
   createdAt: string
 }
@@ -411,6 +434,12 @@ export type StockDocument = {
   allocationMethod: AllocationMethod
   goodsTotal: number
   landedTotal: number
+  // Оплата поставщику по приходу (v23): сколько уже уплачено. Долг = goodsTotal − paidAmount и
+  // только у ПРОВЕДЁННОГО прихода (см. supplierDebt). deliveryTotal — сумма накладных расходов
+  // вида "delivery"; в долг поставщику не входит.
+  paidAmount: number
+  deliveryTotal: number
+  supplierDebt: number
   correctsDocumentId: number | null
   correctedByDocumentId: number | null
   correctedAt: string | null
@@ -521,8 +550,11 @@ export type ShiftSummary = {
   // «выручка ≠ сумма способов оплаты».
   revenueReceivedInOtherShifts: number
   // Предоплаты-намерения в черновиках заказов: записаны, но в кассу НЕ проведены
-  // (проводятся при отправке черновика в работу). Справочная строка против путаницы.
+  // (при отправке в работу становятся отложенной предоплатой заказа). Справочная строка против путаницы.
   draftPrepaidTotal: number
+  // Отложенные предоплаты заказов в работе (приняты при создании, в кассу проводятся при выдаче,
+  // в смену выдачи). Справочно, глобально «на сейчас» — как draftPrepaidTotal.
+  pendingPrepaidTotal: number
   // Доставка за смену — по заказам, ВЫДАННЫМ/переданным курьеру в эту смену
   // (completed_shift_id, тот же якорь, что у выручки). Платная — delivery_price > 0,
   // бесплатная — доставка с ценой 0, самовывоз — pickup. Для отчёта по доставке в панели смены.
@@ -809,6 +841,11 @@ export type CashLedgerEntry = {
   type: CashTransactionType
   paymentMethod: PaymentMethod
   amount: number
+  // Скидка связанного документа (продажи или заказа): позиционные скидки + скидка на чек.
+  // Относится к документу целиком, а не к конкретной проводке: у предоплаты и доплаты по
+  // одному заказу она одна и та же. 0 — скидки не было (ручные внесения/изъятия).
+  discountAmount: number
+  totalBeforeDiscount: number
   comment: string
   createdAt: string
   // reversed — операцию отменили встречной проводкой; isReversal — это сама встречная отмена.

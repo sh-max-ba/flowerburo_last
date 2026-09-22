@@ -21,6 +21,7 @@ export type {
   HistoryReportData,
   Movement,
   Order,
+  OrderImage,
   OrderItem,
   OrderStatus,
   OwnerDashboardData,
@@ -118,7 +119,10 @@ export {
   updatePaymentMethod,
   reverseCashTransaction,
   getOrderPaymentBreakdowns,
+  findRefundableOrders,
+  findRefundableSales,
 } from "./db/queries/cash"
+export type { RefundableOrder, RefundableSale } from "./db/queries/cash"
 export {
   getProductByCode,
   updateProductImagePath,
@@ -129,6 +133,8 @@ export {
   setProductArchived,
   listArchivedProducts,
   listActiveProductsForReport,
+  listActiveProductsForReportAsOf,
+  listTopCategories,
 } from "./db/queries/products"
 export {
   listBouquetTemplates,
@@ -161,6 +167,7 @@ export {
   postStockDocument,
   createAndPostStockDocument,
   createStockCorrectionDraft,
+  getDraftCorrectionId,
   cancelStockDocument,
 } from "./db/queries/stock-documents"
 export {
@@ -175,7 +182,19 @@ export {
 export {
   getCashLedger,
   getHistoryReportData,
+  listStockMovements,
+  summarizeStockMovements,
+  summarizeStockMovementsByProduct,
+  NO_CATEGORY_FILTER,
 } from "./db/queries/history"
+export type {
+  StockHistoryMovement,
+  StockMovementFilters,
+  StockMovementsSummary,
+  StockMovementsProductSummary,
+} from "./db/queries/history"
+export { getSalesReport } from "./db/queries/sales-report"
+export type { SalesReport, SalesReportFilters, SalesReportLine, SalesReportRow } from "./db/queries/sales-report"
 export {
   getDashboardData,
   getReadyOrdersActionCount,
@@ -204,11 +223,16 @@ export {
 export type { OrderSettings } from "./db/queries/app-settings"
 export {
   createInventoryDraftWithSnapshot,
+  addInventoryItem,
   saveInventoryDraft,
   recalcInventoryExpected,
   postInventory,
   cancelInventory,
+  listInventoryCategoryTemplates,
+  createInventoryCategoryTemplate,
+  deleteInventoryCategoryTemplate,
 } from "./db/queries/stock-inventory"
+export type { InventoryCategoryTemplate } from "./db/queries/stock-inventory"
 export {
   listProductLots,
   listExpiringLots,
@@ -221,6 +245,13 @@ export type { ExpiringLot } from "./db/queries/stock-lots"
 export {
   createSale,
 } from "./db/queries/sales"
+export {
+  createPendingOrderImage,
+  loadOrderImagesByOrder,
+  listOrderImages,
+  cleanupOrphanOrderImages,
+} from "./db/queries/order-images"
+export type { NewOrderImageInput } from "./db/queries/order-images"
 export {
   createOrder,
   createOrderDraft,

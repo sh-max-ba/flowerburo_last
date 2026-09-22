@@ -38,8 +38,9 @@ export function DealsAutoRefresh() {
           return
         }
 
-        const payload = (await response.json()) as { count?: number }
-        const revision = String(payload.count ?? 0)
+        const payload = (await response.json()) as { count?: number; revision?: string }
+        // Фолбэк на count — на случай ответа от прежней сборки в момент деплоя.
+        const revision = typeof payload.revision === "string" ? payload.revision : String(payload.count ?? 0)
         if (lastRevision === null) {
           lastRevision = revision
           return

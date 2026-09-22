@@ -41,7 +41,6 @@ function normalizeVarianceReason(value: unknown): string | null {
 export function createInventoryDraftWithSnapshot(formData: FormData, currentUser: CurrentUser) {
   const client = db()
   const scope = clean(formData.get("scope")) || "all"
-  const category = clean(formData.get("category"))
   const codes = formData.getAll("code").map((value) => clean(value)).filter(Boolean)
   const comment = clean(formData.get("comment"))
   const operationAt = fromDatetimeLocalValue(formData.get("operationAt"))
@@ -57,16 +56,24 @@ export function createInventoryDraftWithSnapshot(formData: FormData, currentUser
         .prepare(`SELECT code, name, stock FROM products WHERE code IN (${placeholders}) ORDER BY name COLLATE NOCASE`)
         .all(...codes) as Array<Record<string, unknown>>
     } else if (scope === "category") {
-      if (!category) {
+      // Несколько категорий: форма шлёт по одному полю `category` на категорию (getAll).
+      // Совместимо со старым одиночным выбором (getAll вернёт массив из одного значения).
+      // Для каждой категории берём её и подкатегории по префиксу пути, как при одиночном охвате.
+      const selectedCategories = Array.from(
+        new Set(formData.getAll("category").map((value) => clean(value)).filter(Boolean))
+      )
+      if (!selectedCategories.length) {
         throw new Error("Укажите категорию.")
       }
+      const conditions = selectedCategories.map(() => "(category_path = ? OR category_path LIKE ?)").join(" OR ")
+      const params = selectedCategories.flatMap((value) => [value, `${value}%`])
       products = client
         .prepare(
           `SELECT code, name, stock FROM products
-           WHERE COALESCE(is_active, 1) = 1 AND (category_path = ? OR category_path LIKE ?)
+           WHERE COALESCE(is_active, 1) = 1 AND (${conditions})
            ORDER BY name COLLATE NOCASE`
         )
-        .all(category, `${category}%`) as Array<Record<string, unknown>>
+        .all(...params) as Array<Record<string, unknown>>
     } else {
       products = client
         .prepare("SELECT code, name, stock FROM products WHERE COALESCE(is_active, 1) = 1 ORDER BY name COLLATE NOCASE")
@@ -115,6 +122,52 @@ export function createInventoryDraftWithSnapshot(formData: FormData, currentUser
   })
 
   return run()
+}
+
+// Добавить товар в черновик инвентаризации «по надобности» — например, позицию из категории, не
+// попавшей в исходный охват. Снимок expected_qty = текущий products.stock (как при создании). Защита
+// от дубля: код уже в документе → ошибка. Только активный товар. Реселект статуса под локом.
+export function addInventoryItem(documentId: number, productCode: string) {
+  const client = db()
+  const code = clean(productCode)
+  if (!code) {
+    throw new Error("Не указан товар.")
+  }
+
+  const run = client.transaction(() => {
+    loadDraftInventory(client, documentId)
+
+    const existing = client
+      .prepare("SELECT 1 FROM stock_document_items WHERE document_id = ? AND product_code = ?")
+      .get(documentId, code)
+    if (existing) {
+      throw new Error("Этот товар уже есть в списке инвентаризации.")
+    }
+
+    const product = client
+      .prepare("SELECT code, name, stock FROM products WHERE code = ? AND COALESCE(is_active, 1) = 1")
+      .get(code) as { code: string; name: string; stock: unknown } | undefined
+    if (!product) {
+      throw new Error("Товар не найден или находится в архиве.")
+    }
+
+    client
+      .prepare(
+        `INSERT INTO stock_document_items (
+          document_id, product_code, product_name, qty, expected_qty, counted_qty, counted_at, applied
+        ) VALUES (
+          @documentId, @productCode, @productName, 0, @expectedQty, NULL, NULL, 0
+        )`
+      )
+      .run({
+        documentId,
+        productCode: String(product.code),
+        productName: String(product.name ?? ""),
+        expectedQty: numberFromRow(product.stock),
+      })
+  })
+
+  run()
 }
 
 // Сохранение факта: counted_qty (пусто → «не считали», NULL), counted_at, variance_reason по строкам.
@@ -296,6 +349,91 @@ export function postInventory(documentId: number, currentUser: CurrentUser) {
   const client = db()
   const run = client.transaction(() => postInventoryInTransaction(client, documentId, currentUser))
   run()
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Шаблоны категорий: именованный набор категорий, который владелец выбирает одним
+// кликом при создании инвентаризации вместо повторной отметки тех же категорий.
+// categories хранится JSON-массивом строк-путей (таблица из миграции v20).
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type InventoryCategoryTemplate = {
+  id: number
+  name: string
+  categories: string[]
+}
+
+function parseTemplateCategories(value: unknown): string[] {
+  if (typeof value !== "string" || !value.trim()) {
+    return []
+  }
+  try {
+    const parsed = JSON.parse(value)
+    if (!Array.isArray(parsed)) {
+      return []
+    }
+    return parsed.map((item) => String(item).trim()).filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+export function listInventoryCategoryTemplates(
+  client: Database.Database = db()
+): InventoryCategoryTemplate[] {
+  const rows = client
+    .prepare("SELECT id, name, categories FROM inventory_category_templates ORDER BY name COLLATE NOCASE")
+    .all() as Array<{ id: number; name: string; categories: string }>
+  return rows.map((row) => ({
+    id: Number(row.id),
+    name: String(row.name),
+    categories: parseTemplateCategories(row.categories),
+  }))
+}
+
+export function createInventoryCategoryTemplate(formData: FormData): InventoryCategoryTemplate {
+  const client = db()
+  const name = clean(formData.get("name"))
+  if (!name) {
+    throw new Error("Введите название шаблона.")
+  }
+  // Дедуп категорий с сохранением порядка выбора.
+  const categories = Array.from(
+    new Set(formData.getAll("category").map((value) => clean(value)).filter(Boolean))
+  )
+  if (!categories.length) {
+    throw new Error("Выберите хотя бы одну категорию.")
+  }
+
+  const run = client.transaction(() => {
+    // Имя уникально без учёта регистра: перезапись существующего шаблона вместо дубля-«призрака».
+    const existing = client
+      .prepare("SELECT id FROM inventory_category_templates WHERE name = ? COLLATE NOCASE")
+      .get(name) as { id: number } | undefined
+    const serialized = JSON.stringify(categories)
+    if (existing) {
+      client
+        .prepare(
+          "UPDATE inventory_category_templates SET name = ?, categories = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+        )
+        .run(name, serialized, existing.id)
+      return Number(existing.id)
+    }
+    const inserted = client
+      .prepare("INSERT INTO inventory_category_templates (name, categories) VALUES (?, ?)")
+      .run(name, serialized)
+    return Number(inserted.lastInsertRowid)
+  })
+
+  const id = run()
+  return { id, name, categories }
+}
+
+export function deleteInventoryCategoryTemplate(id: number): void {
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Шаблон не найден.")
+  }
+  db().prepare("DELETE FROM inventory_category_templates WHERE id = ?").run(id)
 }
 
 // Отмена — только черновик (как cancelStockDocument). Проведённую не откатываем (журнал append-only;

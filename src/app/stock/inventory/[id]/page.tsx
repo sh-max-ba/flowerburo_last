@@ -5,6 +5,7 @@ import { InventoryDetailClient } from "@/components/stock/inventory-detail-clien
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getStockDocument } from "@/lib/db"
+import { listProducts } from "@/lib/crm"
 
 export const dynamic = "force-dynamic"
 
@@ -30,6 +31,10 @@ export default async function StockInventoryDetailPage({ params }: { params: Pro
     redirect("/stock/inventory")
   }
 
+  // Список активных товаров — для добавления позиции «по надобности» в черновик (пикер исключает
+  // уже добавленные коды на клиенте). Нужен только в черновике, но запрос дешёвый.
+  const products = doc.status === "draft" ? listProducts() : []
+
   return (
     <CrmShell
       user={user}
@@ -38,7 +43,7 @@ export default async function StockInventoryDetailPage({ params }: { params: Pro
       shiftContext={getShiftShellContext(user)}
       defaultSidebarOpen={await getSidebarDefaultOpen()}
     >
-      <InventoryDetailClient doc={doc} />
+      <InventoryDetailClient doc={doc} products={products} />
     </CrmShell>
   )
 }

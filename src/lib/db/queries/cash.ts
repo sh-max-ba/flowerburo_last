@@ -14,6 +14,7 @@ import {
   requireOpenShift,
 } from "./shifts"
 import { getActiveCashUserById, getActiveFloristById } from "./users"
+import { listPendingPrepaymentsByOrders } from "./pending-prepayments"
 
 // Флорист может изменять только СВОИ кассовые операции (сторно / смена способа оплаты) — чтобы при
 // общей кассе (несколько операторов в одной открытой смене) флорист не правил чужие операции.
@@ -390,6 +391,9 @@ export function reverseCashTransaction(formData: FormData, currentUser: CurrentU
   if (!Number.isInteger(id) || id <= 0) {
     throw new Error("Операция не найдена.")
   }
+  // Причина возврата (необязательна для служебных отмен из /history; обязательна в UI возврата).
+  const reason = clean(formData.get("reason")).slice(0, 300)
+  const reasonSuffix = reason ? `. Причина: ${reason}` : ""
 
   const apply = client.transaction(() => {
     const shift = requireOpenShift(client)
@@ -484,7 +488,7 @@ export function reverseCashTransaction(formData: FormData, currentUser: CurrentU
           type: "cash_refund",
           paymentMethod: part.paymentMethod,
           amount: partAmount,
-          comment: `Сторно продажи #${saleId}${partNote}`,
+          comment: `Сторно продажи #${saleId}${partNote}${reasonSuffix}`,
         })
       }
       client.prepare("UPDATE sales SET reversed_at = CURRENT_TIMESTAMP WHERE id = ?").run(saleId)
@@ -507,7 +511,7 @@ export function reverseCashTransaction(formData: FormData, currentUser: CurrentU
         userId: currentUser.id,
         type: "cash_reversal",
         total: refundedTotal,
-        note: `Сторно продажи #${saleId}`,
+        note: `Сторно продажи #${saleId}${reasonSuffix}`,
       })
       return
     }
@@ -521,16 +525,35 @@ export function reverseCashTransaction(formData: FormData, currentUser: CurrentU
 
 // Разбивка принятых оплат заказа по способам (prepayment/order_payment/deal_payment) — чтобы
 // комбинированная оплата была видна явно: «чем уже оплачено» рядом с «к доплате» на выдаче.
+// Отложенная предоплата (принята при создании, в кассу проводится при выдаче) тоже входит —
+// клиент её уже заплатил, и paid её содержит; идёт первой (по времени приёма) и помечена
+// pending: true отдельной строкой, не сливаясь с проведёнными деньгами того же способа: при
+// отмене заказа по ней кассового возврата не будет, и попап возврата должен это показать.
 // Plain-object (не Map) — результат уходит пропсом в клиентский компонент.
-export function getOrderPaymentBreakdowns(
-  orderIds: number[]
-): Record<number, Array<{ paymentMethod: PaymentMethod; amount: number }>> {
-  const breakdowns: Record<number, Array<{ paymentMethod: PaymentMethod; amount: number }>> = {}
+export type OrderPaymentBreakdownPart = { paymentMethod: PaymentMethod; amount: number; pending?: boolean }
+
+export function getOrderPaymentBreakdowns(orderIds: number[]): Record<number, OrderPaymentBreakdownPart[]> {
+  const breakdowns: Record<number, OrderPaymentBreakdownPart[]> = {}
   if (!orderIds.length) {
     return breakdowns
   }
+  const client = db()
+  const push = (orderId: number, method: PaymentMethod, amount: number, pending = false) => {
+    const list = breakdowns[orderId] ?? (breakdowns[orderId] = [])
+    const existing = list.find((entry) => entry.paymentMethod === method && Boolean(entry.pending) === pending)
+    if (existing) {
+      existing.amount += amount
+    } else {
+      list.push(pending ? { paymentMethod: method, amount, pending: true } : { paymentMethod: method, amount })
+    }
+  }
+  for (const [orderId, parts] of listPendingPrepaymentsByOrders(client, orderIds)) {
+    for (const part of parts) {
+      push(orderId, part.paymentMethod, part.amount, true)
+    }
+  }
   const placeholders = orderIds.map(() => "?").join(", ")
-  const rows = db()
+  const rows = client
     .prepare(
       `SELECT order_id as orderId, payment_method as paymentMethod, COALESCE(SUM(amount), 0) as amount
        FROM cash_transactions
@@ -544,8 +567,209 @@ export function getOrderPaymentBreakdowns(
     const method = paymentMethods.has(row.paymentMethod as PaymentMethod)
       ? (row.paymentMethod as PaymentMethod)
       : "cash"
-    const list = breakdowns[orderId] ?? (breakdowns[orderId] = [])
-    list.push({ paymentMethod: method, amount: numberFromRow(row.amount) })
+    push(orderId, method, numberFromRow(row.amount))
   }
   return breakdowns
+}
+
+// Заказ, доступный для оформления возврата (поиск «найти уже выданный заказ»). Возврат
+// проводится через cancelOrder — здесь только read-модель для UI: сумма к возврату (paid) и
+// её разбивка по способам оплаты, чтобы в попапе было видно «что и куда возвращается».
+export type RefundableOrder = {
+  id: number
+  number: string
+  customer: string
+  phone: string
+  status: string
+  total: number
+  paid: number
+  deliveryType: string
+  courierPayout: number
+  deliveryPayoutPaid: boolean
+  completedAt: string | null
+  createdAt: string
+  payments: OrderPaymentBreakdownPart[]
+  items: Array<{ name: string; qty: number }>
+}
+
+// Позиции по списку id (order_items/sale_items) для превью «что вернётся». Лёгкая форма name+qty.
+function loadRefundItems(ids: number[], sql: string): Map<number, Array<{ name: string; qty: number }>> {
+  const byId = new Map<number, Array<{ name: string; qty: number }>>()
+  if (!ids.length) {
+    return byId
+  }
+  const placeholders = ids.map(() => "?").join(", ")
+  const rows = db()
+    .prepare(sql.replace("{ph}", placeholders))
+    .all(...ids) as Array<{
+    ownerId: number
+    name: string
+    qty: number
+  }>
+  for (const row of rows) {
+    const ownerId = numberFromRow(row.ownerId)
+    const list = byId.get(ownerId) ?? []
+    list.push({ name: String(row.name ?? ""), qty: numberFromRow(row.qty) })
+    byId.set(ownerId, list)
+  }
+  return byId
+}
+
+// Поиск заказов для возврата. Без запроса — недавно выданные/готовые (частый кейс: клиент
+// вернулся сразу после выдачи). С запросом — совпадение по номеру/имени/телефону среди всех
+// незакрытых и неотменённых заказов, чтобы менеджер мог найти и старый выданный заказ.
+// Черновики и уже отменённые заказы исключены (возвращать нечего).
+export function findRefundableOrders(rawQuery: string, limit = 25): RefundableOrder[] {
+  const client = db()
+  const q = rawQuery.trim()
+  const params: unknown[] = []
+  let where = "status NOT IN ('Черновик', 'Отменен', 'canceled')"
+  if (q) {
+    const like = `%${q}%`
+    where += " AND (number LIKE ? OR customer LIKE ? OR phone LIKE ? OR recipient_phone LIKE ?)"
+    params.push(like, like, like, like)
+  } else {
+    where += " AND status IN ('Готов', 'Выдан', 'Передан курьеру')"
+  }
+
+  const rows = client
+    .prepare(
+      `SELECT id, COALESCE(number, '') as number, COALESCE(customer, '') as customer,
+        COALESCE(phone, '') as phone, status, total, COALESCE(paid, 0) as paid,
+        COALESCE(delivery_type, 'pickup') as deliveryType, COALESCE(courier_payout, 0) as courierPayout,
+        COALESCE(delivery_payout_paid, 0) as deliveryPayoutPaid,
+        completed_at as completedAt, created_at as createdAt
+       FROM orders
+       WHERE ${where}
+       ORDER BY COALESCE(completed_at, updated_at, created_at) DESC
+       LIMIT ?`
+    )
+    .all(...params, limit) as Array<Record<string, unknown>>
+
+  const orderIds = rows.map((row) => numberFromRow(row.id))
+  const breakdowns = getOrderPaymentBreakdowns(orderIds)
+  const itemsByOrder = loadRefundItems(
+    orderIds,
+    "SELECT order_id as ownerId, name, qty FROM order_items WHERE order_id IN ({ph}) ORDER BY id"
+  )
+
+  return rows.map((row) => {
+    const id = numberFromRow(row.id)
+    return {
+      id,
+      number: String(row.number ?? ""),
+      customer: String(row.customer ?? ""),
+      phone: String(row.phone ?? ""),
+      status: String(row.status ?? ""),
+      total: numberFromRow(row.total),
+      paid: numberFromRow(row.paid),
+      deliveryType: String(row.deliveryType ?? "pickup"),
+      courierPayout: numberFromRow(row.courierPayout),
+      deliveryPayoutPaid: numberFromRow(row.deliveryPayoutPaid) === 1,
+      completedAt: row.completedAt ? String(row.completedAt) : null,
+      createdAt: String(row.createdAt ?? ""),
+      payments: breakdowns[id] ?? [],
+      items: itemsByOrder.get(id) ?? [],
+    }
+  })
+}
+
+// Прямая продажа кассы, доступная для возврата (сторно). Сторно проводит reverseCashTransaction
+// по id денежной проводки продажи (type='sale'): деньги возвращаются тем же способом, товар — на
+// склад, продажа исключается из выручки. cashTransactionId — на какую проводку слать сторно.
+export type RefundableSale = {
+  saleId: number
+  cashTransactionId: number
+  customer: string
+  phone: string
+  total: number
+  paymentMethod: string
+  createdAt: string
+  payments: Array<{ paymentMethod: PaymentMethod; amount: number }>
+  items: Array<{ name: string; qty: number }>
+}
+
+// Поиск прямых продаж для возврата. Без запроса — недавние; с запросом — по номеру чека,
+// имени или телефону. Уже сторнированные (reversed_at) исключены.
+export function findRefundableSales(rawQuery: string, limit = 25): RefundableSale[] {
+  const client = db()
+  const q = rawQuery.trim()
+  const params: unknown[] = []
+  let where = "reversed_at IS NULL"
+  if (q) {
+    const like = `%${q}%`
+    where += " AND (CAST(id AS TEXT) LIKE ? OR customer_name LIKE ? OR customer_phone LIKE ?)"
+    params.push(like, like, like)
+  }
+
+  const rows = client
+    .prepare(
+      `SELECT id, COALESCE(customer_name, '') as customer, COALESCE(customer_phone, '') as phone,
+        total, COALESCE(payment_method, 'cash') as paymentMethod, created_at as createdAt
+       FROM sales
+       WHERE ${where}
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+    .all(...params, limit) as Array<Record<string, unknown>>
+
+  if (!rows.length) {
+    return []
+  }
+
+  const saleIds = rows.map((row) => numberFromRow(row.id))
+  const placeholders = saleIds.map(() => "?").join(", ")
+  const parts = client
+    .prepare(
+      `SELECT sale_id as saleId, id, payment_method as paymentMethod, amount
+       FROM cash_transactions
+       WHERE sale_id IN (${placeholders}) AND type = 'sale'
+       ORDER BY id`
+    )
+    .all(...saleIds) as Array<{ saleId: number; id: number; paymentMethod: string; amount: number }>
+
+  const ctIdBySale = new Map<number, number>()
+  const partsBySale = new Map<number, Array<{ paymentMethod: PaymentMethod; amount: number }>>()
+  for (const part of parts) {
+    const saleId = numberFromRow(part.saleId)
+    if (!ctIdBySale.has(saleId)) {
+      ctIdBySale.set(saleId, numberFromRow(part.id))
+    }
+    const method = paymentMethods.has(part.paymentMethod as PaymentMethod)
+      ? (part.paymentMethod as PaymentMethod)
+      : "cash"
+    const list = partsBySale.get(saleId) ?? []
+    const existing = list.find((entry) => entry.paymentMethod === method)
+    if (existing) {
+      existing.amount += numberFromRow(part.amount)
+    } else {
+      list.push({ paymentMethod: method, amount: numberFromRow(part.amount) })
+    }
+    partsBySale.set(saleId, list)
+  }
+
+  const itemsBySale = loadRefundItems(
+    saleIds,
+    `SELECT si.sale_id as ownerId, COALESCE(NULLIF(p.name, ''), si.product_code) as name, si.qty
+     FROM sale_items si LEFT JOIN products p ON p.code = si.product_code
+     WHERE si.sale_id IN ({ph}) ORDER BY si.id`
+  )
+
+  return rows
+    .map((row) => {
+      const saleId = numberFromRow(row.id)
+      return {
+        saleId,
+        cashTransactionId: ctIdBySale.get(saleId) ?? 0,
+        customer: String(row.customer ?? ""),
+        phone: String(row.phone ?? ""),
+        total: numberFromRow(row.total),
+        paymentMethod: String(row.paymentMethod ?? "cash"),
+        createdAt: String(row.createdAt ?? ""),
+        payments: partsBySale.get(saleId) ?? [],
+        items: itemsBySale.get(saleId) ?? [],
+      }
+    })
+    // Без денежной проводки type='sale' сторнировать нечем — не показываем (не даём битую кнопку).
+    .filter((sale) => sale.cashTransactionId > 0)
 }

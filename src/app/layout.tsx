@@ -1,16 +1,17 @@
 import type { Metadata } from "next";
-import { CalSansUI } from "@calcom/cal-sans-ui";
-import localFont from "next/font/local";
+import { Golos_Text } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { NotificationSounds } from "@/components/notifications/notification-sounds";
+import { VersionWatcher } from "@/components/system/version-watcher";
+import { getBuildId } from "@/lib/build-id";
 import "./globals.css";
 
-const calSansHeading = localFont({
-  src: "../../node_modules/cal-sans/fonts/webfonts/CalSans-SemiBold.woff2",
+const golosText = Golos_Text({
+  subsets: ["latin", "cyrillic"],
+  weight: ["400", "500", "600", "700"],
   display: "swap",
-  variable: "--font-cal-sans",
-  weight: "600",
+  variable: "--font-golos",
 });
 
 export const metadata: Metadata = {
@@ -27,7 +28,7 @@ export default function RootLayout({
     <html
       lang="ru"
       suppressHydrationWarning
-      className={`${CalSansUI.variable} ${calSansHeading.variable} h-full antialiased`}
+      className={`${golosText.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background text-foreground">
         <TooltipProvider>
@@ -35,6 +36,8 @@ export default function RootLayout({
           <Toaster richColors closeButton />
           {/* Глобальный звуковой островок: уведомления о новых заказах/сделках на любой странице. */}
           <NotificationSounds />
+          {/* Авто-перезагрузка устаревших вкладок после деплоя (см. VersionWatcher). */}
+          <VersionWatcher currentBuildId={getBuildId()} />
         </TooltipProvider>
       </body>
     </html>

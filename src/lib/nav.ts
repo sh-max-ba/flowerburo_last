@@ -29,6 +29,9 @@ export type NavItem = {
   href: string
   iconKey: string
   roles: UserRole[]
+  // sidebar:false — раздел доступен и имеет маршрут, но в сайдбаре не показывается
+  // (открывается вкладкой внутри родительского раздела, напр. складские подстраницы).
+  sidebar?: boolean
 }
 
 export type NavGroup = {
@@ -40,8 +43,9 @@ export type NavGroup = {
 // Единый источник навигации. roles — консервативное ОБЪЕДИНЕНИЕ текущих прав
 // (backoffice.tsx roleSectionIds + florist/cash override, crm-shell navItems,
 // backoffice-route canAccessSection). НЕ расширять и НЕ сужать без отдельной задачи.
-// florist получает только "orders"; доступ к "sales" (Касса) — особый случай,
-// разрешён при ЛЮБОЙ открытой смене (canAccessCash = canUseCash) — см. getNavForRole.
+// florist получает "orders" и "order-drafts" (черновики доступны ему полностью — см. роли
+// draft-экшенов в actions.ts); доступ к "sales" (Касса) — особый случай, разрешён при ЛЮБОЙ
+// открытой смене (canAccessCash = canUseCash) — см. getNavForRole.
 export const NAV: NavItem[] = [
   { id: "dashboard", label: "Дашборд", href: "/dashboard", iconKey: "dashboard", roles: ["owner"] },
   { id: "deals", label: "Сделки", href: "/deals", iconKey: "deals", roles: ["owner", "manager"] },
@@ -49,16 +53,17 @@ export const NAV: NavItem[] = [
   { id: "bouquets", label: "Букеты", href: "/bouquets", iconKey: "bouquets", roles: ["owner", "manager"] },
   { id: "sales", label: "Касса", href: "/cash", iconKey: "cash", roles: ["owner", "manager"] },
   { id: "orders", label: "Стол заказов", href: "/orders", iconKey: "orders", roles: ["owner", "manager", "florist"] },
-  { id: "order-drafts", label: "Черновики", href: "/orders/drafts", iconKey: "order-drafts", roles: ["owner", "manager"] },
+  { id: "order-drafts", label: "Черновики", href: "/orders/drafts", iconKey: "order-drafts", roles: ["owner", "manager", "florist"], sidebar: false },
   { id: "ready-orders", label: "Готовые заказы", href: "/ready-orders", iconKey: "ready-orders", roles: ["owner", "manager"] },
+  // Раздел «Склад»: в сайдбаре виден одним пунктом «Склад», остальное — вкладки STOCK_SUBNAV.
   { id: "stock", label: "Склад", href: "/stock", iconKey: "stock", roles: ["owner"] },
-  { id: "stock-report", label: "Остатки", href: "/stock/report", iconKey: "stock-report", roles: ["owner"] },
-  { id: "stock-acts", label: "Акты склада", href: "/stock/acts", iconKey: "stock-acts", roles: ["owner"] },
-  { id: "stock-lots", label: "Партии и сроки", href: "/stock/lots", iconKey: "stock-lots", roles: ["owner"] },
-  { id: "stock-inventory", label: "Инвентаризация", href: "/stock/inventory", iconKey: "stock-inventory", roles: ["owner"] },
-  { id: "suppliers", label: "Поставщики", href: "/suppliers", iconKey: "suppliers", roles: ["owner"] },
+  { id: "stock-report", label: "Остатки", href: "/stock/report", iconKey: "stock-report", roles: ["owner"], sidebar: false },
+  { id: "stock-acts", label: "Акты склада", href: "/stock/acts", iconKey: "stock-acts", roles: ["owner"], sidebar: false },
+  { id: "stock-lots", label: "Партии и сроки", href: "/stock/lots", iconKey: "stock-lots", roles: ["owner"], sidebar: false },
+  { id: "stock-inventory", label: "Инвентаризация", href: "/stock/inventory", iconKey: "stock-inventory", roles: ["owner"], sidebar: false },
+  { id: "suppliers", label: "Поставщики", href: "/suppliers", iconKey: "suppliers", roles: ["owner"], sidebar: false },
   { id: "history-cash", label: "История кассы", href: "/history", iconKey: "history", roles: ["owner", "manager"] },
-  { id: "history", label: "История склада", href: "/history/stock", iconKey: "history", roles: ["owner"] },
+  { id: "history", label: "История склада", href: "/history/stock", iconKey: "history", roles: ["owner"], sidebar: false },
   { id: "shifts", label: "Смены", href: "/shifts", iconKey: "shifts", roles: ["owner"] },
   { id: "settings", label: "Настройки", href: "/settings", iconKey: "settings", roles: ["owner"] },
   { id: "users", label: "Пользователи", href: "/users", iconKey: "users", roles: ["owner"] },
@@ -89,7 +94,7 @@ export const NAV_BY_HREF: Record<string, NavItem> = NAV.reduce(
 )
 
 // Доступ к конкретному разделу. Воспроизводит ОБЪЕДИНЕНИЕ текущих правил:
-// owner — всё; manager — все его разделы из NAV; florist — только "orders",
+// owner — всё; manager — все его разделы из NAV; florist — "orders" и "order-drafts",
 // плюс "sales" при любой открытой смене (canAccessCash).
 export function canAccessSection(
   section: NavSectionId,
@@ -101,7 +106,7 @@ export function canAccessSection(
   }
 
   if (role === "florist") {
-    if (section === "orders") {
+    if (section === "orders" || section === "order-drafts") {
       return true
     }
 
@@ -112,10 +117,43 @@ export function canAccessSection(
 }
 
 // Видимые в сайдбаре разделы для роли. florist при открытой ночной смене
-// получает дополнительно "Касса" (sales), иначе — только "orders".
+// получает дополнительно "Касса" (sales), иначе — только "orders". Разделы с
+// sidebar:false в сайдбар не попадают (они — вкладки внутри родительского раздела).
 export function getNavForRole(
   role: UserRole,
   { canAccessCash }: { canAccessCash: boolean }
 ): NavItem[] {
-  return NAV.filter((item) => canAccessSection(item.id, role, canAccessCash))
+  return NAV.filter((item) => item.sidebar !== false && canAccessSection(item.id, role, canAccessCash))
+}
+
+export type SubTab = { id: NavSectionId; label: string; href: string }
+
+// Вкладки раздела «Склад» — единая подшапка на всех складских страницах вместо 7 пунктов
+// сайдбара. Порядок = порядок вкладок. Доступ по-прежнему через canAccessSection.
+export const STOCK_SUBNAV: SubTab[] = [
+  { id: "stock", label: "Товары", href: "/stock" },
+  { id: "stock-report", label: "Остатки", href: "/stock/report" },
+  { id: "stock-acts", label: "Акты", href: "/stock/acts" },
+  { id: "stock-lots", label: "Партии", href: "/stock/lots" },
+  { id: "stock-inventory", label: "Инвентаризация", href: "/stock/inventory" },
+  { id: "suppliers", label: "Поставщики", href: "/suppliers" },
+  { id: "history", label: "История склада", href: "/history/stock" },
+]
+
+// Вкладки раздела «Стол заказов»: сам стол + черновики. Оба раздела доступны всем ролям,
+// включая флориста.
+export const ORDERS_SUBNAV: SubTab[] = [
+  { id: "orders", label: "Стол заказов", href: "/orders" },
+  { id: "order-drafts", label: "Черновики", href: "/orders/drafts" },
+]
+
+const SUBNAVS: Array<{ parent: NavSectionId; tabs: SubTab[] }> = [
+  { parent: "stock", tabs: STOCK_SUBNAV },
+  { parent: "orders", tabs: ORDERS_SUBNAV },
+]
+
+// Подшапка-вкладки для раздела, которому принадлежит active (или null, если раздел без вкладок).
+// parent — пункт сайдбара, который надо подсветить для всех вкладок этого раздела.
+export function getSubnav(active: NavSectionId): { parent: NavSectionId; tabs: SubTab[] } | null {
+  return SUBNAVS.find((entry) => entry.tabs.some((tab) => tab.id === active)) ?? null
 }

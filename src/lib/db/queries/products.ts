@@ -1,4 +1,5 @@
 import { mapProductRow, numberFromRow } from "@/lib/db-row"
+import { SHOP_UTC_OFFSET_SQL } from "@/lib/datetime"
 import type { CurrentUser, Product } from "../types"
 import { db } from "../connection"
 import { addMovement, getProduct, recordStockMovement } from "../ledger"
@@ -277,7 +278,7 @@ export function setProductArchived(code: string, archived: boolean, currentUser:
 }
 
 // Только архивные товары — для вкладки «В архиве» на странице склада. getDashboardData отдаёт
-// активные (LIMIT 234), поэтому архив тянем отдельным запросом без лимита (архив обычно невелик).
+// только активные, поэтому архив тянем отдельным запросом.
 export function listArchivedProducts(): Product[] {
   return (
     db()
@@ -288,6 +289,24 @@ export function listArchivedProducts(): Product[] {
       )
       .all() as Array<Record<string, unknown>>
   ).map(mapProductRow)
+}
+
+// Верхние категории каталога («Базовый цветок 65%/Розы» → «Базовый цветок 65%») — для фильтров.
+// Архивные товары включены: в истории движений встречаются и их категории.
+export function listTopCategories(): string[] {
+  const rows = db()
+    .prepare(
+      `SELECT DISTINCT CASE
+         WHEN instr(category_path, '/') > 0 THEN substr(category_path, 1, instr(category_path, '/') - 1)
+         ELSE category_path
+       END as topCategory
+       FROM products
+       WHERE COALESCE(category_path, '') != ''
+       ORDER BY topCategory COLLATE NOCASE`
+    )
+    .all() as Array<{ topCategory: string }>
+
+  return rows.map((row) => row.topCategory)
 }
 
 // Активные товары для отчёта «Остатки» — отсортированы по категории, затем по названию.
@@ -302,4 +321,30 @@ export function listActiveProductsForReport(): Product[] {
       )
       .all() as Array<Record<string, unknown>>
   ).map(mapProductRow)
+}
+
+// Остатки на конец дня dateISO (YYYY-MM-DD, таймзона магазина): текущий stock минус сумма
+// дельт журнала stock_movements ПОСЛЕ этой даты. Журнал покрывает все изменения остатка
+// (продажи, заказы, акты, инвентаризации, импорт, возвраты); у reserve/reserve_cancel
+// before_stock == after_stock, поэтому их дельта равна нулю и отдельно исключать не нужно.
+// Себестоимость/цена в журнале не хранятся — отдаём текущие (в UI есть пометка).
+// Архивные товары включаем, если на выбранную дату их остаток был ненулевым.
+export function listActiveProductsForReportAsOf(dateISO: string): Product[] {
+  const rows = db()
+    .prepare(
+      `SELECT products.*,
+         COALESCE(products.stock, 0) - COALESCE((
+           SELECT SUM(COALESCE(m.after_stock, 0) - COALESCE(m.before_stock, 0))
+           FROM stock_movements m
+           WHERE m.product_code = products.code
+             AND DATE(m.created_at, '${SHOP_UTC_OFFSET_SQL}') > @date
+         ), 0) AS stock_as_of
+       FROM products
+       ORDER BY category_path COLLATE NOCASE, name COLLATE NOCASE`
+    )
+    .all({ date: dateISO }) as Array<Record<string, unknown>>
+
+  return rows
+    .map((row) => ({ ...mapProductRow(row), stock: numberFromRow(row.stock_as_of) }))
+    .filter((product) => product.isActive || product.stock !== 0)
 }

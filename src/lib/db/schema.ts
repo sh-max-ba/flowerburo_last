@@ -1093,3 +1093,99 @@ export function migrateOrderDraftPrepayment(client: Database.Database) {
     client
   )
 }
+
+// v20: сохраняемые шаблоны категорий для инвентаризации. Именованный набор категорий (categories —
+// JSON-массив строк-путей), который владелец выбирает одним кликом при создании новой инвентаризации
+// вместо повторной отметки тех же категорий. Хранение глобальное (на магазин). Аддитивно, идемпотентно.
+export function migrateInventoryCategoryTemplates(client: Database.Database) {
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS inventory_category_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      categories TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `)
+}
+
+// v21: брак в приходном акте. defect_qty — количество бракованного товара в строке приёмки. На остаток
+// зачисляется только годное (qty − defect_qty); брак фиксируется для отчётности (напр., качество поставщика)
+// и на склад/себестоимость не попадает. Только приход (у списания/инвентаризации поле = 0). Аддитивно,
+// идемпотентно — старые строки получают defect_qty = 0, поведение без брака не меняется.
+export function migrateStockDefectQty(client: Database.Database) {
+  ensureColumn(
+    "stock_document_items",
+    "defect_qty",
+    "ALTER TABLE stock_document_items ADD COLUMN defect_qty REAL NOT NULL DEFAULT 0",
+    client
+  )
+}
+
+// v23: оплата поставщику по приходному акту. paid_amount — сколько уже уплачено поставщику за
+// этот приход (0 по умолчанию, вводится в форме акта). Долг поставщику по акту считается как
+// goods_total − paid_amount и только у ПРОВЕДЁННОГО прихода (у черновика goods_total ещё 0, у
+// отменённого/скорректированного долга нет). Накладные расходы (доставка и т.п.) в долг не входят
+// — их платят не обязательно тому же контрагенту. Аддитивно, идемпотентно.
+export function migrateStockSupplierPayment(client: Database.Database) {
+  ensureColumn(
+    "stock_documents",
+    "paid_amount",
+    "ALTER TABLE stock_documents ADD COLUMN paid_amount REAL NOT NULL DEFAULT 0",
+    client
+  )
+}
+
+// v22: индексы CRM-списков. listCustomers агрегирует COUNT(DISTINCT …) по заказам/продажам клиента,
+// связка сделка↔заказ ищется по orders.deal_id — без этих индексов SQLite строит AUTOMATIC COVERING
+// INDEX (полный проход таблицы) на каждом рендере /clients и /deals.
+export function migrateCrmListIndexes(client: Database.Database) {
+  client.exec(`
+    CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_sales_customer_id ON sales(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_deal_id ON orders(deal_id);
+  `)
+}
+
+// v24: изображения заказа. Файл загружается заранее (POST /api/orders/images) и создаёт строку с
+// order_id = NULL («ожидает привязки»); при сохранении формы заказа строки привязываются по списку id
+// (syncOrderImages). Непривязанные строки и файлы-сироты старше суток чистит cleanupOrphanOrderImages.
+// Файлы лежат в public/uploads/orders/, раздаются через /uploads/orders/[filename]. Аддитивно, идемпотентно.
+export function migrateOrderImages(client: Database.Database) {
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS order_images (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id INTEGER,
+      image_path TEXT NOT NULL,
+      thumb_path TEXT NOT NULL DEFAULT '',
+      original_name TEXT NOT NULL DEFAULT '',
+      width INTEGER NOT NULL DEFAULT 0,
+      height INTEGER NOT NULL DEFAULT 0,
+      position INTEGER NOT NULL DEFAULT 0,
+      created_by_user_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_order_images_order_id ON order_images(order_id);
+  `)
+}
+
+// v25: отложенная предоплата заказа. Предоплата, указанная при создании заказа (или в черновике —
+// при отправке в работу), в кассу НЕ проводится сразу: её части (способ + сумма + кто принял)
+// лежат здесь, а кассовая проводка type='prepayment' создаётся в момент ВЫДАЧИ заказа (выдан
+// клиенту / передан курьеру) в смену выдачи — по решению клиента предоплата попадает в тот день,
+// когда заказ выдан, а не когда создан. Строки удаляются при проводке и при отмене заказа
+// (отмена — без кассовой операции по непроведённой части). Уже проведённые предоплаты старых
+// заказов не трогаем — их проводки остаются в сменах приёма. Аддитивно, идемпотентно.
+export function migrateOrderPendingPrepayments(client: Database.Database) {
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS order_pending_prepayments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id INTEGER NOT NULL,
+      user_id INTEGER,
+      payment_method TEXT NOT NULL,
+      amount REAL NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_order_pending_prepayments_order_id ON order_pending_prepayments(order_id);
+  `)
+}

@@ -13,7 +13,8 @@ export async function GET() {
     return Response.json({ count: 0 }, { headers: noStoreHeaders })
   }
 
-  const row = initDb()
+  const client = initDb()
+  const row = client
     .prepare(
       `WITH default_pipeline AS (
         SELECT id
@@ -31,7 +32,9 @@ export async function GET() {
        SELECT COUNT(*) as count
        FROM deals
        LEFT JOIN deal_stages ON deal_stages.id = deals.stage_id
-       WHERE deals.source = 'whatsapp'
+       -- «Входящая» = сделка, привязанная к чату (вебхук всегда проставляет wazzup_chat_id);
+       -- фильтр по source ловил только личный WhatsApp и терял whatsgroup/telegram/instagram.
+       WHERE COALESCE(deals.wazzup_chat_id, '') != ''
         AND deals.status = 'open'
         AND deals.order_id IS NULL
         AND COALESCE(deal_stages.is_closed, 0) != 1
@@ -43,7 +46,23 @@ export async function GET() {
     )
     .get() as { count: number } | undefined
 
-  return Response.json({ count: Number(row?.count ?? 0) }, { headers: noStoreHeaders })
+  // Ревизия доски для DealsAutoRefresh: меняется при ЛЮБОМ изменении сделок (новая заявка,
+  // входящее сообщение в открытую сделку, смена этапа, правка карточки) — бейджу в сайдбаре
+  // по-прежнему нужен только count «входящих».
+  const revisionRow = client
+    .prepare(
+      `SELECT COUNT(*) as total, COALESCE(MAX(id), 0) as maxId, COALESCE(MAX(updated_at), '') as maxUpdatedAt
+       FROM deals`
+    )
+    .get() as { total: number; maxId: number; maxUpdatedAt: string } | undefined
+
+  return Response.json(
+    {
+      count: Number(row?.count ?? 0),
+      revision: `${Number(row?.count ?? 0)}:${revisionRow?.total ?? 0}:${revisionRow?.maxId ?? 0}:${revisionRow?.maxUpdatedAt ?? ""}`,
+    },
+    { headers: noStoreHeaders }
+  )
 }
 
 const noStoreHeaders = {

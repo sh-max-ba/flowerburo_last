@@ -171,8 +171,11 @@ export function processWazzupWebhook(payload: unknown): WebhookProcessingResult 
     const result: WebhookProcessingResult = {}
 
     if (body.createContact) {
-      const contact = upsertCustomerFromContext(client, contextFromCreateContact(body.createContact))
-      result.contactId = contact.id
+      const context = contextFromCreateContact(body.createContact)
+      if (!isGroupChatType(context.chatType)) {
+        const contact = upsertCustomerFromContext(client, context)
+        result.contactId = contact.id
+      }
     }
 
     if (body.createDeal) {
@@ -199,6 +202,9 @@ export function processWazzupWebhook(payload: unknown): WebhookProcessingResult 
 function upsertDealFromCreateDeal(client: Database.Database, payload: unknown) {
   const record = asRecord(payload)
   const context = contextFromCreateDeal(client, record)
+  if (isGroupChatType(context.chatType)) {
+    return { customerId: null, dealId: null }
+  }
   const customer = upsertCustomerFromContext(client, context)
   const dealId = upsertOpenDealForCustomer(client, customer, context, null)
 
@@ -294,9 +300,13 @@ function processMessages(client: Database.Database, messages: unknown[]) {
     }
 
     messagesSaved += 1
-    const customer = isEcho ? findCustomerByContext(client, context) : upsertCustomerFromContext(client, context)
+    const isGroupChat = isGroupChatType(context.chatType)
+    const customer =
+      isEcho || isGroupChat ? findCustomerByContext(client, context) : upsertCustomerFromContext(client, context)
     const existingDeal = findOpenDealByContext(client, context, customer?.id ?? null)
-    const currentDealId = existingDeal?.id ?? (!isEcho && customer ? upsertOpenDealForCustomer(client, customer, context, record) : null)
+    const currentDealId =
+      existingDeal?.id ??
+      (!isEcho && !isGroupChat && customer ? upsertOpenDealForCustomer(client, customer, context, record) : null)
 
     contactId = customer?.id ?? contactId
     dealId = currentDealId ?? dealId
@@ -693,6 +703,15 @@ function getFirstStageId(client: Database.Database, pipelineId: number | null) {
 
 function chatTypeToSource(chatType: string) {
   return clean(chatType) || "whatsapp"
+}
+
+// Группы (WhatsApp/Telegram/MAX) не создают клиентов и сделок: каждая группа, где состоит номер
+// магазина, порождала бы «клиента» и сделку-шум. Сообщения групп сохраняются (история, дедуп),
+// а сделка, уже привязанная к группе, продолжает получать ленту через findOpenDealByContext.
+const GROUP_CHAT_TYPES = new Set(["whatsgroup", "telegroup", "maxgroup"])
+
+function isGroupChatType(chatType: string) {
+  return GROUP_CHAT_TYPES.has(clean(chatType))
 }
 
 function normalizeChatId(chatType: string, chatId: string) {

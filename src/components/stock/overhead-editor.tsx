@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { PlusIcon, Trash2Icon } from "lucide-react"
 import type { AllocationMethod, StockDocumentOverhead, StockOverheadKind } from "@/lib/db"
 import { allocationMethodLabel, stockOverheadKindLabel } from "@/lib/labels"
@@ -28,10 +28,13 @@ export function OverheadEditor({
   initialOverheads = [],
   initialMethod = "by_value",
   disabled,
+  onStateChange,
 }: {
   initialOverheads?: StockDocumentOverhead[]
   initialMethod?: AllocationMethod
   disabled?: boolean
+  // Живой предпросмотр себестоимости в форме акта: сообщаем сумму расходов и метод распределения.
+  onStateChange?: (state: { total: number; method: AllocationMethod }) => void
 }) {
   const [method, setMethod] = useState<AllocationMethod>(initialMethod)
   const [rows, setRows] = useState<Row[]>(
@@ -44,6 +47,12 @@ export function OverheadEditor({
   )
 
   const total = rows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0)
+
+  useEffect(() => {
+    onStateChange?.({ total, method })
+    // Родитель передаёт стабильный setState-колбэк; зависимость только от значений.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [total, method])
 
   function addRow() {
     setRows((current) => {

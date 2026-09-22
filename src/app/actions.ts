@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { canCloseShift, canUseCash, getCurrentUser } from "@/lib/auth"
+import { getPaymentMethodLabel } from "@/lib/labels"
 import {
   addDealItem,
   addDealBouquet,
@@ -38,6 +39,8 @@ import {
 } from "@/lib/wazzup"
 import {
   cancelOrder,
+  findRefundableOrders,
+  findRefundableSales,
   cancelStockDocument,
   acceptDealPayment,
   cashIn,
@@ -60,10 +63,13 @@ import {
   createAndPostStockDocument,
   createStockCorrectionDraft,
   createInventoryDraftWithSnapshot,
+  addInventoryItem,
   saveInventoryDraft,
   recalcInventoryExpected,
   postInventory,
   cancelInventory,
+  createInventoryCategoryTemplate,
+  deleteInventoryCategoryTemplate,
   getInventoryEnabled,
   setInventoryEnabled,
   createUser,
@@ -97,6 +103,8 @@ import {
   type CurrentUser,
   type CustomerOption,
   type BouquetTemplateInput,
+  type RefundableOrder,
+  type RefundableSale,
 } from "@/lib/db"
 
 type ActionResult = {
@@ -116,8 +124,16 @@ type DataActionResult<T> =
       message: string
     }
 
-type ActionPayload = void | string[] | boolean | { acceptedPayment: boolean; paidCourier: boolean }
+type ActionPayload =
+  | void
+  | string[]
+  | boolean
+  | { acceptedPayment: boolean; paidCourier: boolean; postedPrepaid?: number }
 type UserAction = (user: CurrentUser) => ActionPayload | Promise<ActionPayload>
+
+function formatSom(value: number) {
+  return `${new Intl.NumberFormat("ru-RU").format(value)} сом`
+}
 
 function getShiftId(formData: FormData) {
   return Number(String(formData.get("shiftId") ?? "").trim())
@@ -193,8 +209,12 @@ async function runAction(
       }
     }
     if (result && typeof result === "object") {
+      const postedPrepaid = result.postedPrepaid ?? 0
       const messages = [
         ...(result.acceptedPayment ? ["Доплата принята"] : []),
+        // Отложенная предоплата попала в кассу только сейчас — говорим об этом явно, чтобы
+        // кассир понимал, почему «Ожидается в кассе» выросло больше, чем на доплату.
+        ...(postedPrepaid > 0 ? [`Предоплата ${formatSom(postedPrepaid)} проведена в кассу`] : []),
         ...(result.paidCourier ? ["Курьеру выдано из кассы"] : []),
         message,
       ]
@@ -382,6 +402,32 @@ export async function saveInventoryDraftAction(formData: FormData) {
   )
 }
 
+// Тихий автосейв черновика инвентаризации: пишет введённый факт в БД, но НАМЕРЕННО не ревалидирует
+// пути — текущая страница не должна перерисовываться на каждый ввод (иначе мерцание и риск сброса
+// фокуса/значений). Клиент сам ведёт снимок «уже сохранённого». Та же запись, что и ручное «Сохранить».
+export async function autosaveInventoryDraftAction(formData: FormData) {
+  try {
+    await requireActionRole(["owner"])
+    saveInventoryDraft(formData)
+    return { ok: true as const, message: "" }
+  } catch (error) {
+    return { ok: false as const, message: error instanceof Error ? error.message : "Не удалось сохранить." }
+  }
+}
+
+export async function addInventoryItemAction(formData: FormData) {
+  const documentId = Number(formData.get("documentId"))
+  const productCode = String(formData.get("productCode") ?? "")
+  return runRoleAction(
+    ["owner"],
+    () => {
+      addInventoryItem(documentId, productCode)
+      revalidateInventory(documentId)
+    },
+    "Товар добавлен в инвентаризацию."
+  )
+}
+
 export async function recalcInventoryExpectedAction(documentId: number) {
   return runRoleAction(
     ["owner"],
@@ -412,6 +458,28 @@ export async function cancelInventoryAction(documentId: number) {
       revalidateInventory(documentId)
     },
     "Инвентаризация отменена."
+  )
+}
+
+export async function createInventoryCategoryTemplateAction(formData: FormData) {
+  return runRoleAction(
+    ["owner"],
+    () => {
+      createInventoryCategoryTemplate(formData)
+      revalidatePath("/stock/inventory")
+    },
+    "Шаблон сохранён."
+  )
+}
+
+export async function deleteInventoryCategoryTemplateAction(id: number) {
+  return runRoleAction(
+    ["owner"],
+    () => {
+      deleteInventoryCategoryTemplate(id)
+      revalidatePath("/stock/inventory")
+    },
+    "Шаблон удалён."
   )
 }
 
@@ -997,13 +1065,26 @@ export async function reverseCashTransactionAction(formData: FormData) {
 }
 
 export async function createOrderAction(formData: FormData) {
-  return runRoleAction(["owner", "manager"], (user) => createOrder(formData, user), "Заказ создан и отправлен флористам")
-}
-
-// Черновики заказов — owner/manager (флористы их не видят и не трогают). Серверная граница доступа.
-export async function createOrderDraftAction(formData: FormData) {
   return runRoleAction(
     ["owner", "manager"],
+    (user) => {
+      const { prepaid } = createOrder(formData, user)
+      return [
+        "Заказ создан и отправлен флористам",
+        ...(prepaid > 0 ? [`Предоплата ${formatSom(prepaid)} попадёт в кассу при выдаче заказа`] : []),
+      ]
+    },
+    "Заказ создан и отправлен флористам"
+  )
+}
+
+// Черновики заказов — все роли, включая флориста: он их и видит, и правит, и отправляет в работу.
+// Предоплата черновика при отправке в работу становится отложенной предоплатой заказа (в кассу
+// проводится при выдаче, в смену выдачи), а удаление черновика необратимо — в отличие от
+// createOrderAction (обычный заказ), который остаётся за owner/manager.
+export async function createOrderDraftAction(formData: FormData) {
+  return runRoleAction(
+    ["owner", "manager", "florist"],
     (user) => {
       createOrderDraft(formData, user)
     },
@@ -1014,7 +1095,7 @@ export async function createOrderDraftAction(formData: FormData) {
 export async function updateOrderDraftAction(formData: FormData) {
   const orderId = Number(formData.get("orderId") ?? formData.get("id"))
   return runRoleAction(
-    ["owner", "manager"],
+    ["owner", "manager", "florist"],
     (user) => {
       updateOrderDraft(orderId, formData, user)
     },
@@ -1024,14 +1105,20 @@ export async function updateOrderDraftAction(formData: FormData) {
 
 export async function finalizeOrderDraftAction(orderId: number, priceMode: "keep" | "current" = "keep") {
   return runRoleAction(
-    ["owner", "manager"],
-    (user) => finalizeOrderDraft(orderId, user, { priceMode }),
+    ["owner", "manager", "florist"],
+    (user) => {
+      const { prepaid } = finalizeOrderDraft(orderId, user, { priceMode })
+      return [
+        "Черновик отправлен флористам",
+        ...(prepaid > 0 ? [`Предоплата ${formatSom(prepaid)} попадёт в кассу при выдаче заказа`] : []),
+      ]
+    },
     "Черновик отправлен флористам"
   )
 }
 
 export async function deleteDraftOrderAction(orderId: number) {
-  return runRoleAction(["owner", "manager"], (user) => deleteDraftOrder(orderId, user), "Черновик удалён")
+  return runRoleAction(["owner", "manager", "florist"], (user) => deleteDraftOrder(orderId, user), "Черновик удалён")
 }
 
 export async function startOrderWorkAction(orderId: number) {
@@ -1050,13 +1137,26 @@ export async function handOrderToCourierAction(orderId: number, formData: FormDa
   return runCashAction((user) => handOrderToCourier(orderId, formData, user), "Заказ передан курьеру")
 }
 
-export async function cancelOrderAction(orderId: number) {
+// Единый поиск для возврата (owner/manager). Только чтение: и заказы, и прямые продажи в одном
+// ответе, чтобы менеджер не думал «продажа это или заказ». Возврат заказа идёт через
+// cancelOrderAction, возврат продажи — через reverseCashTransactionAction (по cashTransactionId).
+export async function findRefundablesAction(
+  query: string
+): Promise<DataActionResult<{ orders: RefundableOrder[]; sales: RefundableSale[] }>> {
+  return runDataAction(
+    ["owner", "manager"],
+    () => ({ orders: findRefundableOrders(query), sales: findRefundableSales(query) }),
+    "Готово"
+  )
+}
+
+export async function cancelOrderAction(orderId: number, reason = "") {
   // Отмена может проводить возврат денег в кассу → требуется кассовый доступ (как у
   // выдачи/передачи курьеру), а не только роль. Иначе флорист без своей ночной смены
   // мог бы загнать возврат в чужую открытую смену.
   return runCashAction(
     (user) => {
-      const result = cancelOrder(orderId, user)
+      const result = cancelOrder(orderId, user, reason)
       if (result.dealId) {
         revalidateCrm(null, result.dealId)
       }
@@ -1065,7 +1165,15 @@ export async function cancelOrderAction(orderId: number) {
         messages.push("Букет уже собран, склад автоматически не восстанавливается")
       }
       if (result.refunded > 0) {
-        messages.push(`Возврат ${new Intl.NumberFormat("ru-RU").format(result.refunded)} сом проведён`)
+        messages.push(`Возврат ${formatSom(result.refunded)} проведён через кассу`)
+      }
+      if (result.pendingReturned > 0) {
+        // Отложенная предоплата в кассу не проводилась (проводится при выдаче) — кассовой
+        // операции возврата нет, деньги клиенту возвращаются вне кассы.
+        const parts = result.pendingParts
+          .map((part) => `${formatSom(part.amount)} ${getPaymentMethodLabel(part.paymentMethod).toLowerCase()}`)
+          .join(" + ")
+        messages.push(`Предоплата ${parts} в кассу не попадала — просто верните её клиенту`)
       }
       messages.push("Заказ отменен")
       return messages

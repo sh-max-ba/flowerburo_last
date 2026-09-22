@@ -1,7 +1,7 @@
-// Заголовки/контексты топбара. Ключи синхронизированы с href из @/lib/nav
-// (NAV_BY_HREF), плюс маршруты без записи в NAV: "/history/stock" (его NAV-href,
-// но иной заголовок) и "/cash" (куда normalizePath сводит "/"). Осиротевший
-// "/history" удалён вместе с маршрутом (канон — "/history/stock").
+// Заголовки/контексты топбара. Ключи синхронизированы с href из @/lib/nav.
+// "/cash" — куда normalizePath сводит "/". Детальные маршруты (/deals/[id],
+// /suppliers/[id], /stock/inventory/[id], /warehouse/imports/[id] и т.п.)
+// разбираются регулярками в getPageTitle/getPageContext ниже.
 const routeTitles: Record<string, string> = {
   "/dashboard": "Дашборд",
   "/cash": "Касса",
@@ -9,7 +9,13 @@ const routeTitles: Record<string, string> = {
   "/orders/drafts": "Черновики",
   "/ready-orders": "Готовые заказы",
   "/stock": "Склад",
+  "/stock/report": "Остатки",
   "/stock/acts": "Акты склада",
+  "/stock/lots": "Партии и сроки",
+  "/stock/inventory": "Инвентаризация",
+  "/suppliers": "Поставщики",
+  "/warehouse/imports": "Импорты склада",
+  "/history": "История кассы",
   "/history/stock": "История склада",
   "/shifts": "Смены",
   "/clients": "Клиенты",
@@ -26,7 +32,13 @@ const routeContexts: Record<string, string> = {
   "/orders/drafts": "Несогласованные заказы",
   "/ready-orders": "Выдача и доставка",
   "/stock": "Остатки и движения",
+  "/stock/report": "Остатки и себестоимость",
   "/stock/acts": "Складские документы",
+  "/stock/lots": "Себестоимость по партиям",
+  "/stock/inventory": "Пересчёт остатков",
+  "/suppliers": "Справочник поставщиков",
+  "/warehouse/imports": "Импорт остатков из файла",
+  "/history": "Кассовые операции",
   "/history/stock": "Движения товаров",
   "/shifts": "История смен",
   "/clients": "База клиентов",
@@ -55,6 +67,18 @@ export function getPageTitle(pathname: string) {
     return "Акт склада"
   }
 
+  if (/^\/suppliers\/[^/]+$/.test(path)) {
+    return "Поставщик"
+  }
+
+  if (/^\/stock\/inventory\/[^/]+$/.test(path)) {
+    return "Инвентаризация"
+  }
+
+  if (/^\/warehouse\/imports\/[^/]+$/.test(path)) {
+    return "Импорт"
+  }
+
   return routeTitles[path] ?? "FlowerBuro | sellz"
 }
 
@@ -75,6 +99,18 @@ export function getPageContext(pathname: string) {
 
   if (/^\/stock\/acts\/[^/]+(?:\/edit)?$/.test(path)) {
     return "Детали документа"
+  }
+
+  if (/^\/suppliers\/[^/]+$/.test(path)) {
+    return "Карточка поставщика"
+  }
+
+  if (/^\/stock\/inventory\/[^/]+$/.test(path)) {
+    return "Лист пересчёта"
+  }
+
+  if (/^\/warehouse\/imports\/[^/]+$/.test(path)) {
+    return "Отчёт импорта"
   }
 
   return routeContexts[path] ?? ""
