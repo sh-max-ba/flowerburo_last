@@ -1645,21 +1645,39 @@ const chatTypeTransports: Record<string, string[]> = {
   viber: ["viber"],
 }
 
-// Активный канал Wazzup для отправки в чат данного типа, когда у диалога ещё нет channelId
-// (диалог создан вручную по телефону). Возвращает пустую строку, если подходящего канала нет.
-export async function resolveActiveChannelForChatType(chatType: string): Promise<string> {
+// Список активных каналов с коротким кэшем: проверяем канал на каждую отправку, но не дёргаем
+// API на каждое сообщение (после перевыпуска ключа/переподключения номера старые channelId в
+// диалогах становятся невалидными — CHANNEL_NOT_FOUND).
+let activeChannelsCache: { at: number; channels: WazzupChannelSummary[] } | null = null
+const activeChannelsTtlMs = 60_000
+
+export async function listActiveWazzupChannels(): Promise<WazzupChannelSummary[]> {
+  if (activeChannelsCache && Date.now() - activeChannelsCache.at < activeChannelsTtlMs) {
+    return activeChannelsCache.channels
+  }
+  const channels = (await listWazzupChannels()).filter((channel) => channel.state === "active" && channel.channelId)
+  activeChannelsCache = { at: Date.now(), channels }
+  return channels
+}
+
+// Канал для отправки в чат данного типа: сохранённый у диалога, если он всё ещё активен и
+// подходит по транспорту, иначе первый подходящий активный. Пустая строка — подходящего нет.
+// При недоступности API оставляем сохранённый канал (лучше попробовать, чем отказать).
+export async function resolveActiveChannelForChatType(chatType: string, preferredChannelId = ""): Promise<string> {
   const transports = chatTypeTransports[clean(chatType)] ?? [clean(chatType)]
+  const preferred = clean(preferredChannelId)
   try {
-    const channels = (await listWazzupChannels()).filter(
-      (channel) => channel.state === "active" && channel.channelId && transports.includes(channel.transport)
-    )
+    const channels = (await listActiveWazzupChannels()).filter((channel) => transports.includes(channel.transport))
+    if (preferred && channels.some((channel) => channel.channelId === preferred)) {
+      return preferred
+    }
     return channels[0]?.channelId ?? ""
   } catch (error) {
     console.warn("Failed to resolve active Wazzup channel", {
       chatType,
       message: error instanceof Error ? error.message : "unknown",
     })
-    return ""
+    return preferred
   }
 }
 

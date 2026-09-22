@@ -364,8 +364,9 @@ export function setChatChannel(chatRowId: number, channelId: string, client: Dat
   if (!value) {
     return
   }
+  // Перезаписываем и уже заполненный канал: после переподключения номера id меняется.
   client
-    .prepare("UPDATE chats SET channel_id = @channelId, updated_at = CURRENT_TIMESTAMP WHERE id = @id AND COALESCE(channel_id, '') = ''")
+    .prepare("UPDATE chats SET channel_id = @channelId, updated_at = CURRENT_TIMESTAMP WHERE id = @id AND COALESCE(channel_id, '') <> @channelId")
     .run({ id: Math.trunc(chatRowId), channelId: value })
 }
 

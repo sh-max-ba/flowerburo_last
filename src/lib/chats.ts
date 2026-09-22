@@ -82,7 +82,7 @@ async function resolveSendTarget(chat: ChatSummary) {
   if (!settings.apiKey) {
     throw new Error("Wazzup API key не настроен на сервере.")
   }
-  const channelId = chat.channelId || (await resolveActiveChannelForChatType(chat.chatType))
+  const channelId = await resolveActiveChannelForChatType(chat.chatType, chat.channelId)
   if (!channelId) {
     throw new Error("Нет активного канала Wazzup для этого мессенджера — подключите канал в настройках.")
   }
