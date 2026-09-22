@@ -27,6 +27,7 @@ import { toast } from "sonner"
 import { markChatAnsweredAction, sendBouquetToChatAction, sendChatMessageAction } from "@/app/actions"
 import type { BouquetTemplate, ChatSummary, WazzupMessage } from "@/lib/db"
 import { chatUploadTypes, maxChatUploadSize } from "@/lib/chat-uploads"
+import { parseDbInstant } from "@/lib/datetime"
 import { wazzupMessageTypeLabel } from "@/lib/labels"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -252,6 +253,23 @@ export function ChatWindow({
       el.scrollTop = el.scrollHeight
     }
   }, [messages.length, pending.length, view.status])
+
+  // Контент ленты подрастает уже после первого рендера (подгрузка шрифта, фото) — пока
+  // пользователь внизу, держим низ и при изменении высоты содержимого.
+  useEffect(() => {
+    const el = scrollRef.current
+    const content = el?.firstElementChild
+    if (!el || !content || typeof ResizeObserver === "undefined") {
+      return
+    }
+    const observer = new ResizeObserver(() => {
+      if (stickToBottomRef.current) {
+        el.scrollTop = el.scrollHeight
+      }
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [view.status])
 
   function handleScroll() {
     const el = scrollRef.current
@@ -663,7 +681,7 @@ export function ChatWindow({
         ) : null}
         <ChatAvatar chatId={liveChat.id} name={liveChat.name} hasAvatar={liveChat.hasAvatar} chatType={liveChat.chatType} size="sm" />
         <div className="min-w-0 flex-1 leading-tight">
-          <div className="truncate text-sm font-semibold">{liveChat.name || liveChat.phone || liveChat.chatId}</div>
+          <div className="truncate text-[15px] font-semibold">{liveChat.name || liveChat.phone || liveChat.chatId}</div>
           <div className="flex min-w-0 items-center gap-1 truncate text-xs text-muted-foreground">
             <span className={channel.className}>{channel.label}</span>
             {phoneDigits ? (
@@ -678,10 +696,10 @@ export function ChatWindow({
               </>
             ) : null}
             {waitingSince ? (
-              <>
-                <span aria-hidden>·</span>
-                <span className="truncate text-amber-700">ждёт {waitingSince}</span>
-              </>
+              // Считается от текущего времени — на границе минуты сервер и клиент расходятся.
+              <span suppressHydrationWarning className="ml-1 shrink-0 rounded-full bg-amber-100 px-1.5 py-px text-[11px] font-medium text-amber-800">
+                ждёт {waitingSince}
+              </span>
             ) : null}
           </div>
         </div>
@@ -764,13 +782,14 @@ export function ChatWindow({
         </div>
       </div>
 
-      {/* Лента */}
-      <div ref={scrollRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto bg-muted/40 px-3 py-3 sm:px-5">
+      {/* Лента: колонка читаемой ширины по центру, чтобы на широком экране входящие и наши
+          сообщения не разъезжались по краям. */}
+      <div ref={scrollRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-zinc-100/80 px-3 py-4 sm:px-6">
         {view.status === "loading" ? (
-          <div className="flex flex-col gap-3">
-            <Skeleton className="h-10 w-2/3 rounded-lg" />
-            <Skeleton className="ml-auto h-10 w-1/2 rounded-lg" />
-            <Skeleton className="h-16 w-3/4 rounded-lg" />
+          <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
+            <Skeleton className="h-10 w-2/3 rounded-2xl bg-zinc-200/70" />
+            <Skeleton className="ml-auto h-10 w-1/2 rounded-2xl bg-zinc-200/70" />
+            <Skeleton className="h-16 w-3/4 rounded-2xl bg-zinc-200/70" />
           </div>
         ) : view.status !== "ok" ? (
           <div className="m-auto max-w-xs text-center text-sm text-muted-foreground">
@@ -786,134 +805,141 @@ export function ChatWindow({
             Сообщений пока нет. Напишите клиенту первым — сообщение появится здесь и в мессенджере.
           </div>
         ) : (
-          items.map((item, index) => {
-            const previous = items[index - 1]
-            const showDay = !previous || !sameDay(previous.dateTime, item.dateTime)
-            return (
-              <div key={item.key} className="flex flex-col gap-1.5">
-                {showDay ? (
-                  <div className="sticky top-0 z-10 mx-auto my-1 rounded-md bg-background/90 px-2.5 py-0.5 text-xs text-muted-foreground shadow-xs backdrop-blur">
-                    {formatDayLabel(item.dateTime)}
-                  </div>
-                ) : null}
-                <MessageBubble message={item} onAction={handleAction} onOpenImage={setLightbox} />
-              </div>
-            )
-          })
+          <div className="mx-auto flex w-full max-w-4xl flex-col">
+            {items.map((item, index) => {
+              const previous = items[index - 1]
+              const next = items[index + 1]
+              const showDay = !previous || !sameDay(previous.dateTime, item.dateTime)
+              const groupStart = showDay || !previous || !sameGroup(previous, item)
+              const groupEnd = !next || !sameDay(item.dateTime, next.dateTime) || !sameGroup(item, next)
+              return (
+                <div key={item.key} className={cn("flex flex-col", index > 0 && (groupStart ? "mt-3" : "mt-0.5"))}>
+                  {showDay ? (
+                    <div className="sticky top-0 z-10 mx-auto mb-3 rounded-full bg-background/90 px-3 py-1 text-[11px] font-medium text-muted-foreground shadow-xs backdrop-blur">
+                      {formatDayLabel(item.dateTime)}
+                    </div>
+                  ) : null}
+                  <MessageBubble message={item} groupStart={groupStart} groupEnd={groupEnd} onAction={handleAction} onOpenImage={setLightbox} />
+                </div>
+              )
+            })}
+          </div>
         )}
       </div>
 
-      {/* Композер */}
-      <div className="flex shrink-0 flex-col gap-2 bg-background px-3 py-2 sm:px-4">
-        {replyTo ? (
-          <div className="flex items-start gap-2 rounded-lg border-l-2 border-brand bg-muted/50 px-3 py-1.5 text-xs">
-            <div className="min-w-0 flex-1">
-              <div className="font-medium text-brand-strong">В ответ на сообщение</div>
-              <div className="truncate text-muted-foreground">{replyTo.text || "Вложение"}</div>
-            </div>
-            <button type="button" onClick={() => setReplyTo(null)} className="text-muted-foreground hover:text-foreground" aria-label="Отменить ответ">
-              <XIcon className="size-4" />
-            </button>
-          </div>
-        ) : null}
-
-        {attachments.length ? (
-          <div className="flex flex-wrap gap-2">
-            {attachments.map((attachment) => (
-              <div key={attachment.id} className="relative flex items-center gap-2 rounded-lg bg-muted/60 p-1.5 pr-8 text-xs">
-                {attachment.previewUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={attachment.previewUrl} alt="" className="size-12 rounded-md object-cover" />
-                ) : (
-                  <span className="flex size-12 items-center justify-center rounded-md bg-background text-muted-foreground">
-                    <FileTextIcon className="size-5" />
-                  </span>
-                )}
-                <span className="max-w-40 truncate font-medium">{attachment.file.name}</span>
-                <button
-                  type="button"
-                  onClick={() => removeAttachment(attachment.id)}
-                  className="absolute top-1 right-1 rounded-md p-1 text-muted-foreground hover:bg-background hover:text-foreground"
-                  aria-label="Убрать вложение"
-                >
-                  <XIcon className="size-3.5" />
-                </button>
+      {/* Композер — в той же колонке, что и лента */}
+      <div className="flex shrink-0 flex-col bg-background px-3 py-2.5 sm:px-4">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-2">
+          {replyTo ? (
+            <div className="flex items-start gap-2 rounded-xl border-l-2 border-brand bg-zinc-100 px-3 py-2 text-xs">
+              <div className="min-w-0 flex-1">
+                <div className="font-medium text-brand-strong">В ответ на сообщение</div>
+                <div className="truncate text-muted-foreground">{replyTo.text || "Вложение"}</div>
               </div>
-            ))}
-          </div>
-        ) : null}
-
-        {recording ? (
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg bg-muted/40 px-3 py-2">
-            <span className="flex items-center gap-2 text-sm font-medium">
-              <span className="size-2.5 animate-pulse rounded-full bg-red-500" aria-hidden />
-              Идёт запись
-              <span className="tabular-nums text-muted-foreground">{formatSeconds(recordSeconds)}</span>
-            </span>
-            <div className="flex items-center gap-1">
-              <Button type="button" variant="ghost" onClick={() => stopRecording("cancel")}>
-                Отмена
-              </Button>
-              <Button type="button" variant="ghost" className="bg-muted/60" onClick={() => stopRecording("transcribe")} title="Распознать речь и вставить текст в поле">
-                <WandSparklesIcon data-icon="inline-start" />В текст
-              </Button>
-              <Button type="button" onClick={() => stopRecording("send")}>
-                <SendIcon data-icon="inline-start" />
-                Голосом
-              </Button>
+              <button type="button" onClick={() => setReplyTo(null)} className="text-muted-foreground hover:text-foreground" aria-label="Отменить ответ">
+                <XIcon className="size-4" />
+              </button>
             </div>
-          </div>
-        ) : transcribing ? (
-          <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm font-medium text-muted-foreground">
-            <Loader2Icon className="size-4 animate-spin" />
-            Распознаём голос…
-          </div>
-        ) : (
-          <div className="flex items-end gap-1 rounded-lg bg-muted/55 p-1 focus-within:bg-background focus-within:ring-3 focus-within:ring-ring/15">
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept={Array.from(chatUploadTypes.keys()).join(",")}
-              className="hidden"
-              onChange={(event) => {
-                if (event.target.files?.length) {
-                  addFiles(event.target.files)
-                }
-                event.target.value = ""
-              }}
-            />
-            <ComposerButton icon={PaperclipIcon} label="Прикрепить файл" onClick={() => fileInputRef.current?.click()} disabled={sending} />
-            <ComposerButton icon={Flower2Icon} label="Предложить букет" onClick={() => setBouquetOpen(true)} disabled={sending} />
-            <Textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder="Сообщение…"
-              rows={1}
-              className="max-h-40 min-h-10 flex-1 resize-none border-0 bg-transparent px-2 py-2.5 text-base shadow-none field-sizing-content focus-visible:ring-0 sm:text-sm"
-              disabled={sending || view.status !== "ok"}
-              aria-label="Текст сообщения"
-            />
-            {input.trim() || attachments.length ? (
-              <Button
-                type="button"
-                size="icon-lg"
-                className="size-10 shrink-0 rounded-md"
-                onClick={() => void send()}
+          ) : null}
+
+          {attachments.length ? (
+            <div className="flex flex-wrap gap-2">
+              {attachments.map((attachment) => (
+                <div key={attachment.id} className="relative flex items-center gap-2 rounded-lg bg-muted/60 p-1.5 pr-8 text-xs">
+                  {attachment.previewUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={attachment.previewUrl} alt="" className="size-12 rounded-md object-cover" />
+                  ) : (
+                    <span className="flex size-12 items-center justify-center rounded-md bg-background text-muted-foreground">
+                      <FileTextIcon className="size-5" />
+                    </span>
+                  )}
+                  <span className="max-w-40 truncate font-medium">{attachment.file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(attachment.id)}
+                    className="absolute top-1 right-1 rounded-md p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+                    aria-label="Убрать вложение"
+                  >
+                    <XIcon className="size-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {recording ? (
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg bg-muted/40 px-3 py-2">
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <span className="size-2.5 animate-pulse rounded-full bg-red-500" aria-hidden />
+                Идёт запись
+                <span className="tabular-nums text-muted-foreground">{formatSeconds(recordSeconds)}</span>
+              </span>
+              <div className="flex items-center gap-1">
+                <Button type="button" variant="ghost" onClick={() => stopRecording("cancel")}>
+                  Отмена
+                </Button>
+                <Button type="button" variant="ghost" className="bg-muted/60" onClick={() => stopRecording("transcribe")} title="Распознать речь и вставить текст в поле">
+                  <WandSparklesIcon data-icon="inline-start" />В текст
+                </Button>
+                <Button type="button" onClick={() => stopRecording("send")}>
+                  <SendIcon data-icon="inline-start" />
+                  Голосом
+                </Button>
+              </div>
+            </div>
+          ) : transcribing ? (
+            <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm font-medium text-muted-foreground">
+              <Loader2Icon className="size-4 animate-spin" />
+              Распознаём голос…
+            </div>
+          ) : (
+            <div className="flex items-end gap-1 rounded-2xl bg-zinc-100 p-1.5 transition-shadow focus-within:bg-background focus-within:ring-3 focus-within:ring-ring/15">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={Array.from(chatUploadTypes.keys()).join(",")}
+                className="hidden"
+                onChange={(event) => {
+                  if (event.target.files?.length) {
+                    addFiles(event.target.files)
+                  }
+                  event.target.value = ""
+                }}
+              />
+              <ComposerButton icon={PaperclipIcon} label="Прикрепить файл" onClick={() => fileInputRef.current?.click()} disabled={sending} />
+              <ComposerButton icon={Flower2Icon} label="Предложить букет" onClick={() => setBouquetOpen(true)} disabled={sending} />
+              <Textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                placeholder="Сообщение…"
+                rows={1}
+                className="max-h-40 min-h-10 flex-1 resize-none border-0 bg-transparent px-2 py-2.5 text-base shadow-none field-sizing-content focus-visible:ring-0 sm:text-sm"
                 disabled={sending || view.status !== "ok"}
-                aria-label="Отправить"
-                title="Отправить (Enter)"
-              >
-                {sending ? <Loader2Icon className="animate-spin" /> : <SendIcon />}
-              </Button>
-            ) : (
-              <ComposerButton icon={MicIcon} label="Записать голосовое" onClick={() => void startRecording()} disabled={sending || view.status !== "ok"} />
-            )}
-          </div>
-        )}
+                aria-label="Текст сообщения"
+              />
+              {input.trim() || attachments.length ? (
+                <Button
+                  type="button"
+                  size="icon-lg"
+                  className="size-10 shrink-0 rounded-full"
+                  onClick={() => void send()}
+                  disabled={sending || view.status !== "ok"}
+                  aria-label="Отправить"
+                  title="Отправить (Enter)"
+                >
+                  {sending ? <Loader2Icon className="animate-spin" /> : <SendIcon />}
+                </Button>
+              ) : (
+                <ComposerButton icon={MicIcon} label="Записать голосовое" onClick={() => void startRecording()} disabled={sending || view.status !== "ok"} />
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {dragOver ? (
@@ -963,6 +989,19 @@ export function ChatWindow({
       </Dialog>
     </div>
   )
+}
+
+// Сообщения одного направления и автора с разницей до 5 минут — одна группа: между ними
+// минимальный зазор, имя автора только над первым, «хвостик» только у последнего.
+const groupGapMs = 5 * 60_000
+
+function sameGroup(a: BubbleMessage, b: BubbleMessage) {
+  if (a.direction !== b.direction || a.authorName !== b.authorName) {
+    return false
+  }
+  const left = parseDbInstant(a.dateTime)?.getTime()
+  const right = parseDbInstant(b.dateTime)?.getTime()
+  return left != null && right != null && Math.abs(right - left) <= groupGapMs
 }
 
 function ChatHeaderAction({
@@ -1021,7 +1060,7 @@ function ComposerButton({
       type="button"
       variant="ghost"
       size="icon-lg"
-      className="size-10 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+      className="size-10 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
       onClick={onClick}
       disabled={disabled}
       aria-label={label}

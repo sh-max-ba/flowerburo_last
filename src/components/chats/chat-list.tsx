@@ -44,7 +44,7 @@ export function ChatList({
   }
 
   return (
-    <ul role="listbox" aria-label="Диалоги" className="flex flex-col py-1">
+    <ul role="listbox" aria-label="Диалоги" className="flex flex-col gap-px px-1.5 py-1.5">
       {chats.map((chat) => {
         const active = chat.id === selectedId
         const mine = chat.assignedUserId === currentUserId
@@ -58,29 +58,29 @@ export function ChatList({
                   aria-selected={active}
                   onClick={() => onSelect(chat)}
                   className={cn(
-                    "flex w-full items-center gap-3 px-3 py-2.5 text-left outline-none transition-colors focus-visible:bg-muted/70",
+                    "flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left outline-none transition-colors focus-visible:bg-muted/70",
                     active ? "bg-muted" : "hover:bg-muted/50"
                   )}
                 >
                   <ChatAvatar chatId={chat.id} name={chat.name} hasAvatar={chat.hasAvatar} chatType={chat.chatType} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className={cn("truncate text-sm", chat.unansweredCount > 0 ? "font-semibold" : "font-medium")}>
+                      <span className={cn("truncate text-[15px]", chat.unansweredCount > 0 ? "font-semibold" : "font-medium")}>
                         {chat.name || chat.phone || chat.chatId}
                       </span>
-                      <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                      <span className={cn("shrink-0 text-[11px] tabular-nums", chat.unansweredCount > 0 ? "font-medium text-brand-strong" : "text-muted-foreground")}>
                         {formatListTime(chat.lastMessageAt)}
                       </span>
                     </div>
                     <div className="mt-0.5 flex items-center justify-between gap-2">
                       <span
                         className={cn(
-                          "flex min-w-0 items-center gap-1 truncate text-xs",
+                          "flex min-w-0 items-center gap-1 truncate text-[13px]",
                           chat.unansweredCount > 0 ? "text-foreground" : "text-muted-foreground"
                         )}
                       >
                         {chat.lastMessageDirection === "outbound" ? (
-                          <span className="shrink-0 text-muted-foreground" aria-label="Наш ответ">
+                          <span className="shrink-0 text-sky-500" aria-label="Наш ответ">
                             <CheckCheckIcon className="size-3.5" />
                           </span>
                         ) : null}

@@ -31,10 +31,13 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { formatTime } from "./chat-shared"
 
-// Пузырь сообщения единого окна чатов: входящие слева (белые), наши справа (тёмные). Цитата,
+// Пузырь сообщения единого окна чатов: входящие слева (белые), наши справа (голубые). Цитата,
 // пометки «переслано»/«изменено»/«удалено», вложения (фото → лайтбокс, видео, документ, голосовое
-// с расшифровкой), статус доставки с причиной ошибки. Действия — контекстное меню (правая кнопка /
-// долгое нажатие) и та же выпадашка по «⋯» при наведении.
+// с расшифровкой), статус доставки с причиной ошибки. Время и галочки для текста «вплывают» в
+// последнюю строку, как в мессенджерах. Подряд идущие сообщения одного автора склеиваются в
+// группу (groupStart/groupEnd): имя автора — над первым, «хвостик» — у последнего. Действия —
+// контекстное меню (правая кнопка / долгое нажатие) и «ответить»/«⋯» при наведении со стороны
+// центра ленты (для входящих — справа от пузыря, для наших — слева).
 
 export type BubbleMessage = Pick<
   WazzupMessage,
@@ -69,17 +72,26 @@ export function MessageBubble({
   onOpenImage,
   onAddToCart,
   addBusy,
+  groupStart = true,
+  groupEnd = true,
 }: {
   message: BubbleMessage
   onAction: (action: MessageAction, message: BubbleMessage) => void
   onOpenImage: (message: BubbleMessage) => void
   onAddToCart?: (bouquetId: number) => void
   addBusy?: number | null
+  groupStart?: boolean
+  groupEnd?: boolean
 }) {
   const outbound = message.direction === "outbound"
   const hasMedia = Boolean(message.contentUri) && message.id > 0
   const canTranscribe = message.messageType === "audio" && hasMedia && !message.transcript
   const canAct = !message.pending && message.id > 0
+  // Фото/видео заполняют пузырь почти до края — у него узкие поля, а подписи получают свои.
+  const tight = hasMedia && (message.messageType === "image" || message.messageType === "video")
+  const inset = tight ? "px-1.5" : ""
+  const showAuthor = groupStart && Boolean(message.authorName)
+  const showText = !message.isDeleted && Boolean(message.text)
 
   const items = (
     <>
@@ -104,46 +116,67 @@ export function MessageBubble({
     </>
   )
 
+  // Время + статус. Для текста — плавающий блок в конце последней строки, для вложений и
+  // заглушек — отдельной строкой справа.
+  const meta = (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 text-[11px] leading-none whitespace-nowrap tabular-nums select-none",
+        outbound ? "text-blue-900/55" : "text-muted-foreground"
+      )}
+    >
+      {message.isEdited ? <span className="italic">изменено</span> : null}
+      <span>{formatTime(message.dateTime)}</span>
+      {outbound ? <StatusTicks status={message.status} errorText={message.errorText} /> : null}
+    </span>
+  )
+
   const bubble = (
     <div
       className={cn(
-        "group/bubble relative w-fit max-w-full rounded-lg px-3 py-2 text-sm shadow-xs",
-        outbound ? "rounded-br-sm bg-zinc-900 text-zinc-50" : "rounded-bl-sm bg-background text-foreground",
+        "group/bubble relative w-fit max-w-full rounded-2xl text-[15px] leading-snug shadow-xs",
+        tight ? "p-1.5" : "px-3.5 py-2",
+        outbound ? "bg-blue-100 text-foreground" : "bg-white text-foreground",
+        groupEnd && (outbound ? "rounded-br-md" : "rounded-bl-md"),
         message.status === "error" && "ring-1 ring-destructive/40"
       )}
     >
       {message.forwarded ? (
-        <div className={cn("mb-1 flex items-center gap-1 text-[11px] italic", outbound ? "text-zinc-400" : "text-muted-foreground")}>
+        <div className={cn("mb-1 flex items-center gap-1 text-[11px] text-muted-foreground italic", inset, tight && "pt-1")}>
           <ForwardIcon className="size-3" aria-hidden />
           Переслано
         </div>
       ) : null}
-      {!outbound && message.authorName ? (
-        <div className="mb-0.5 text-xs font-medium text-emerald-700">{message.authorName}</div>
+      {showAuthor ? (
+        <div className={cn("mb-0.5 text-xs font-semibold", outbound ? "text-brand-strong" : "text-emerald-700", inset, tight && "pt-1")}>
+          {message.authorName}
+        </div>
       ) : null}
       {message.quotedText ? (
         <div
           className={cn(
-            "mb-1.5 rounded-sm border-l-2 px-2 py-1 text-xs",
-            outbound ? "border-zinc-500 bg-white/10 text-zinc-300" : "border-brand bg-muted/60 text-muted-foreground"
+            "mb-1.5 rounded-md border-l-2 px-2.5 py-1.5 text-[13px] leading-snug",
+            outbound ? "border-brand-strong bg-white/60 text-blue-950/70" : "border-brand bg-zinc-100 text-muted-foreground",
+            tight && "mx-1.5 mt-1"
           )}
         >
           <span className="line-clamp-2">{message.quotedText}</span>
         </div>
       ) : null}
       {message.isDeleted ? (
-        <div className={cn("italic", outbound ? "text-zinc-400" : "text-muted-foreground")}>Сообщение удалено</div>
+        <div className={cn("text-muted-foreground italic", inset)}>Сообщение удалено</div>
       ) : (
         <>
-          <MessageMedia message={message} outbound={outbound} onOpenImage={onOpenImage} />
-          {message.messageType === "audio" && hasMedia ? (
-            <VoiceTranscript messageId={message.id} initial={message.transcript} outbound={outbound} />
-          ) : null}
-          {message.text ? <div className="whitespace-pre-wrap break-words">{linkify(message.text)}</div> : null}
-          {!message.text && !message.contentUri ? (
-            <div className={cn("italic", outbound ? "text-zinc-400" : "text-muted-foreground")}>
-              {wazzupMessageTypeLabel(message.messageType)}
+          <MessageMedia message={message} onOpenImage={onOpenImage} />
+          {message.messageType === "audio" && hasMedia ? <VoiceTranscript messageId={message.id} initial={message.transcript} /> : null}
+          {showText ? (
+            <div className={cn("whitespace-pre-wrap break-words", tight && "px-1.5 pt-1 pb-0.5")}>
+              {linkify(message.text)}
+              <span className="float-right mt-[7px] ml-2.5">{meta}</span>
             </div>
+          ) : null}
+          {!message.text && !message.contentUri ? (
+            <div className={cn("text-muted-foreground italic", inset)}>{wazzupMessageTypeLabel(message.messageType)}</div>
           ) : null}
         </>
       )}
@@ -154,25 +187,16 @@ export function MessageBubble({
           disabled={addBusy === message.bouquetId}
           className={cn(
             "mt-1.5 flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition",
-            outbound ? "bg-white/15 hover:bg-white/25" : "bg-zinc-100 hover:bg-zinc-200"
+            outbound ? "bg-white/60 hover:bg-white" : "bg-zinc-100 hover:bg-zinc-200",
+            tight && "mx-1.5"
           )}
         >
           <ShoppingCartIcon className="size-3.5" />В заказ
         </button>
       ) : null}
-      <div
-        className={cn(
-          "mt-1 flex items-center justify-end gap-1 text-[10px] leading-none whitespace-nowrap",
-          outbound ? "text-zinc-400" : "text-muted-foreground"
-        )}
-      >
-        {message.isEdited ? <span className="italic">изменено ·</span> : null}
-        {outbound && message.authorName ? <span className="max-w-40 truncate">{message.authorName} ·</span> : null}
-        <span className="tabular-nums">{formatTime(message.dateTime)}</span>
-        {outbound ? <StatusTicks status={message.status} errorText={message.errorText} /> : null}
-      </div>
+      {!showText ? <div className={cn("mt-1 flex justify-end", inset, tight && "pb-0.5")}>{meta}</div> : null}
       {message.status === "error" && message.errorText ? (
-        <div className="mt-1 flex items-start gap-1 text-[11px] text-red-300">
+        <div className={cn("mt-1 flex items-start gap-1 text-[11px] text-destructive", inset)}>
           <AlertCircleIcon className="mt-px size-3 shrink-0" aria-hidden />
           <span className="break-words">{message.errorText}</span>
         </div>
@@ -181,19 +205,8 @@ export function MessageBubble({
   )
 
   const hoverActions = canAct ? (
-    <div
-      className={cn(
-        "flex shrink-0 items-center gap-0.5 self-center opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 pointer-coarse:hidden",
-        outbound ? "order-first" : ""
-      )}
-    >
-      <button
-        type="button"
-        onClick={() => onAction("reply", message)}
-        className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"
-        aria-label="Ответить"
-        title="Ответить"
-      >
+    <div className="flex shrink-0 items-center self-center opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 pointer-coarse:hidden">
+      <button type="button" onClick={() => onAction("reply", message)} className={hoverActionClass} aria-label="Ответить" title="Ответить">
         <ReplyIcon className="size-4" />
       </button>
       <DropdownMenu>
@@ -201,7 +214,7 @@ export function MessageBubble({
           render={
             <button
               type="button"
-              className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 data-popup-open:bg-zinc-200 data-popup-open:opacity-100"
+              className={cn(hoverActionClass, "data-popup-open:bg-zinc-200/80 data-popup-open:text-zinc-700")}
               aria-label="Действия с сообщением"
               title="Действия"
             />
@@ -216,24 +229,30 @@ export function MessageBubble({
     </div>
   ) : null
 
+  // Ширина пузыря ограничена от ленты (85% / 36rem), а сам он — по содержимому: иначе обёртка
+  // ужималась до минимума и «тест» переносился по буквам.
+  const body = canAct ? (
+    <ContextMenu>
+      <ContextMenuTrigger className="flex min-w-0 max-w-[min(85%,36rem)]">{bubble}</ContextMenuTrigger>
+      <ContextMenuContent className="w-56">
+        <MenuKindContext.Provider value="context">{items}</MenuKindContext.Provider>
+      </ContextMenuContent>
+    </ContextMenu>
+  ) : (
+    <div className="flex min-w-0 max-w-[min(85%,36rem)]">{bubble}</div>
+  )
+
   return (
     <div className={cn("group/row flex items-end gap-1", outbound ? "justify-end" : "justify-start")}>
-      {hoverActions}
-      {/* Ширина пузыря ограничена от ленты (85% / 36rem), а сам он — по содержимому: иначе
-          обёртка ужималась до минимума и «тест» переносился по буквам. */}
-      {canAct ? (
-        <ContextMenu>
-          <ContextMenuTrigger className="flex min-w-0 max-w-[min(85%,36rem)]">{bubble}</ContextMenuTrigger>
-          <ContextMenuContent className="w-56">
-            <MenuKindContext.Provider value="context">{items}</MenuKindContext.Provider>
-          </ContextMenuContent>
-        </ContextMenu>
-      ) : (
-        <div className="flex min-w-0 max-w-[min(85%,36rem)]">{bubble}</div>
-      )}
+      {outbound ? hoverActions : null}
+      {body}
+      {outbound ? null : hoverActions}
     </div>
   )
 }
+
+const hoverActionClass =
+  "flex size-8 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-zinc-200/80 hover:text-zinc-700"
 
 // Один и тот же набор пунктов рендерится и в контекстном меню, и в выпадашке «⋯» — компонент
 // строки выбирает примитив по контексту.
@@ -281,32 +300,24 @@ export function guessFileName(message: Pick<BubbleMessage, "fileName" | "content
   return wazzupMessageTypeLabel(message.messageType)
 }
 
-function MessageMedia({
-  message,
-  outbound,
-  onOpenImage,
-}: {
-  message: BubbleMessage
-  outbound: boolean
-  onOpenImage: (message: BubbleMessage) => void
-}) {
+function MessageMedia({ message, onOpenImage }: { message: BubbleMessage; onOpenImage: (message: BubbleMessage) => void }) {
   if (!message.contentUri || message.id <= 0) {
     return null
   }
   const src = mediaUrl(message)
 
   if (message.messageType === "image") {
-    return <ImageAttachment src={src} alt={message.fileName || "Фото"} outbound={outbound} onOpen={() => onOpenImage(message)} />
+    return <ImageAttachment src={src} alt={message.fileName || "Фото"} onOpen={() => onOpenImage(message)} />
   }
   if (message.messageType === "video") {
     return (
-      <video src={src} controls preload="metadata" className="mb-1 max-h-72 w-full rounded-md bg-black">
+      <video src={src} controls preload="metadata" className="max-h-72 w-full rounded-xl bg-black">
         Видео не поддерживается браузером.
       </video>
     )
   }
   if (message.messageType === "audio") {
-    return <VoiceMessagePlayer src={src} outbound={outbound} />
+    return <VoiceMessagePlayer src={src} />
   }
 
   return (
@@ -314,17 +325,12 @@ function MessageMedia({
       href={src}
       target="_blank"
       rel="noreferrer"
-      className={cn(
-        "mb-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
-        outbound ? "bg-white/10 hover:bg-white/15" : "bg-muted/60 hover:bg-muted"
-      )}
+      className="mb-1 flex items-center gap-2.5 rounded-lg bg-black/5 px-2.5 py-2 text-sm hover:bg-black/10"
     >
       <FileTextIcon className="size-5 shrink-0 opacity-80" />
       <span className="min-w-0">
         <span className="block truncate font-medium">{guessFileName(message)}</span>
-        <span className={cn("block text-[11px]", outbound ? "text-zinc-400" : "text-muted-foreground")}>
-          {wazzupMessageTypeLabel(message.messageType)} · открыть
-        </span>
+        <span className="block text-[11px] text-muted-foreground">{wazzupMessageTypeLabel(message.messageType)} · открыть</span>
       </span>
     </a>
   )
@@ -332,11 +338,11 @@ function MessageMedia({
 
 // Фото в пузыре: пока грузится — серый блок фиксированной высоты (без прыжков ленты), при ошибке
 // (ссылка Wazzup протухла) — заглушка вместо битой картинки.
-function ImageAttachment({ src, alt, outbound, onOpen }: { src: string; alt: string; outbound: boolean; onOpen: () => void }) {
+function ImageAttachment({ src, alt, onOpen }: { src: string; alt: string; onOpen: () => void }) {
   const [state, setState] = useState<"loading" | "ready" | "error">("loading")
   if (state === "error") {
     return (
-      <div className={cn("mb-1 flex items-center gap-2 rounded-md px-2 py-2 text-xs", outbound ? "bg-white/10 text-zinc-300" : "bg-muted/60 text-muted-foreground")}>
+      <div className="flex items-center gap-2 rounded-lg bg-black/5 px-2.5 py-2 text-xs text-muted-foreground">
         <ImageOffIcon className="size-4 shrink-0" />
         Фото недоступно — ссылка устарела
       </div>
@@ -347,7 +353,7 @@ function ImageAttachment({ src, alt, outbound, onOpen }: { src: string; alt: str
       type="button"
       onClick={onOpen}
       className={cn(
-        "mb-1 block w-full overflow-hidden rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/35",
+        "block w-full overflow-hidden rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/35",
         state === "loading" && "h-40 w-56 max-w-full animate-pulse bg-zinc-200/70"
       )}
       aria-label="Открыть фото"
@@ -357,7 +363,7 @@ function ImageAttachment({ src, alt, outbound, onOpen }: { src: string; alt: str
       <img
         src={src}
         alt={alt}
-        className={cn("max-h-72 w-full bg-zinc-100 object-cover", state === "loading" && "invisible h-0")}
+        className={cn("max-h-80 w-full bg-zinc-100 object-cover", state === "loading" && "invisible h-0")}
         loading="lazy"
         onLoad={() => setState("ready")}
         onError={() => setState("error")}
@@ -368,7 +374,7 @@ function ImageAttachment({ src, alt, outbound, onOpen }: { src: string; alt: str
 
 // Кастомный плеер голосовых: play/pause, кликабельная дорожка, таймер. webm от MediaRecorder
 // часто без длительности в заголовке — досчитываем её «перемоткой» в конец, без автоплея.
-export function VoiceMessagePlayer({ src, outbound }: { src: string; outbound: boolean }) {
+export function VoiceMessagePlayer({ src }: { src: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [playing, setPlaying] = useState(false)
   const [current, setCurrent] = useState(0)
@@ -445,10 +451,7 @@ export function VoiceMessagePlayer({ src, outbound }: { src: string; outbound: b
         type="button"
         onClick={toggle}
         aria-label={playing ? "Пауза" : "Воспроизвести"}
-        className={cn(
-          "flex size-9 shrink-0 items-center justify-center rounded-full transition",
-          outbound ? "bg-white/20 text-white hover:bg-white/30" : "bg-zinc-900 text-white hover:bg-zinc-700"
-        )}
+        className="flex size-9 shrink-0 items-center justify-center rounded-full bg-brand text-white transition hover:bg-brand-strong"
       >
         {playing ? <PauseIcon className="size-4" /> : <PlayIcon className="size-4 translate-x-px" />}
       </button>
@@ -457,11 +460,11 @@ export function VoiceMessagePlayer({ src, outbound }: { src: string; outbound: b
           type="button"
           onClick={seek}
           aria-label="Перемотать"
-          className={cn("block h-1.5 w-full cursor-pointer rounded-full", outbound ? "bg-white/25" : "bg-zinc-200")}
+          className="block h-1.5 w-full cursor-pointer rounded-full bg-black/10"
         >
-          <div className={cn("h-full rounded-full", outbound ? "bg-white" : "bg-zinc-900")} style={{ width: `${progress}%` }} />
+          <div className="h-full rounded-full bg-brand" style={{ width: `${progress}%` }} />
         </button>
-        <div className={cn("mt-1 text-[10px] tabular-nums", outbound ? "text-zinc-400" : "text-muted-foreground")}>
+        <div className="mt-1 text-[10px] text-muted-foreground tabular-nums">
           {formatSeconds(Math.floor(current))} / {formatSeconds(Math.floor(safeDuration))}
         </div>
       </div>
@@ -470,7 +473,7 @@ export function VoiceMessagePlayer({ src, outbound }: { src: string; outbound: b
 }
 
 // Расшифровка голосового (STT на сервере, результат кэшируется на строке сообщения).
-export function VoiceTranscript({ messageId, initial, outbound }: { messageId: number; initial: string; outbound: boolean }) {
+export function VoiceTranscript({ messageId, initial }: { messageId: number; initial: string }) {
   const [state, setState] = useState<"idle" | "loading" | "done" | "error">(initial ? "done" : "idle")
   const [text, setText] = useState(initial)
   const [error, setError] = useState("")
@@ -509,7 +512,7 @@ export function VoiceTranscript({ messageId, initial, outbound }: { messageId: n
 
   if (state === "done") {
     return (
-      <div className={cn("mt-1 border-t pt-1.5 text-xs leading-snug whitespace-pre-wrap break-words", outbound ? "border-white/20 text-zinc-300" : "border-border/60 text-muted-foreground")}>
+      <div className="mt-1 border-t border-black/10 pt-1.5 text-[13px] leading-snug whitespace-pre-wrap break-words text-muted-foreground">
         {text}
       </div>
     )
@@ -520,7 +523,7 @@ export function VoiceTranscript({ messageId, initial, outbound }: { messageId: n
       type="button"
       onClick={() => void run()}
       disabled={state === "loading"}
-      className={cn("mt-1 flex items-center gap-1 text-[11px] underline-offset-2 hover:underline disabled:opacity-70", outbound ? "text-zinc-300" : "text-brand-strong")}
+      className="mt-1 flex items-center gap-1 text-[11px] text-brand-strong underline-offset-2 hover:underline disabled:opacity-70"
     >
       {state === "loading" ? <Loader2Icon className="size-3 animate-spin" /> : <FileTextIcon className="size-3" />}
       {state === "loading" ? "Расшифровываем…" : state === "error" ? error || "Ошибка — повторить" : "Расшифровать"}
@@ -533,10 +536,10 @@ function StatusTicks({ status, errorText }: { status: string; errorText: string 
     return <ClockIcon className="size-3" aria-label="Отправка" />
   }
   if (status === "error") {
-    return <AlertCircleIcon className="size-3.5 text-red-400" aria-label={errorText ? `Ошибка: ${errorText}` : "Ошибка отправки"} />
+    return <AlertCircleIcon className="size-3.5 text-destructive" aria-label={errorText ? `Ошибка: ${errorText}` : "Ошибка отправки"} />
   }
   if (status === "read") {
-    return <CheckCheckIcon className="size-3.5 text-sky-400" aria-label="Прочитано" />
+    return <CheckCheckIcon className="size-3.5 text-sky-500" aria-label="Прочитано" />
   }
   if (status === "delivered") {
     return <CheckCheckIcon className="size-3.5" aria-label="Доставлено" />
