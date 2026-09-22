@@ -63,6 +63,7 @@ export function ChatsScreen({
   initialCounts,
   initialRevision,
   initialChat,
+  initialTab = "all",
   openNew = false,
 }: {
   currentUser: { id: number; name: string }
@@ -74,10 +75,11 @@ export function ChatsScreen({
   initialCounts: ChatCounts
   initialRevision: string
   initialChat: ChatSummary | null
+  initialTab?: ChatTab
   openNew?: boolean
 }) {
   const router = useRouter()
-  const [tab, setTab] = useState<ChatTab>("all")
+  const [tab, setTab] = useState<ChatTab>(initialTab)
   const [searchInput, setSearchInput] = useState("")
   const [query, setQuery] = useState("")
   const [groups, setGroups] = useState(false)
@@ -213,7 +215,11 @@ export function ChatsScreen({
     } else {
       url.searchParams.delete("chat")
     }
+    // Параметры-входы (tab/customer/new) отрабатывают один раз при загрузке — дальше состояние
+    // живёт на экране, в адресе остаётся только открытый диалог.
     url.searchParams.delete("new")
+    url.searchParams.delete("tab")
+    url.searchParams.delete("customer")
     window.history.replaceState(window.history.state, "", url.toString())
   }
 

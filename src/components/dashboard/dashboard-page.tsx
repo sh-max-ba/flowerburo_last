@@ -287,7 +287,7 @@ function OrderRow({ order }: { order: OwnerDashboardData["work"]["orders"][numbe
 function OrdersCounters({ work }: { work: OwnerDashboardData["work"] }) {
   return (
     <div className="flex flex-wrap items-center justify-end gap-1">
-      <CounterChip href="/deals" label="Новые сделки" value={work.incomingDealsCount} />
+      <CounterChip href="/chats?tab=waiting" label="Ждут ответа" value={work.incomingDealsCount} />
       <CounterChip href="/ready-orders" label="Готовы" value={work.readyOrdersCount} tone="success" />
       <CounterChip href="/orders" label="Просрочены" value={work.overdueOrdersCount} tone="danger" />
     </div>

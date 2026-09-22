@@ -378,6 +378,8 @@ export function ChatWindow({
     setSending(false)
     await refreshFeed()
     onActivity()
+    // Фокус остаётся в поле — менеджер печатает следующий ответ без лишнего тапа.
+    requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
   async function sendVoice(blob: Blob) {
@@ -884,7 +886,7 @@ export function ChatWindow({
               onPaste={handlePaste}
               placeholder="Сообщение…"
               rows={1}
-              className="max-h-40 min-h-10 flex-1 resize-none border-0 bg-transparent px-2 py-2.5 text-base shadow-none focus-visible:ring-0 sm:text-sm"
+              className="max-h-40 min-h-10 flex-1 resize-none border-0 bg-transparent px-2 py-2.5 text-base shadow-none field-sizing-content focus-visible:ring-0 sm:text-sm"
               disabled={sending || view.status !== "ok"}
               aria-label="Текст сообщения"
             />

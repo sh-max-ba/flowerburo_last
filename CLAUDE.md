@@ -55,6 +55,7 @@ This single file holds the SQLite schema, migrations, and most domain logic (pro
 ### CRM + integrations
 
 - `src/lib/crm.ts` — deals, customers, pipelines/stages, deal items.
+- **Chats (`/chats`)** — the manager's working list instead of the deals kanban (`/deals` is kept but hidden from the sidebar). One `chats` row per (chat_type, chat_id) on top of the `wazzup_messages` feed (`src/lib/db/queries/chats.ts`); sending/forwarding in `src/lib/chats.ts`; UI in `src/components/chats/`. Polling: `/api/chats/inbox?probe=1` (list revision + tab counts) and `/api/chats/[id]/messages?probe=1` (feed revision).
 - `src/lib/wazzup.ts` (~2000 lines) + `src/lib/wazzup-webhook.ts` — Wazzup integration. **All keys are server-side only** (`integration_settings` table, with `WAZZUP_API_KEY`/`WAZZUP_CRM_KEY` env as fallback); never expose them to client code. Webhook endpoint `POST /api/wazzup/webhook`, chat iframe via `/api/wazzup/iframe`, configured in `/settings`. See `README.md` and `docs/integrations/wazzup/`.
 
 ### Two app shells coexist (legacy + new)

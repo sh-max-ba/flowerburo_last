@@ -4,7 +4,17 @@ import { CrmShell } from "@/components/crm-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getCustomer, listCustomerOptions, listProducts } from "@/lib/crm"
-import { findOrCreateWhatsappChat, getChatByCustomerId, getChatById, getChatCounts, getChatsRevision, listBouquetTemplates, listChats, listUsers } from "@/lib/db"
+import {
+  findOrCreateWhatsappChat,
+  getChatByCustomerId,
+  getChatById,
+  getChatCounts,
+  getChatsRevision,
+  listBouquetTemplates,
+  listChats,
+  listUsers,
+  type ChatTab,
+} from "@/lib/db"
 
 export const dynamic = "force-dynamic"
 
@@ -14,7 +24,7 @@ export const dynamic = "force-dynamic"
 export default async function ChatsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ chat?: string; customer?: string; new?: string }>
+  searchParams: Promise<{ chat?: string; customer?: string; new?: string; tab?: string }>
 }) {
   const user = await requireUser()
   if (user.role === "florist") {
@@ -28,6 +38,7 @@ export default async function ChatsPage({
   if (!initialChat && Number.isInteger(customerId) && customerId > 0) {
     initialChat = getChatByCustomerId(customerId) ?? openChatForCustomer(customerId)
   }
+  const tab: ChatTab = params.tab === "waiting" || params.tab === "mine" || params.tab === "new" ? params.tab : "all"
   const users = listUsers()
     .filter((item) => item.isActive && item.role !== "florist")
     .map((item) => ({ id: item.id, name: item.name }))
@@ -48,7 +59,8 @@ export default async function ChatsPage({
         bouquets={listBouquetTemplates({ activeOnly: true })}
         products={listProducts()}
         customers={listCustomerOptions()}
-        initialChats={listChats({ tab: "all", userId: user.id })}
+        initialChats={listChats({ tab, userId: user.id })}
+        initialTab={tab}
         initialCounts={getChatCounts(user.id)}
         initialRevision={getChatsRevision()}
         initialChat={initialChat}
