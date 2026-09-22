@@ -17,7 +17,7 @@ import {
   SALES_FORMS,
   SERIES_COLORS,
 } from "./format"
-import { productCardHref, salesDocumentsHref, salesProductHref, tabHref } from "./links"
+import { operationsHref, productCardHref, tabHref } from "./links"
 import { StatTile } from "./stat-tile"
 
 // Значение плитки: число отдельно от единицы («3 828 563» + «сом»).
@@ -41,8 +41,8 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
         delta={{ current: totals.revenue, previous: previous.revenue }}
         spark={series.map((point) => point.revenue)}
         sparkColor={SERIES_COLORS.revenue}
-        hint={`${totals.salesCount} ${plural(totals.salesCount, SALES_FORMS)} · ${totals.ordersCount} ${plural(totals.ordersCount, ORDERS_FORMS)} → открыть`}
-        href={salesDocumentsHref(data.range)}
+        hint={`${totals.salesCount} ${plural(totals.salesCount, SALES_FORMS)} · ${totals.ordersCount} ${plural(totals.ordersCount, ORDERS_FORMS)} → операции`}
+        href={operationsHref(data.range, { type: "sales" })}
       />
       <StatTile
         className="xl:col-span-3"
@@ -61,6 +61,7 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
         spark={series.map((point) => point.purchases)}
         sparkColor={SERIES_COLORS.purchases}
         hint={`${totals.purchaseDocs} ${plural(totals.purchaseDocs, DOCS_FORMS)} · с расходами ${formatCompactMoney(totals.purchasesLanded)}`}
+        href={operationsHref(data.range, { type: "receipt" })}
       />
       <StatTile
         className="xl:col-span-3"
@@ -71,6 +72,7 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
         spark={series.map((point) => point.writeOffs)}
         sparkColor={SERIES_COLORS.writeOffs}
         hint={`${formatQty(totals.writeOffQty)} шт · ${formatPercent(percentOf(totals.writeOffs, totals.purchases))} от закупок`}
+        href={operationsHref(data.range, { type: "writeoff" })}
       />
 
       {/* Ряд 2: динамика выручки и закупок на одной оси + снимок склада сейчас. */}
@@ -137,6 +139,7 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
       {/* Ряд 3: разбивки — товары, категории, поставщики, причины списаний. */}
       <Panel
         title="Топ товаров по выручке"
+        subtitle="Клик — чеки и заказы с товаром"
         className="xl:col-span-6"
         action={<PanelLink href={tabHref("sales", data.range)} label="Все товары" />}
       >
@@ -146,8 +149,8 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
             label: row.productName,
             value: row.revenue,
             meta: `${formatQty(row.qty)} шт`,
-            // Проваливаемся в продажи товара (чеки и заказы) на вкладке «Продажи».
-            href: row.productCode ? salesProductHref(row.productCode, data.range) : undefined,
+            // Клик — чеки и заказы с этим товаром за период (вкладка «Операции»).
+            href: row.productCode ? operationsHref(data.range, { type: "sales", product: row.productCode }) : undefined,
           }))}
           formatValue={formatMoney}
           showShare={false}
@@ -155,13 +158,14 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
         />
       </Panel>
 
-      <Panel title="Выручка по категориям" className="xl:col-span-6">
+      <Panel title="Выручка по категориям" subtitle="Клик — чеки и заказы категории" className="xl:col-span-6">
         <BarList
           items={data.byCategory.slice(0, 8).map((row) => ({
             key: row.key,
             label: row.label,
             value: row.value,
             meta: `${formatQty(row.count)} шт`,
+            href: operationsHref(data.range, { type: "sales", category: row.label }),
           }))}
           formatValue={formatMoney}
           scale="total"
@@ -171,6 +175,7 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
 
       <Panel
         title="Закупки по поставщикам"
+        subtitle="Клик — приходы поставщика"
         className="xl:col-span-6"
         action={<PanelLink href={tabHref("suppliers", data.range)} label="Подробнее" />}
       >
@@ -180,6 +185,7 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
             label: row.label,
             value: row.value,
             meta: `${row.count} ${plural(row.count, DOCS_FORMS)}`,
+            href: row.key === "__other__" ? operationsHref(data.range, { type: "receipt" }) : operationsHref(data.range, { type: "receipt", supplier: row.key === "none" ? undefined : row.key }),
           }))}
           formatValue={formatMoney}
           scale="total"
@@ -190,6 +196,7 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
 
       <Panel
         title="Списания по причинам"
+        subtitle="Клик — акты списания с этой причиной"
         className="xl:col-span-6"
         action={<PanelLink href={tabHref("writeoffs", data.range)} label="Подробнее" />}
       >
@@ -199,6 +206,7 @@ export function OverviewTab({ data }: { data: AnalyticsOverview }) {
             label: row.label,
             value: row.value,
             meta: `${row.count} ${plural(row.count, DOCS_FORMS)}`,
+            href: row.key === "__other__" ? operationsHref(data.range, { type: "writeoff" }) : operationsHref(data.range, { type: "writeoff", reason: row.label }),
           }))}
           formatValue={formatMoney}
           scale="total"

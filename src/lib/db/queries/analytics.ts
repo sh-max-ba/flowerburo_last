@@ -2,7 +2,6 @@ import { numberFromRow } from "@/lib/db-row"
 import { SHOP_UTC_OFFSET_SQL } from "@/lib/datetime"
 import { db } from "../connection"
 import { getSalesReport, type SalesReport } from "./sales-report"
-import { listProductSales, type ProductSaleLine } from "./sales-documents"
 import { getOpenShift } from "./shifts"
 import type { SupplierDebtDocument } from "./supplier-payments"
 
@@ -426,27 +425,13 @@ function getStockSnapshot(client: DbClient): AnalyticsStockSnapshot {
 
 // ── Продажи ────────────────────────────────────────────────────────────────
 
-// Строка продажи для раскрытия «какие именно чеки и заказы» — компактная форма строк отчёта.
-export type AnalyticsSaleLine = {
-  source: "sale" | "order"
-  sourceId: number
-  label: string
-  soldAt: string
-  customer: string
-  productCode: string
-  productName: string
-  qty: number
-  total: number
-}
-
 export type AnalyticsSales = {
   range: AnalyticsRange
   totals: AnalyticsPeriodTotals
   previous: AnalyticsPeriodTotals
   series: AnalyticsDayPoint[]
-  // Отчёт без строк (lines = []): строки отдаются отдельно в компактном виде.
+  // Отчёт без строк (lines = []): построчный список — на вкладке «Операции».
   report: SalesReport
-  lines: AnalyticsSaleLine[]
 }
 
 export function getAnalyticsSales(opts?: AnalyticsRangeInput): AnalyticsSales {
@@ -460,17 +445,6 @@ export function getAnalyticsSales(opts?: AnalyticsRangeInput): AnalyticsSales {
     previous: sumSeries(getDailySeries(client, range.prevFrom, range.prevTo)),
     series,
     report: { ...report, lines: [] },
-    lines: report.lines.map((line) => ({
-      source: line.source,
-      sourceId: line.sourceId,
-      label: line.sourceLabel,
-      soldAt: line.soldAt,
-      customer: line.customer,
-      productCode: line.productCode,
-      productName: line.productName,
-      qty: line.qty,
-      total: line.revenue,
-    })),
   }
 }
 
@@ -1061,8 +1035,8 @@ export type ProductCardData = {
   movementsTruncated: boolean
   // Полная история цен закупки (последние приходы) — для блока «Закупочная цена».
   recentCosts: Array<{ at: string; unitCost: number; supplierName: string; documentId: number; documentNumber: string }>
-  // Продажи товара за период — строки чеков и заказов с клиентом (раскрытие «Продано»).
-  sales: ProductSaleLine[]
+  // Средняя закупочная цена за всё время (по проведённым приходам) — рядом с текущей себестоимостью.
+  avgCostAllTime: number
 }
 
 const MOVEMENTS_LIMIT = 500
@@ -1351,6 +1325,14 @@ export function getProductCardData(code: string, opts?: AnalyticsRangeInput): Pr
     documentNumber: String(row.documentNumber ?? ""),
   }))
 
+  const avgCostRow = client
+    .prepare(
+      `SELECT CASE WHEN COALESCE(SUM(i.qty), 0) > 0 THEN SUM(i.qty * i.unit_cost) / SUM(i.qty) ELSE 0 END as avgCost
+       FROM stock_document_items i JOIN stock_documents d ON d.id = i.document_id
+       WHERE i.product_code = @code AND d.type = 'stock_in' AND d.status = 'posted' AND i.unit_cost > 0`
+    )
+    .get({ code }) as { avgCost: number }
+
   const stock = numberFromRow(productRow.stock)
   const reserved = numberFromRow(productRow.reserved)
 
@@ -1393,7 +1375,7 @@ export function getProductCardData(code: string, opts?: AnalyticsRangeInput): Pr
     movements,
     movementsTruncated,
     recentCosts,
-    sales: listProductSales(code, range.from, range.to),
+    avgCostAllTime: round2(numberFromRow(avgCostRow.avgCost)),
   }
 }
 

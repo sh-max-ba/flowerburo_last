@@ -193,23 +193,28 @@ export function TrendChart({
           <div className="absolute inset-0">
             {days.map((day, i) => {
               const leftPct = (xOf(i) / VIEW_W) * 100
+              // Колонка не выходит за края графика (крайние — половинной ширины), точка — на своём x.
+              const half = 50 / Math.max(n, 1)
+              const colLeft = Math.max(0, leftPct - half)
+              const colWidth = Math.min(100, leftPct + half) - colLeft
+              const inner = colWidth > 0 ? ((leftPct - colLeft) / colWidth) * 100 : 50
               return (
-                <div
-                  key={day}
-                  className="group/col absolute inset-y-0"
-                  style={{ left: `${leftPct}%`, width: `${100 / Math.max(n, 1)}%`, transform: "translateX(-50%)" }}
-                >
-                  <div className="absolute inset-y-1 left-1/2 w-px -translate-x-1/2 bg-foreground/15 opacity-0 transition-opacity group-hover/col:opacity-100" />
+                <div key={day} className="group/col absolute inset-y-0" style={{ left: `${colLeft}%`, width: `${colWidth}%` }}>
+                  <div
+                    className="absolute inset-y-1 w-px -translate-x-1/2 bg-foreground/15 opacity-0 transition-opacity group-hover/col:opacity-100"
+                    style={{ left: `${inner}%` }}
+                  />
                   {series.map((s) => (
                     <span
                       key={s.key}
-                      className="absolute left-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-0 ring-2 ring-background transition-opacity group-hover/col:opacity-100"
-                      style={{ top: `${(yOf(s.values[i] ?? 0) / VIEW_H) * 100}%`, background: s.color }}
+                      className="absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-0 ring-2 ring-background transition-opacity group-hover/col:opacity-100"
+                      style={{ top: `${(yOf(s.values[i] ?? 0) / VIEW_H) * 100}%`, left: `${inner}%`, background: s.color }}
                     />
                   ))}
+                  {/* display:none вне hover — невидимый тултип у края не должен раздвигать прокрутку. */}
                   <div
                     className={cn(
-                      "pointer-events-none absolute top-0 z-20 min-w-32 rounded-lg bg-background px-2.5 py-2 text-xs whitespace-nowrap opacity-0 shadow-md ring-1 ring-border/40 transition-opacity group-hover/col:opacity-100",
+                      "pointer-events-none absolute top-0 z-20 hidden min-w-32 rounded-lg bg-background px-2.5 py-2 text-xs whitespace-nowrap shadow-md ring-1 ring-border/40 group-hover/col:block",
                       tooltipAlign(i, n)
                     )}
                   >
@@ -338,7 +343,7 @@ export function ColumnChart({ days, values, label, color, formatValue, formatTic
                   />
                   <div
                     className={cn(
-                      "pointer-events-none absolute top-0 z-20 rounded-lg bg-background px-2.5 py-1.5 text-xs whitespace-nowrap opacity-0 shadow-md ring-1 ring-border/40 transition-opacity group-hover/col:opacity-100",
+                      "pointer-events-none absolute top-0 z-20 hidden rounded-lg bg-background px-2.5 py-1.5 text-xs whitespace-nowrap shadow-md ring-1 ring-border/40 group-hover/col:block",
                       tooltipAlign(i, n)
                     )}
                   >

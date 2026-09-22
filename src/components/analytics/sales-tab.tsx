@@ -1,64 +1,47 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { useSearchParams } from "next/navigation"
+import { useRouter } from "next/navigation"
 import type { AnalyticsSales, SalesReportRow } from "@/lib/db"
 import { cn, formatMoney } from "@/lib/utils"
 import { DataView, type DataViewColumn } from "@/components/data-view"
-import { FilterChips } from "@/components/screen-header"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { BarList, Panel } from "./bar-list"
 import { TrendChart } from "./charts"
 import { formatCompactMoney, formatPercent, formatQty, ORDERS_FORMS, percentOf, plural, POSITIONS_FORMS, SALES_FORMS, SERIES_COLORS } from "./format"
+import { operationsHref, productCardHref } from "./links"
 import { moneyValue } from "./overview-tab"
-import { groupLinesToDocs, SalesDrilldownSheet, type DrillTarget } from "./sales-drilldown-sheet"
 import { StatTile } from "./stat-tile"
+import { ActiveFilters, FilterMenu, OpenInWindowLink, Pagination, RangeFilter, TableToolbar, usePagination } from "./table-chrome"
 
 export function SalesTab({ data, query }: { data: AnalyticsSales; query: string }) {
-  const searchParams = useSearchParams()
-  const { totals, previous, series, report, lines, range } = data
+  const router = useRouter()
+  const { totals, previous, series, report, range } = data
   const [category, setCategory] = useState("all")
+  const [revenueRange, setRevenueRange] = useState({ from: "", to: "" })
+  const [marginFilter, setMarginFilter] = useState("all")
   const days = series.map((point) => point.day)
 
-  // Провалиться в продажи товара: чеки и заказы, где он был (строки отчёта с клиентом).
-  function productDrill(row: Pick<SalesReportRow, "productCode" | "productName">): DrillTarget {
-    const productLines = lines.filter((line) =>
-      row.productCode ? line.productCode === row.productCode : !line.productCode && line.productName === row.productName
-    )
-    return { kind: "product", productCode: row.productCode, productName: row.productName, lines: productLines }
-  }
-
-  // Все чеки и заказы периода — из тех же строк отчёта, сгруппированных по документу.
-  function documentsDrill(): DrillTarget {
-    return { kind: "documents", title: "Чеки и заказы за период", docs: groupLinesToDocs(lines) }
-  }
-
-  // ?product=<код> (ссылка из обзора) — сразу раскрываем продажи товара; ?docs=1 — список чеков и заказов.
-  const productParam = searchParams.get("product")
-  const docsParam = searchParams.get("docs")
-  const [drill, setDrill] = useState<DrillTarget | null>(() => {
-    if (productParam) {
-      const row = report.byProduct.find((entry) => entry.productCode === productParam)
-      return row ? productDrill(row) : null
-    }
-    return docsParam === "1" ? documentsDrill() : null
-  })
-  const openProduct = (row: Pick<SalesReportRow, "productCode" | "productName">) => setDrill(productDrill(row))
-  const openDocuments = () => setDrill(documentsDrill())
-
-  const categories = useMemo(() => report.byCategory.map((row) => row.category), [report.byCategory])
+  const categories = useMemo(() => report.byCategory.map((row) => ({ value: row.category, label: row.category })), [report.byCategory])
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase()
+    const min = Number(revenueRange.from) || 0
+    const max = revenueRange.to ? Number(revenueRange.to) : Number.POSITIVE_INFINITY
     return report.byProduct.filter((row) => {
       if (category !== "all" && row.category !== category) return false
       if (q && !`${row.productName} ${row.productCode}`.toLowerCase().includes(q)) return false
+      if (row.revenue < min || row.revenue > max) return false
+      if (marginFilter === "negative" && row.margin >= 0) return false
+      if (marginFilter === "low" && (row.revenue <= 0 || row.margin / row.revenue >= 0.3)) return false
+      if (marginFilter === "high" && (row.revenue <= 0 || row.margin / row.revenue < 0.5)) return false
       return true
     })
-  }, [report.byProduct, category, query])
+  }, [report.byProduct, category, query, revenueRange, marginFilter])
 
+  const { page, pageCount, pageRows, setPage, total, pageSize } = usePagination(rows)
   const filteredRevenue = rows.reduce((sum, row) => sum + row.revenue, 0)
-  const filtered = category !== "all" || query.trim() !== ""
+  const filtered = category !== "all" || query.trim() !== "" || revenueRange.from !== "" || revenueRange.to !== "" || marginFilter !== "all"
 
   const columns = useMemo<DataViewColumn<SalesReportRow>[]>(
     () => [
@@ -98,11 +81,31 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
         key: "share",
         header: "Доля",
         align: "right",
-        hideBelow: "4xl",
+        hideBelow: "5xl",
         className: "tabular-nums whitespace-nowrap",
         sortValue: (row) => row.revenue,
         defaultDirection: "desc",
         cell: (row) => <span className="text-muted-foreground">{formatPercent(percentOf(row.revenue, report.totals.revenue), 1)}</span>,
+      },
+      {
+        key: "avgPrice",
+        header: "Ср. цена",
+        align: "right",
+        hideBelow: "4xl",
+        className: "tabular-nums whitespace-nowrap",
+        sortValue: (row) => (row.qty > 0 ? row.revenue / row.qty : null),
+        defaultDirection: "desc",
+        cell: (row) => <span className="text-muted-foreground">{row.qty > 0 ? formatMoney(row.revenue / row.qty) : "—"}</span>,
+      },
+      {
+        key: "avgCost",
+        header: "Ср. себест.",
+        align: "right",
+        hideBelow: "4xl",
+        className: "tabular-nums whitespace-nowrap",
+        sortValue: (row) => (row.qty > 0 ? row.cost / row.qty : null),
+        defaultDirection: "desc",
+        cell: (row) => <span className="text-muted-foreground">{row.qty > 0 ? formatMoney(row.cost / row.qty) : "—"}</span>,
       },
       {
         key: "cost",
@@ -121,25 +124,26 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
         className: "tabular-nums whitespace-nowrap",
         sortValue: (row) => row.margin,
         defaultDirection: "desc",
-        cell: (row) => <span className={cn(row.margin < 0 && "text-red-600")}>{formatMoney(row.margin)}</span>,
-      },
-      {
-        key: "marginPct",
-        header: "%",
-        align: "right",
-        hideBelow: "5xl",
-        className: "tabular-nums whitespace-nowrap",
-        sortValue: (row) => (row.revenue > 0 ? row.margin / row.revenue : null),
-        defaultDirection: "desc",
         cell: (row) => (
-          <span className={cn("text-muted-foreground", row.margin < 0 && "text-red-600")}>
-            {row.revenue > 0 ? formatPercent(percentOf(row.margin, row.revenue)) : "—"}
+          <span className={cn(row.margin < 0 && "text-red-600")}>
+            {formatMoney(row.margin)}
+            <span className="ml-1 text-xs text-muted-foreground">{row.revenue > 0 ? formatPercent(percentOf(row.margin, row.revenue)) : ""}</span>
           </span>
         ),
       },
     ],
     [report.totals.revenue]
   )
+
+  const chips = [
+    ...(category !== "all" ? [{ key: "category", label: category, onRemove: () => setCategory("all") }] : []),
+    ...(revenueRange.from || revenueRange.to
+      ? [{ key: "revenue", label: `Выручка ${revenueRange.from || "0"}–${revenueRange.to || "∞"}`, onRemove: () => setRevenueRange({ from: "", to: "" }) }]
+      : []),
+    ...(marginFilter !== "all"
+      ? [{ key: "margin", label: MARGIN_OPTIONS.find((option) => option.value === marginFilter)?.label ?? "", onRemove: () => setMarginFilter("all") }]
+      : []),
+  ]
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12">
@@ -151,8 +155,8 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
         delta={{ current: totals.revenue, previous: previous.revenue }}
         spark={series.map((point) => point.revenue)}
         sparkColor={SERIES_COLORS.revenue}
-        hint={`${totals.salesCount} ${plural(totals.salesCount, SALES_FORMS)} · ${totals.ordersCount} ${plural(totals.ordersCount, ORDERS_FORMS)} → открыть`}
-        onClick={openDocuments}
+        hint={`${totals.salesCount} ${plural(totals.salesCount, SALES_FORMS)} · ${totals.ordersCount} ${plural(totals.ordersCount, ORDERS_FORMS)} → операции`}
+        href={operationsHref(range, { type: "sales" })}
       />
       <StatTile
         className="xl:col-span-3"
@@ -160,7 +164,7 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
         value={moneyValue(totals.margin)}
         unit="сом"
         delta={{ current: totals.margin, previous: previous.margin }}
-        hint={`${formatPercent(percentOf(totals.margin, totals.revenue))} от выручки`}
+        hint={`${formatPercent(percentOf(totals.margin, totals.revenue))} от выручки · себестоимость ${formatCompactMoney(totals.cost)}`}
       />
       <StatTile
         className="xl:col-span-3"
@@ -170,7 +174,9 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
         delta={{ current: totals.soldQty, previous: previous.soldQty }}
         spark={series.map((point) => point.soldQty)}
         sparkColor={SERIES_COLORS.revenue}
-        hint={`${report.byProduct.length} ${plural(report.byProduct.length, POSITIONS_FORMS)}`}
+        hint={`${report.byProduct.length} ${plural(report.byProduct.length, POSITIONS_FORMS)} · ср. себестоимость ${
+          totals.soldQty > 0 ? formatMoney(totals.cost / totals.soldQty) : "—"
+        }/шт`}
       />
       <StatTile
         className="xl:col-span-3"
@@ -200,12 +206,13 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
         />
       </Panel>
 
-      <Panel title="По категориям" className="md:col-span-2 xl:col-span-4">
+      <Panel title="По категориям" subtitle="Клик — операции категории" className="md:col-span-2 xl:col-span-4">
         <BarList
           items={report.byCategory.slice(0, 8).map((row) => ({
             key: row.category,
             label: row.category,
             value: row.revenue,
+            href: operationsHref(range, { type: "sales", category: row.category }),
           }))}
           formatValue={formatCompactMoney}
           scale="total"
@@ -214,24 +221,75 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
       </Panel>
 
       <section className="flex min-w-0 flex-col rounded-2xl bg-background shadow-xs md:col-span-2 xl:col-span-12">
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-2">
-          <FilterChips
-            value={category}
-            options={[{ value: "all", label: "Все категории" }, ...categories.map((name) => ({ value: name, label: name }))]}
-            onValueChange={setCategory}
-          />
-          <span className="px-1 text-xs text-muted-foreground tabular-nums">
-            {rows.length} {plural(rows.length, POSITIONS_FORMS)}
-            {filtered ? ` · ${formatMoney(filteredRevenue)}` : ""}
-          </span>
-        </div>
+        <TableToolbar
+          left={
+            <>
+              <FilterMenu
+                groups={[
+                  {
+                    key: "category",
+                    label: "Категория",
+                    value: category,
+                    options: [{ value: "all", label: "Все категории" }, ...categories],
+                    onValueChange: (value) => {
+                      setCategory(value)
+                      setPage(1)
+                    },
+                  },
+                  {
+                    key: "margin",
+                    label: "Наценка",
+                    value: marginFilter,
+                    options: MARGIN_OPTIONS,
+                    onValueChange: (value) => {
+                      setMarginFilter(value)
+                      setPage(1)
+                    },
+                  },
+                ]}
+              />
+              <RangeFilter
+                label="Выручка от–до"
+                from={revenueRange.from}
+                to={revenueRange.to}
+                onChange={(next) => {
+                  setRevenueRange(next)
+                  setPage(1)
+                }}
+              />
+              <ActiveFilters chips={chips} />
+            </>
+          }
+          right={
+            <>
+              <span className="tabular-nums">
+                {rows.length} {plural(rows.length, POSITIONS_FORMS)}
+                {filtered ? ` · ${formatMoney(filteredRevenue)}` : ""}
+              </span>
+              <OpenInWindowLink />
+            </>
+          }
+        />
         <DataView
-          rows={rows}
+          rows={pageRows}
           columns={columns}
           getRowKey={(row) => row.productCode || `custom:${row.productName}`}
           defaultSort={{ key: "revenue", direction: "desc" }}
           stickyHeader={false}
-          onRowSelect={(row) => openProduct(row)}
+          onRowSelect={(row) =>
+            router.push(row.productCode ? operationsHref(range, { type: "sales", product: row.productCode }) : operationsHref(range, { type: "sales", query: row.productName }))
+          }
+          rowActions={(row) =>
+            row.productCode ? (
+              <a
+                href={productCardHref(row.productCode, range)}
+                className="rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                title="Карточка товара"
+              >
+                карточка
+              </a>
+            ) : null
+          }
           renderCard={(row) => (
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <div className="min-w-0">
@@ -252,14 +310,25 @@ export function SalesTab({ data, query }: { data: AnalyticsSales; query: string 
             <Empty className="min-h-40">
               <EmptyHeader>
                 <EmptyTitle>Продаж не найдено</EmptyTitle>
-                <EmptyDescription>Измените период, категорию или поиск.</EmptyDescription>
+                <EmptyDescription>Измените период, фильтры или поиск.</EmptyDescription>
               </EmptyHeader>
             </Empty>
           }
         />
+        <Pagination page={page} pageCount={pageCount} total={total} pageSize={pageSize} onPageChange={setPage} />
       </section>
 
-      <SalesDrilldownSheet target={drill} onClose={() => setDrill(null)} range={range} />
+      <p className="text-xs text-muted-foreground md:col-span-2 xl:col-span-12">
+        Клик по товару или категории открывает список чеков и заказов с ним за период (вкладка «Операции»). Себестоимость и
+        наценка — по текущей себестоимости карточек товаров; «ср. себест.» — себестоимость на единицу проданного.
+      </p>
     </div>
   )
 }
+
+const MARGIN_OPTIONS = [
+  { value: "all", label: "Любая наценка" },
+  { value: "negative", label: "Отрицательная" },
+  { value: "low", label: "Ниже 30 %" },
+  { value: "high", label: "50 % и выше" },
+]

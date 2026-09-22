@@ -11,9 +11,10 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { BarList, Panel } from "./bar-list"
 import { ColumnChart } from "./charts"
 import { DOCS_FORMS, formatCompactMoney, formatInstantShort, formatPercent, formatQty, percentOf, plural, POSITIONS_FORMS, SERIES_COLORS } from "./format"
-import { productCardHref } from "./links"
+import { operationsHref, productCardHref } from "./links"
 import { moneyValue } from "./overview-tab"
 import { StatTile } from "./stat-tile"
+import { OpenInWindowLink, Pagination, TableToolbar, usePagination } from "./table-chrome"
 
 type View = "docs" | "products"
 
@@ -32,6 +33,8 @@ export function WriteOffsTab({ data, query }: { data: AnalyticsWriteOffs; query:
     () => (q ? data.byProduct.filter((row) => `${row.productName} ${row.productCode} ${row.categoryPath}`.toLowerCase().includes(q)) : data.byProduct),
     [data.byProduct, q]
   )
+  const docsPaging = usePagination(docs)
+  const productsPaging = usePagination(products)
 
   const docColumns = useMemo<DataViewColumn<WriteOffDocRow>[]>(
     () => [
@@ -168,7 +171,8 @@ export function WriteOffsTab({ data, query }: { data: AnalyticsWriteOffs; query:
         delta={{ current: totals.cost, previous: previous.cost, upIsGood: false }}
         spark={series.map((point) => point.writeOffs)}
         sparkColor={SERIES_COLORS.writeOffs}
-        hint={`${totals.docsCount} ${plural(totals.docsCount, DOCS_FORMS)} · ${totals.positionsCount} ${plural(totals.positionsCount, POSITIONS_FORMS)}`}
+        hint={`${totals.docsCount} ${plural(totals.docsCount, DOCS_FORMS)} · ${totals.positionsCount} ${plural(totals.positionsCount, POSITIONS_FORMS)} → операции`}
+        href={operationsHref(range, { type: "writeoff" })}
       />
       <StatTile
         className="xl:col-span-3"
@@ -210,13 +214,14 @@ export function WriteOffsTab({ data, query }: { data: AnalyticsWriteOffs; query:
         />
       </Panel>
 
-      <Panel title="По причинам" subtitle="Комментарий акта списания" className="xl:col-span-5">
+      <Panel title="По причинам" subtitle="Комментарий акта списания · клик — акты с причиной" className="xl:col-span-5">
         <BarList
           items={data.byReason.slice(0, 8).map((row) => ({
             key: row.key,
             label: row.label,
             value: row.value,
             meta: `${row.count} ${plural(row.count, DOCS_FORMS)}`,
+            href: operationsHref(range, { type: "writeoff", reason: row.label }),
           }))}
           formatValue={formatCompactMoney}
           scale="total"
@@ -225,13 +230,14 @@ export function WriteOffsTab({ data, query }: { data: AnalyticsWriteOffs; query:
         />
       </Panel>
 
-      <Panel title="По категориям" className="xl:col-span-5">
+      <Panel title="По категориям" subtitle="Клик — акты списания с товарами категории" className="xl:col-span-5">
         <BarList
           items={data.byCategory.slice(0, 8).map((row) => ({
             key: row.key,
             label: row.label,
             value: row.value,
             meta: `${formatQty(row.count)} шт`,
+            href: operationsHref(range, { type: "writeoff", category: row.label }),
           }))}
           formatValue={formatCompactMoney}
           scale="total"
@@ -241,19 +247,22 @@ export function WriteOffsTab({ data, query }: { data: AnalyticsWriteOffs; query:
       </Panel>
 
       <section className="flex min-w-0 flex-col rounded-2xl bg-background shadow-xs md:col-span-2 xl:col-span-7">
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-2">
-          <FilterChips
-            value={view}
-            options={[
-              { value: "docs", label: "Акты", count: docs.length },
-              { value: "products", label: "Товары", count: products.length },
-            ]}
-            onValueChange={setView}
-          />
-        </div>
+        <TableToolbar
+          left={
+            <FilterChips
+              value={view}
+              options={[
+                { value: "docs", label: "Акты", count: docs.length },
+                { value: "products", label: "Товары", count: products.length },
+              ]}
+              onValueChange={setView}
+            />
+          }
+          right={<OpenInWindowLink />}
+        />
         {view === "docs" ? (
           <DataView
-            rows={docs}
+            rows={docsPaging.pageRows}
             columns={docColumns}
             getRowKey={(row) => row.id}
             defaultSort={{ key: "date", direction: "desc" }}
@@ -276,12 +285,17 @@ export function WriteOffsTab({ data, query }: { data: AnalyticsWriteOffs; query:
           />
         ) : (
           <DataView
-            rows={products}
+            rows={productsPaging.pageRows}
             columns={productColumns}
             getRowKey={(row) => row.productCode}
             defaultSort={{ key: "cost", direction: "desc" }}
             stickyHeader={false}
-            onRowSelect={(row) => router.push(productCardHref(row.productCode, range))}
+            onRowSelect={(row) => router.push(operationsHref(range, { type: "writeoff", product: row.productCode }))}
+            rowActions={(row) => (
+              <a href={productCardHref(row.productCode, range)} className="rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground" title="Карточка товара">
+                карточка
+              </a>
+            )}
             renderCard={(row) => (
               <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <div className="min-w-0">
@@ -295,6 +309,11 @@ export function WriteOffsTab({ data, query }: { data: AnalyticsWriteOffs; query:
             )}
             empty={<WriteOffsEmpty />}
           />
+        )}
+        {view === "docs" ? (
+          <Pagination page={docsPaging.page} pageCount={docsPaging.pageCount} total={docsPaging.total} pageSize={docsPaging.pageSize} onPageChange={docsPaging.setPage} />
+        ) : (
+          <Pagination page={productsPaging.page} pageCount={productsPaging.pageCount} total={productsPaging.total} pageSize={productsPaging.pageSize} onPageChange={productsPaging.setPage} />
         )}
       </section>
 

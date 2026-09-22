@@ -1,6 +1,6 @@
 import type { AnalyticsRange } from "@/lib/db"
 
-export type AnalyticsTab = "overview" | "sales" | "suppliers" | "writeoffs"
+export type AnalyticsTab = "overview" | "sales" | "suppliers" | "writeoffs" | "operations"
 
 // Параметры периода для ссылок между экранами аналитики — период общий для всех вкладок и
 // карточки товара (по умолчанию 30 дней — его в URL не пишем).
@@ -29,18 +29,25 @@ export function productCardHref(code: string, range?: AnalyticsRange): string {
   return qs ? `${base}?${qs}` : base
 }
 
-// Вкладка «Продажи» с раскрытыми продажами товара (?product=) — чеки и заказы, где он был.
-export function salesProductHref(code: string, range: AnalyticsRange): string {
-  const params = rangeParams(range)
-  params.set("tab", "sales")
-  params.set("product", code)
-  return `/analytics?${params.toString()}`
+// Вкладка «Операции» с фильтрами: сюда ведут клики по категории, причине списания, поставщику
+// и товару — список относящихся чеков, заказов, приходов и списаний за тот же период.
+export type OperationsLinkFilters = {
+  type?: "all" | "sales" | "sale" | "order" | "receipt" | "writeoff" | "inventory"
+  category?: string
+  product?: string
+  reason?: string
+  supplier?: number | string
+  query?: string
 }
 
-// Вкладка «Продажи» с раскрытым списком чеков и заказов периода (?docs=1).
-export function salesDocumentsHref(range: AnalyticsRange): string {
+export function operationsHref(range: AnalyticsRange, filters: OperationsLinkFilters = {}): string {
   const params = rangeParams(range)
-  params.set("tab", "sales")
-  params.set("docs", "1")
+  params.set("tab", "operations")
+  if (filters.type && filters.type !== "all") params.set("type", filters.type)
+  if (filters.category) params.set("category", filters.category)
+  if (filters.product) params.set("product", filters.product)
+  if (filters.reason) params.set("reason", filters.reason)
+  if (filters.supplier) params.set("supplier", String(filters.supplier))
+  if (filters.query) params.set("q", filters.query)
   return `/analytics?${params.toString()}`
 }

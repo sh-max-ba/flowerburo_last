@@ -10,6 +10,7 @@ import { cn, formatMoney } from "@/lib/utils"
 import { Panel } from "@/components/analytics/bar-list"
 import { DOCS_FORMS, formatInstantDate, formatInstantShort, plural } from "@/components/analytics/format"
 import { StatTile } from "@/components/analytics/stat-tile"
+import { Pagination, usePagination } from "@/components/analytics/table-chrome"
 import { DataView, type DataViewColumn } from "@/components/data-view"
 import { ScreenBody } from "@/components/screen-body"
 import { HeaderAction, ScreenHeader } from "@/components/screen-header"
@@ -36,6 +37,8 @@ type SupplierCardProps = {
 export function SupplierCard({ supplier, settlement, debtDocuments, payments, purchases, hasOpenShift }: SupplierCardProps) {
   const router = useRouter()
   const [paymentOpen, setPaymentOpen] = useState(false)
+  const paymentsPaging = usePagination(payments)
+  const purchasesPaging = usePagination(purchases)
   const delay = supplier.paymentDelayDays != null ? `${supplier.paymentDelayDays} дн.` : ""
 
   const purchaseColumns: DataViewColumn<StockDocument>[] = [
@@ -244,7 +247,7 @@ export function SupplierCard({ supplier, settlement, debtDocuments, payments, pu
               <span className="text-xs text-muted-foreground tabular-nums">{payments.length}</span>
             </div>
             <DataView
-              rows={payments}
+              rows={paymentsPaging.pageRows}
               columns={paymentColumns}
               getRowKey={(row) => row.id}
               stickyHeader={false}
@@ -271,6 +274,7 @@ export function SupplierCard({ supplier, settlement, debtDocuments, payments, pu
                 </Empty>
               }
             />
+            <Pagination page={paymentsPaging.page} pageCount={paymentsPaging.pageCount} total={paymentsPaging.total} pageSize={paymentsPaging.pageSize} onPageChange={paymentsPaging.setPage} />
           </section>
 
           <section className="flex min-w-0 flex-col rounded-2xl bg-background shadow-xs md:col-span-3 xl:col-span-12">
@@ -279,7 +283,7 @@ export function SupplierCard({ supplier, settlement, debtDocuments, payments, pu
               <span className="text-xs text-muted-foreground tabular-nums">{purchases.length}</span>
             </div>
             <DataView
-              rows={purchases}
+              rows={purchasesPaging.pageRows}
               columns={purchaseColumns}
               getRowKey={(row) => row.id}
               stickyHeader={false}
@@ -310,6 +314,7 @@ export function SupplierCard({ supplier, settlement, debtDocuments, payments, pu
                 </Empty>
               }
             />
+            <Pagination page={purchasesPaging.page} pageCount={purchasesPaging.pageCount} total={purchasesPaging.total} pageSize={purchasesPaging.pageSize} onPageChange={purchasesPaging.setPage} />
           </section>
         </div>
       </ScreenBody>

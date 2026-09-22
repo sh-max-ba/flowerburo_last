@@ -1,5 +1,6 @@
 "use client"
 
+import type React from "react"
 import { useMemo, useState } from "react"
 import Link from "next/link"
 import { ArrowLeftIcon, CalendarClockIcon, HistoryIcon, PencilIcon, PlusCircleIcon } from "lucide-react"
@@ -22,8 +23,9 @@ import {
   SERIES_COLORS,
   SUPPLIERS_FORMS,
 } from "@/components/analytics/format"
+import { operationsHref } from "@/components/analytics/links"
 import { PeriodPicker } from "@/components/analytics/period-picker"
-import { SalesDrilldownSheet, type DrillTarget } from "@/components/analytics/sales-drilldown-sheet"
+import { moneyValue } from "@/components/analytics/overview-tab"
 import { StatTile } from "@/components/analytics/stat-tile"
 import { DataView, type DataViewColumn } from "@/components/data-view"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
@@ -80,8 +82,8 @@ function movementLabel(movement: ProductCardMovement): string {
   return base
 }
 
-// Связь движения: акт — ссылка на страницу акта; чек/заказ — кнопка, раскрывающая документ в панели.
-function movementSource(movement: ProductCardMovement, onOpenDoc?: (target: DrillTarget) => void) {
+// Связь движения: акт — ссылка на страницу акта; чек/заказ — ссылка на операции с поиском по номеру.
+function movementSource(movement: ProductCardMovement, range: ProductCardData["range"]) {
   if (movement.documentId !== null) {
     return (
       <Link href={`/stock/acts/${movement.documentId}`} className="font-medium underline-offset-4 hover:underline">
@@ -89,23 +91,21 @@ function movementSource(movement: ProductCardMovement, onOpenDoc?: (target: Dril
       </Link>
     )
   }
-  const ref =
-    movement.saleId !== null
-      ? { source: "sale" as const, id: movement.saleId, label: `Чек #${movement.saleId}` }
-      : movement.orderId !== null
-        ? { source: "order" as const, id: movement.orderId, label: `Заказ #${movement.orderId}` }
-        : null
-  if (!ref) return <span className="text-muted-foreground">—</span>
-  if (!onOpenDoc) return <span>{ref.label}</span>
-  return (
-    <button
-      type="button"
-      className="font-medium underline-offset-4 hover:underline"
-      onClick={() => onOpenDoc({ kind: "document", source: ref.source, id: ref.id })}
-    >
-      {ref.label}
-    </button>
-  )
+  if (movement.saleId !== null) {
+    return (
+      <Link href={operationsHref(range, { type: "sale", query: String(movement.saleId) })} className="font-medium underline-offset-4 hover:underline">
+        Чек #{movement.saleId}
+      </Link>
+    )
+  }
+  if (movement.orderId !== null) {
+    return (
+      <Link href={operationsHref(range, { type: "order", query: String(movement.orderId) })} className="font-medium underline-offset-4 hover:underline">
+        Заказ #{movement.orderId}
+      </Link>
+    )
+  }
+  return <span className="text-muted-foreground">—</span>
 }
 
 /**
@@ -116,28 +116,12 @@ function movementSource(movement: ProductCardMovement, onOpenDoc?: (target: Dril
 export function ProductCard({ data }: { data: ProductCardData }) {
   const { product, period, previous, series, suppliers, movements, range } = data
   const [kind, setKind] = useState<KindFilter>("all")
-  const [drill, setDrill] = useState<DrillTarget | null>(null)
   const days = series.map((point) => point.day)
-
-  // «Продано» → список чеков и заказов с этим товаром за период.
-  function openSales() {
-    setDrill({
-      kind: "product",
-      productCode: product.code,
-      productName: product.name,
-      lines: data.sales.map((line) => ({
-        source: line.source,
-        sourceId: line.sourceId,
-        label: line.label,
-        soldAt: line.soldAt,
-        customer: line.customer,
-        qty: line.qty,
-        total: line.total,
-      })),
-    })
-  }
   const marginPct = product.salePrice > 0 ? percentOf(product.salePrice - product.costPrice, product.salePrice) : 0
   const netChange = period.closingStock - period.openingStock
+  // Средние за период: закупочная — по приходам, цена продажи — по чекам и заказам.
+  const avgCostPeriod = period.receivedQty > 0 ? period.receivedSum / period.receivedQty : null
+  const avgPricePeriod = period.soldQty > 0 ? period.revenue / period.soldQty : null
 
   const kindCounts = useMemo(() => {
     const counts = new Map<Kind, number>()
@@ -209,7 +193,7 @@ export function ProductCard({ data }: { data: ProductCardData }) {
         className: "whitespace-nowrap",
         cell: (row) => (
           <span className="flex min-w-0 flex-col">
-            {movementSource(row, setDrill)}
+            {movementSource(row, range)}
             {row.supplierName ? <span className="truncate text-xs text-muted-foreground">{row.supplierName}</span> : null}
           </span>
         ),
@@ -229,7 +213,7 @@ export function ProductCard({ data }: { data: ProductCardData }) {
         cell: (row) => <span className="block truncate text-muted-foreground">{row.note || "—"}</span>,
       },
     ],
-    []
+    [range]
   )
 
   return (
@@ -240,7 +224,7 @@ export function ProductCard({ data }: { data: ProductCardData }) {
           <>
             <HeaderAction icon={ArrowLeftIcon} label="Товары" href="/stock" className="pr-2" />
             <span className="mx-0.5 h-5 w-px shrink-0 bg-border/60" aria-hidden />
-            <PeriodPicker range={range} showDates />
+            <PeriodPicker range={range} />
           </>
         }
         meta={`остаток ${formatQty(product.stock)} · доступно ${formatQty(product.available)}`}
@@ -261,16 +245,16 @@ export function ProductCard({ data }: { data: ProductCardData }) {
 
       <ScreenBody surface={false} className="gap-4">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12">
-          {/* Паспорт товара: остатки и цены на сейчас. */}
-          <section className="flex min-w-0 flex-col gap-4 rounded-2xl bg-background p-4 shadow-xs md:col-span-2 xl:col-span-6">
+          {/* Паспорт товара: слева — кто это, справа — остатки и цены сейчас плюс средние за период. */}
+          <section className="grid min-w-0 gap-4 rounded-2xl bg-background p-4 shadow-xs md:col-span-2 xl:col-span-6 @container/passport">
             <div className="flex items-start gap-4">
-              <ProductThumbnail name={product.name} imagePath={product.imagePath} size="xl" className="size-20 shrink-0 rounded-xl" />
+              <ProductThumbnail name={product.name} imagePath={product.imagePath} size="xl" className="size-16 shrink-0 rounded-xl" />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="truncate text-lg leading-tight font-semibold">{product.name}</h2>
                   {!product.isActive ? <Badge variant="outline">В архиве</Badge> : null}
                 </div>
-                <div className="mt-1 truncate text-sm text-muted-foreground">{product.categoryPath || "Без категории"}</div>
+                <div className="mt-0.5 truncate text-sm text-muted-foreground">{product.categoryPath || "Без категории"}</div>
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground tabular-nums">
                   <span>Код {product.code}</span>
                   {product.article ? <span>Артикул {product.article}</span> : null}
@@ -279,16 +263,33 @@ export function ProductCard({ data }: { data: ProductCardData }) {
                 </div>
               </div>
             </div>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
-              <Fact label="Остаток" value={formatQty(product.stock)} tone={product.stock < 0 ? "danger" : "default"} />
-              <Fact label="Резерв" value={formatQty(product.reserved)} muted={product.reserved === 0} />
-              <Fact label="Доступно" value={formatQty(product.available)} tone={product.available < 0 ? "danger" : product.available <= 3 ? "warning" : "default"} />
-              <Fact label="Ожидается" value={formatQty(product.expected)} muted={product.expected === 0} />
-              <Fact label="Себестоимость" value={formatMoney(product.costPrice)} />
-              <Fact label="Цена продажи" value={formatMoney(product.salePrice)} />
-              <Fact label="Наценка" value={product.salePrice > 0 ? formatPercent(marginPct) : "—"} sub={product.salePrice > 0 ? formatMoney(product.salePrice - product.costPrice) : undefined} />
-              <Fact label="Сумма остатка" value={formatMoney(Math.max(0, product.stock) * product.costPrice)} sub="по себест." />
-            </dl>
+            <div className="grid gap-3 @4xl/passport:grid-cols-2">
+              <FactGroup title="Остатки">
+                <Fact label="Остаток" value={formatQty(product.stock)} tone={product.stock < 0 ? "danger" : "default"} />
+                <Fact label="Резерв" value={formatQty(product.reserved)} muted={product.reserved === 0} />
+                <Fact label="Доступно" value={formatQty(product.available)} tone={product.available < 0 ? "danger" : product.available <= 3 ? "warning" : "default"} />
+                <Fact label="Ожидается" value={formatQty(product.expected)} muted={product.expected === 0} />
+                <Fact label="Сумма остатка" value={formatMoney(Math.max(0, product.stock) * product.costPrice)} sub="по себестоимости" />
+                <Fact label="За период" value={`${formatQty(period.openingStock)} → ${formatQty(period.closingStock)}`} sub={`${netChange >= 0 ? "+" : "−"}${formatQty(Math.abs(netChange))} ${product.unit}`} />
+              </FactGroup>
+              <FactGroup title="Цены">
+                <Fact label="Себестоимость" value={formatMoney(product.costPrice)} sub="текущая в карточке" />
+                <Fact
+                  label="Ср. закупочная"
+                  value={avgCostPeriod !== null ? formatMoney(avgCostPeriod) : data.avgCostAllTime > 0 ? formatMoney(data.avgCostAllTime) : "—"}
+                  sub={avgCostPeriod !== null ? "за период" : data.avgCostAllTime > 0 ? "за всё время" : "приходов не было"}
+                  tone={avgCostPeriod !== null && product.costPrice > 0 && avgCostPeriod > product.costPrice * 1.1 ? "warning" : "default"}
+                />
+                <Fact label="Цена продажи" value={formatMoney(product.salePrice)} sub="текущая" />
+                <Fact label="Ср. цена продажи" value={avgPricePeriod !== null ? formatMoney(avgPricePeriod) : "—"} sub={avgPricePeriod !== null ? "за период" : "продаж не было"} />
+                <Fact label="Наценка" value={product.salePrice > 0 ? formatPercent(marginPct) : "—"} sub={product.salePrice > 0 ? `${formatMoney(product.salePrice - product.costPrice)} с ${product.unit}` : undefined} />
+                <Fact
+                  label="Наценка за период"
+                  value={period.revenue > 0 ? formatPercent(percentOf(period.revenue - period.cost, period.revenue)) : "—"}
+                  sub={period.revenue > 0 ? formatMoney(period.revenue - period.cost) : undefined}
+                />
+              </FactGroup>
+            </div>
           </section>
 
           {/* Показатели периода. */}
@@ -300,8 +301,8 @@ export function ProductCard({ data }: { data: ProductCardData }) {
               delta={{ current: period.soldQty, previous: previous.soldQty }}
               spark={series.map((point) => point.soldQty)}
               sparkColor={SERIES_COLORS.revenue}
-              hint={`${formatMoney(period.revenue)} · ${period.salesCount} ${plural(period.salesCount, SALES_FORMS)} · ${period.ordersCount} ${plural(period.ordersCount, ORDERS_FORMS)} → открыть`}
-              onClick={openSales}
+              hint={`${formatMoney(period.revenue)} · ${period.salesCount} ${plural(period.salesCount, SALES_FORMS)} · ${period.ordersCount} ${plural(period.ordersCount, ORDERS_FORMS)} → чеки и заказы`}
+              href={operationsHref(range, { type: "sales", product: product.code })}
             />
             <StatTile
               label="Поступило"
@@ -310,7 +311,8 @@ export function ProductCard({ data }: { data: ProductCardData }) {
               delta={{ current: period.receivedQty, previous: previous.receivedQty }}
               spark={series.map((point) => point.receivedQty)}
               sparkColor={SERIES_COLORS.purchases}
-              hint={`${formatMoney(period.receivedSum)} · ${period.receiptDocs} ${plural(period.receiptDocs, DOCS_FORMS)}${period.receivedQty > 0 ? ` · ${formatMoney(period.receivedSum / period.receivedQty)}/${product.unit}` : ""}`}
+              hint={`${formatMoney(period.receivedSum)} · ${period.receiptDocs} ${plural(period.receiptDocs, DOCS_FORMS)}${period.receivedQty > 0 ? ` · ${formatMoney(period.receivedSum / period.receivedQty)}/${product.unit}` : ""} → приходы`}
+              href={operationsHref(range, { type: "receipt", product: product.code })}
             />
             <StatTile
               label="Списано"
@@ -319,12 +321,17 @@ export function ProductCard({ data }: { data: ProductCardData }) {
               delta={{ current: period.writtenOffQty, previous: previous.writtenOffQty, upIsGood: false }}
               spark={series.map((point) => point.writtenOffQty)}
               sparkColor={SERIES_COLORS.writeOffs}
-              hint={`${formatMoney(period.writtenOffCost)}${period.receivedQty > 0 ? ` · ${formatPercent(percentOf(period.writtenOffQty, period.receivedQty))} от поступлений` : ""}`}
+              hint={`${formatMoney(period.writtenOffCost)}${period.receivedQty > 0 ? ` · ${formatPercent(percentOf(period.writtenOffQty, period.receivedQty))} от поступлений` : ""} → акты`}
+              href={operationsHref(range, { type: "writeoff", product: product.code })}
             />
             <StatTile
-              label="Остаток за период"
-              value={`${formatQty(period.openingStock)} → ${formatQty(period.closingStock)}`}
-              hint={`${netChange >= 0 ? "+" : "−"}${formatQty(Math.abs(netChange))} ${product.unit}${period.adjustmentQty !== 0 ? ` · корректировки ${formatSignedQty(period.adjustmentQty)}` : ""}`}
+              label="Выручка за период"
+              value={moneyValue(period.revenue)}
+              unit="сом"
+              delta={{ current: period.revenue, previous: previous.revenue }}
+              spark={series.map((point) => point.revenue)}
+              sparkColor={SERIES_COLORS.revenue}
+              hint={`себестоимость ${formatMoney(period.cost)}${period.adjustmentQty !== 0 ? ` · корректировки остатка ${formatSignedQty(period.adjustmentQty)} ${product.unit}` : ""}`}
             />
           </div>
 
@@ -462,7 +469,7 @@ export function ProductCard({ data }: { data: ProductCardData }) {
                       <Badge variant={kindTone(row)}>{movementLabel(row)}</Badge>
                       <span className="text-xs text-muted-foreground tabular-nums">{formatInstantShort(row.createdAt)}</span>
                     </div>
-                    <div className="mt-1 truncate text-xs text-muted-foreground">{row.note || movementSource(row)}</div>
+                    <div className="mt-1 truncate text-xs text-muted-foreground">{row.note || movementSource(row, range)}</div>
                   </div>
                   <div className="shrink-0 text-right tabular-nums">
                     <div className={cn("font-medium", row.qty > 0 ? "text-emerald-700" : row.qty < 0 ? "text-orange-600" : "")}>
@@ -494,9 +501,17 @@ export function ProductCard({ data }: { data: ProductCardData }) {
           </section>
         </div>
       </ScreenBody>
-
-      <SalesDrilldownSheet target={drill} onClose={() => setDrill(null)} range={range} />
     </>
+  )
+}
+
+// Группа фактов паспорта: подпись капсом и сетка 3 колонки.
+function FactGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-xl bg-muted/30 p-3">
+      <div className="mb-2 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{title}</div>
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-2.5 @md/passport:grid-cols-3 @lg/passport:grid-cols-4 @4xl/passport:grid-cols-3">{children}</dl>
+    </div>
   )
 }
 
@@ -518,7 +533,7 @@ function Fact({
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd
         className={cn(
-          "mt-0.5 truncate text-base font-semibold tabular-nums",
+          "mt-0.5 truncate text-[15px] leading-tight font-semibold tabular-nums",
           tone === "danger" ? "text-red-600" : tone === "warning" ? "text-amber-600" : muted ? "text-muted-foreground" : "text-foreground"
         )}
       >

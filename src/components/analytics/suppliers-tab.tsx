@@ -23,7 +23,7 @@ import {
   SERIES_COLORS,
   SUPPLIERS_FORMS,
 } from "./format"
-import { productCardHref } from "./links"
+import { operationsHref, productCardHref } from "./links"
 import { moneyValue } from "./overview-tab"
 import { StatTile } from "./stat-tile"
 
@@ -146,7 +146,7 @@ export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query:
       label: row.supplierName,
       value: row.goodsTotal,
       meta: `${row.docsCount} ${plural(row.docsCount, DOCS_FORMS)}`,
-      href: row.supplierId !== null ? `/suppliers/${row.supplierId}` : undefined,
+      href: row.supplierId !== null ? operationsHref(range, { type: "receipt", supplier: row.supplierId }) : undefined,
     }))
     if (rows.length <= 9) return rows
     const tail = rows.slice(8)
@@ -154,7 +154,7 @@ export function SuppliersTab({ data, query }: { data: AnalyticsSuppliers; query:
       ...rows.slice(0, 8),
       { key: "__other__", label: `Прочие · ${tail.length}`, value: tail.reduce((sum, row) => sum + row.value, 0), meta: "", href: undefined },
     ]
-  }, [suppliers])
+  }, [suppliers, range])
 
   const payingDocuments = paying ? data.debtDocuments.filter((document) => document.supplierId === paying.supplierId) : []
 
@@ -384,7 +384,7 @@ function GroupRows({
                 ) : null}
                 {mode === "supplier" && group.supplierId !== null ? (
                   <Link
-                    href={`/stock/acts?type=stock_in&supplier=${group.supplierId}&dateFrom=${range.from}&dateTo=${range.to}`}
+                    href={operationsHref(range, { type: "receipt", supplier: group.supplierId })}
                     className="shrink-0 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
                     onClick={(event) => event.stopPropagation()}
                   >

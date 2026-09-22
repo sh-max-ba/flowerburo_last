@@ -289,7 +289,6 @@ export type {
   AnalyticsStockSnapshot,
   AnalyticsOverview,
   AnalyticsSales,
-  AnalyticsSaleLine,
   AnalyticsSuppliers,
   SupplierAnalyticsRow,
   SupplierPositionRow,
@@ -313,5 +312,12 @@ export type {
   SupplierSettlement,
   SupplierPaymentResult,
 } from "./db/queries/supplier-payments"
-export { getSalesDocument, listProductSales } from "./db/queries/sales-documents"
-export type { SalesDocument, SalesDocumentItem, SalesDocumentSource, ProductSaleLine } from "./db/queries/sales-documents"
+export { getAnalyticsOperations, OPERATION_TYPES } from "./db/queries/operations"
+export type {
+  AnalyticsOperations,
+  OperationFilters,
+  OperationItem,
+  OperationKind,
+  OperationRow,
+  OperationTypeFilter,
+} from "./db/queries/operations"
