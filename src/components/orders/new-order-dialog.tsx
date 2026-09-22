@@ -96,6 +96,52 @@ function parseDateInput(value: string): Date | undefined {
 
 const dueLabelFormatter = new Intl.DateTimeFormat("ru-RU", { weekday: "short", day: "numeric", month: "long" })
 
+// «1 500», «1500,50» → число; пусто/мусор → 0.
+function parseMoneyInput(value: string) {
+  const parsed = Number(value.replace(/\s+/g, "").replace(",", "."))
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
+
+// Денежное поле: текст с цифровой клавиатурой; хранит строку, поэтому «0» не прилипает и
+// стирается как обычный символ. В форму уходит как есть — сервер парсит число.
+function MoneyInput({
+  id,
+  name,
+  value,
+  onChange,
+  disabled,
+  readOnly,
+  className,
+}: {
+  id: string
+  name?: string
+  value: string
+  onChange: (value: string) => void
+  disabled?: boolean
+  readOnly?: boolean
+  className?: string
+}) {
+  return (
+    <>
+      <Input
+        id={id}
+        type="text"
+        inputMode="decimal"
+        autoComplete="off"
+        placeholder="0"
+        value={value}
+        disabled={disabled}
+        readOnly={readOnly}
+        className={cn("tabular-nums", className)}
+        onChange={(event) => onChange(event.target.value.replace(/[^\d.,\s]/g, ""))}
+        onFocus={(event) => event.target.select()}
+      />
+      {/* В форму уходит нормализованное число (пробелы и запятая сервером не парсятся). */}
+      {name ? <input type="hidden" name={name} value={parseMoneyInput(value)} /> : null}
+    </>
+  )
+}
+
 export function OrderDialog({
   open,
   onOpenChange,
@@ -174,9 +220,13 @@ function NewOrderForm({
 }) {
   const [step, setStep] = useState<OrderStepKey>("customer")
   const [deliveryType, setDeliveryType] = useState("pickup")
-  const [deliveryPrice, setDeliveryPrice] = useState(0)
-  const [courierPayout, setCourierPayout] = useState(0)
-  const [prepaid, setPrepaid] = useState(0)
+  // Суммы держим строками: с числовым состоянием «0» в поле не стирался при вводе.
+  const [deliveryPriceInput, setDeliveryPriceInput] = useState("")
+  const [courierPayoutInput, setCourierPayoutInput] = useState("")
+  const [prepaidInput, setPrepaidInput] = useState("")
+  const deliveryPrice = parseMoneyInput(deliveryPriceInput)
+  const courierPayout = parseMoneyInput(courierPayoutInput)
+  const prepaid = parseMoneyInput(prepaidInput)
   const [customer, setCustomer] = useState(initialCustomer?.name ?? "")
   const [phone, setPhone] = useState(initialCustomer?.phone || PHONE_PREFIX)
   const [recipientPhone, setRecipientPhone] = useState(PHONE_PREFIX)
@@ -187,9 +237,10 @@ function NewOrderForm({
   const [orderDiscountType, setOrderDiscountType] = useState<DiscountType>(
     initialCustomer && initialCustomer.defaultDiscountPercent > 0 ? "percent" : "none"
   )
-  const [orderDiscountValue, setOrderDiscountValue] = useState(
-    initialCustomer && initialCustomer.defaultDiscountPercent > 0 ? initialCustomer.defaultDiscountPercent : 0
+  const [orderDiscountInput, setOrderDiscountInput] = useState(
+    initialCustomer && initialCustomer.defaultDiscountPercent > 0 ? String(initialCustomer.defaultDiscountPercent) : ""
   )
+  const orderDiscountValue = parseMoneyInput(orderDiscountInput)
   const [orderDiscountTouched, setOrderDiscountTouched] = useState(false)
   const [orderDiscountOpen, setOrderDiscountOpen] = useState(false)
   const [dueDate, setDueDate] = useState("")
@@ -254,7 +305,7 @@ function NewOrderForm({
     setPhone(PHONE_PREFIX)
     setRecipientPhone(PHONE_PREFIX)
     setOrderDiscountType("none")
-    setOrderDiscountValue(0)
+    setOrderDiscountInput("")
     setOrderDiscountTouched(false)
     setOrderDiscountOpen(false)
     setDueDate("")
@@ -263,9 +314,9 @@ function NewOrderForm({
     setAddress("")
     setNote("")
     setImages([])
-    setDeliveryPrice(0)
-    setCourierPayout(0)
-    setPrepaid(0)
+    setDeliveryPriceInput("")
+    setCourierPayoutInput("")
+    setPrepaidInput("")
     setPaymentMethod("cash")
   }
 
@@ -274,8 +325,8 @@ function NewOrderForm({
     setDeliveryType(next)
     // Самовывоз обнуляет доставку/курьера/адрес, чтобы они не попали в итог и заказ.
     if (next !== "delivery") {
-      setDeliveryPrice(0)
-      setCourierPayout(0)
+      setDeliveryPriceInput("")
+      setCourierPayoutInput("")
       setAddress("")
     }
   }
@@ -287,10 +338,10 @@ function NewOrderForm({
     if (!orderDiscountTouched) {
       if (nextCustomer && nextCustomer.defaultDiscountPercent > 0) {
         setOrderDiscountType("percent")
-        setOrderDiscountValue(nextCustomer.defaultDiscountPercent)
+        setOrderDiscountInput(String(nextCustomer.defaultDiscountPercent))
       } else {
         setOrderDiscountType("none")
-        setOrderDiscountValue(0)
+        setOrderDiscountInput("")
       }
     }
   }
@@ -305,14 +356,14 @@ function NewOrderForm({
     setOrderDiscountTouched(true)
     setOrderDiscountType(nextType)
     if (nextType === "none") {
-      setOrderDiscountValue(0)
+      setOrderDiscountInput("")
     }
   }
 
   function clearOrderDiscount() {
     setOrderDiscountTouched(true)
     setOrderDiscountType("none")
-    setOrderDiscountValue(0)
+    setOrderDiscountInput("")
     setOrderDiscountOpen(false)
   }
 
@@ -537,11 +588,11 @@ function NewOrderForm({
                     <div className="grid gap-4 md:grid-cols-2">
                       <Field>
                         <FieldLabel htmlFor="order-delivery-price">Платит клиент за доставку</FieldLabel>
-                        <Input id="order-delivery-price" name="deliveryPrice" type="number" step="1" min="0" className="tabular-nums" value={deliveryPrice} onChange={(event) => setDeliveryPrice(Number(event.target.value) || 0)} />
+                        <MoneyInput id="order-delivery-price" name="deliveryPrice" value={deliveryPriceInput} onChange={setDeliveryPriceInput} />
                       </Field>
                       <Field>
                         <FieldLabel htmlFor="order-courier-payout">Выдать курьеру из кассы</FieldLabel>
-                        <Input id="order-courier-payout" name="courierPayout" type="number" step="1" min="0" className="tabular-nums" value={courierPayout} onChange={(event) => setCourierPayout(Number(event.target.value) || 0)} />
+                        <MoneyInput id="order-courier-payout" name="courierPayout" value={courierPayoutInput} onChange={setCourierPayoutInput} />
                         <FieldDescription>Выплата курьеру не входит в итог — это отдельная кассовая операция.</FieldDescription>
                       </Field>
                     </div>
@@ -549,7 +600,7 @@ function NewOrderForm({
                   <div className="grid gap-4 md:grid-cols-2">
                     <Field>
                       <FieldLabel htmlFor="order-prepaid">Предоплата</FieldLabel>
-                      <Input id="order-prepaid" name="prepaid" type="number" step="1" min="0" className="tabular-nums" value={prepaid} onChange={(event) => setPrepaid(Number(event.target.value) || 0)} />
+                      <MoneyInput id="order-prepaid" name="prepaid" value={prepaidInput} onChange={setPrepaidInput} />
                     </Field>
                     <Field>
                       <FieldLabel htmlFor="order-payment-method">Способ оплаты</FieldLabel>
@@ -603,18 +654,15 @@ function NewOrderForm({
                         </Field>
                         <Field>
                           <FieldLabel htmlFor="order-discount-value">Значение</FieldLabel>
-                          <Input
+                          <MoneyInput
                             id="order-discount-value"
-                            type="number"
-                            step="1"
-                            min="0"
-                            value={orderDiscountValue}
+                            value={orderDiscountInput}
                             disabled={pending}
                             readOnly={orderDiscountType === "none"}
-                            className="w-24 text-right tabular-nums"
-                            onChange={(event) => {
+                            className="w-24 text-right"
+                            onChange={(next) => {
                               setOrderDiscountTouched(true)
-                              setOrderDiscountValue(Number(event.target.value) || 0)
+                              setOrderDiscountInput(next)
                             }}
                           />
                         </Field>

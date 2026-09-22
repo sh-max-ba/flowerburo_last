@@ -1,13 +1,15 @@
 "use client"
 
 import type React from "react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { MinusIcon, PlusIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-// Выбор времени одним ползунком: дорожка рабочего дня с делениями (крупные — часы, мелкие — шаг
-// snap), ручка «стеклом» показывает выбранное время, тянется пальцем/мышью, стрелками с клавиатуры
-// и кнопками ± по шагу. Значение — «HH:MM» или пустая строка (время не выбрано → ручка призрачная).
+// Круговой выбор времени одной ручкой (как таймер/будильник): кольцо делений по 15 минут,
+// деления от начала суток до выбранного времени подсвечены, ручка тянется пальцем/мышью по
+// кольцу, в центре — крупное время. Магазин работает круглосуточно, поэтому по умолчанию кольцо —
+// полные сутки (00:00 вверху, 12:00 внизу, подписи каждые 3 часа); при узком диапазоне
+// (min/max) — дуга 270° с разрывом внизу. Стрелки с клавиатуры и ± меняют на шаг.
 
 export type TimeDialProps = {
   value: string
@@ -17,17 +19,21 @@ export type TimeDialProps = {
   // Границы рабочего дня, минуты от полуночи.
   min?: number
   max?: number
-  // Плотность мелких делений на дорожке: 24–96 (сколько отрезков между крайними точками).
-  density?: number
-  // Размер ручки в px: 44–68.
+  // Диаметр ручки, px (28–44).
   reach?: number
-  // Быстрые значения под дорожкой.
+  // Быстрые значения под кольцом.
   presets?: string[]
   disabled?: boolean
   className?: string
 }
 
 const defaultPresets = ["10:00", "12:00", "15:00", "18:00", "20:00"]
+
+// Геометрия кольца в единицах viewBox 0 0 240 240.
+const SIZE = 240
+const CENTER = SIZE / 2
+const RING_RADIUS = 82
+const DAY = 24 * 60
 
 export function parseTimeValue(value: string): number | null {
   const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim())
@@ -47,36 +53,42 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
 
+function polar(angleDeg: number, radius: number) {
+  const rad = (angleDeg * Math.PI) / 180
+  return { x: CENTER + radius * Math.sin(rad), y: CENTER - radius * Math.cos(rad) }
+}
+
 export function TimeDial({
   value,
   onChange,
   snap = 15,
-  min = 8 * 60,
-  max = 22 * 60,
-  density,
-  reach = 52,
+  min = 0,
+  max = DAY - 15,
+  reach = 34,
   presets = defaultPresets,
   disabled = false,
   className,
 }: TimeDialProps) {
-  const trackRef = useRef<HTMLDivElement | null>(null)
+  const svgRef = useRef<SVGSVGElement | null>(null)
   const [dragging, setDragging] = useState(false)
+  const labelId = useId()
   const span = Math.max(snap, max - min)
-  const handleSize = clamp(reach, 44, 68)
-  const minorCount = clamp(density ?? Math.round(span / snap), 24, 96)
+  // Полные сутки — замкнутое кольцо (0° вверху, шаг угла = доля суток); иначе дуга 270° с разрывом внизу.
+  const fullDay = span >= DAY - snap
+  const startAngle = fullDay ? 0 : -135
+  const sweep = fullDay ? (360 * span) / DAY : 270
+  const knobRadius = clamp(reach, 28, 44) / 2
   const current = parseTimeValue(value)
   const minutes = current === null ? null : clamp(current, min, max)
-  const ratio = minutes === null ? 0.5 : (minutes - min) / span
+  const angleFor = useCallback((m: number) => startAngle + ((m - min) / span) * sweep, [min, span, startAngle, sweep])
+  const handleAngle = angleFor(minutes ?? min)
+  const knob = polar(handleAngle, RING_RADIUS)
 
-  const snapTo = useCallback(
-    (raw: number) => clamp(Math.round(raw / snap) * snap, min, max),
-    [snap, min, max]
-  )
+  const snapTo = useCallback((raw: number) => clamp(Math.round(raw / snap) * snap, min, max), [snap, min, max])
 
   const commit = useCallback(
     (next: number) => {
-      const snapped = snapTo(next)
-      const formatted = formatTimeValue(snapped)
+      const formatted = formatTimeValue(snapTo(next))
       if (formatted !== value) {
         onChange(formatted)
       }
@@ -84,17 +96,24 @@ export function TimeDial({
     [snapTo, onChange, value]
   )
 
+  // Точка на экране → угол от вершины по часовой → минуты. В разрыве внизу — ближайший край.
   const fromPointer = useCallback(
-    (clientX: number) => {
-      const track = trackRef.current
-      if (!track) {
+    (clientX: number, clientY: number) => {
+      const svg = svgRef.current
+      if (!svg) {
         return
       }
-      const rect = track.getBoundingClientRect()
-      const fraction = clamp((clientX - rect.left) / rect.width, 0, 1)
+      const rect = svg.getBoundingClientRect()
+      const dx = clientX - (rect.left + rect.width / 2)
+      const dy = clientY - (rect.top + rect.height / 2)
+      // atan2 даёт (-180, 180] от вершины по часовой. На полном кольце нормализуем в [0, 360);
+      // на дуге разрыв внизу симметричен, поэтому ближайший край — просто clamp.
+      const raw = (Math.atan2(dx, -dy) * 180) / Math.PI
+      const angle = fullDay ? (raw + 360) % 360 : clamp(raw, startAngle, startAngle + sweep)
+      const fraction = clamp((angle - startAngle) / sweep, 0, 1)
       commit(min + fraction * span)
     },
-    [commit, min, span]
+    [commit, min, span, fullDay, startAngle, sweep]
   )
 
   useEffect(() => {
@@ -102,7 +121,7 @@ export function TimeDial({
       return
     }
     function onMove(event: PointerEvent) {
-      fromPointer(event.clientX)
+      fromPointer(event.clientX, event.clientY)
     }
     function onUp() {
       setDragging(false)
@@ -117,19 +136,18 @@ export function TimeDial({
     }
   }, [dragging, fromPointer])
 
-  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+  function handleKeyDown(event: React.KeyboardEvent<SVGSVGElement>) {
     if (disabled) {
       return
     }
     const base = minutes ?? snapTo(min + span / 2)
-    const big = 60
     const map: Record<string, number> = {
       ArrowLeft: -snap,
       ArrowDown: -snap,
       ArrowRight: snap,
       ArrowUp: snap,
-      PageDown: -big,
-      PageUp: big,
+      PageDown: -60,
+      PageUp: 60,
     }
     if (event.key in map) {
       event.preventDefault()
@@ -143,134 +161,143 @@ export function TimeDial({
     }
   }
 
-  // Подписи часов: каждый час на широкой дорожке, каждые два — на узкой (через контейнер).
-  const hourMarks = useMemo(() => {
-    const marks: Array<{ minutes: number; label: string; ratio: number }> = []
-    for (let m = Math.ceil(min / 60) * 60; m <= max; m += 60) {
-      marks.push({ minutes: m, label: String(Math.floor(m / 60)), ratio: (m - min) / span })
+  // Деления: каждый шаг snap; часовые — длиннее; подписи снаружи кольца — каждые 3 часа на
+  // полных сутках, каждые 2 — на дуге.
+  const labelEvery = fullDay ? 3 : 2
+  const ticks = useMemo(() => {
+    const list: Array<{ minutes: number; angle: number; hour: boolean; label: string }> = []
+    for (let m = min; m <= max; m += snap) {
+      const hour = m % 60 === 0
+      list.push({ minutes: m, angle: angleFor(m), hour, label: hour && (m / 60) % labelEvery === 0 ? String(m / 60) : "" })
     }
-    return marks
-  }, [min, max, span])
+    return list
+  }, [min, max, snap, angleFor, labelEvery])
 
   const label = minutes === null ? "—:—" : formatTimeValue(minutes)
+  const [hours, mins] = label.split(":")
 
   return (
-    <div className={cn("@container/dial flex flex-col gap-3", disabled && "opacity-60", className)}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-baseline gap-2">
-          <span className={cn("font-heading text-3xl font-semibold tabular-nums", minutes === null && "text-muted-foreground")}>{label}</span>
-          {minutes !== null ? <span className="text-xs text-muted-foreground">шаг {snap} мин</span> : <span className="text-xs text-muted-foreground">потяните ручку или выберите время</span>}
-        </div>
-        <div className="flex items-center gap-1">
-          <StepButton icon={MinusIcon} label={`Минус ${snap} минут`} disabled={disabled || minutes !== null && minutes <= min} onClick={() => commit((minutes ?? snapTo(min + span / 2)) - snap)} />
-          <StepButton icon={PlusIcon} label={`Плюс ${snap} минут`} disabled={disabled || minutes !== null && minutes >= max} onClick={() => commit((minutes ?? snapTo(min + span / 2)) + snap)} />
-        </div>
-      </div>
-
-      <div className="relative select-none" style={{ paddingTop: handleSize / 2 + 4, paddingBottom: 22 }}>
-        {/* Дорожка */}
-        <div
-          ref={trackRef}
-          role="slider"
-          tabIndex={disabled ? -1 : 0}
-          aria-label="Время"
-          aria-valuemin={min}
-          aria-valuemax={max}
-          aria-valuenow={minutes ?? undefined}
-          aria-valuetext={minutes === null ? "не выбрано" : label}
-          onKeyDown={handleKeyDown}
-          onPointerDown={(event) => {
-            if (disabled) {
-              return
-            }
-            event.preventDefault()
-            event.currentTarget.focus()
-            setDragging(true)
-            fromPointer(event.clientX)
-          }}
-          className="relative h-3 cursor-pointer rounded-md bg-muted outline-none focus-visible:ring-3 focus-visible:ring-ring/35"
-        >
-          <div className="absolute inset-y-0 left-0 rounded-md bg-brand/80 transition-[width] duration-75" style={{ width: `${(minutes === null ? 0 : ratio) * 100}%` }} />
-          {/* Деления */}
-          <div className="pointer-events-none absolute inset-x-0 top-full mt-1 h-3">
-            {Array.from({ length: minorCount + 1 }, (_, index) => {
-              const fraction = index / minorCount
-              const markMinutes = min + fraction * span
-              const isHour = Math.abs(markMinutes / 60 - Math.round(markMinutes / 60)) < 0.001
-              return (
-                <span
-                  key={index}
-                  className={cn("absolute top-0 w-px -translate-x-1/2 bg-zinc-300", isHour ? "h-3 bg-zinc-400" : "h-1.5")}
-                  style={{ left: `${fraction * 100}%` }}
-                />
-              )
-            })}
-          </div>
-          {/* Подписи часов */}
-          <div className="pointer-events-none absolute inset-x-0 top-full mt-4 h-4 text-[10px] leading-none text-muted-foreground tabular-nums">
-            {hourMarks.map((mark, index) => (
-              <span
-                key={mark.minutes}
-                className={cn("absolute -translate-x-1/2", index % 2 === 1 && "hidden @lg/dial:inline")}
-                style={{ left: `${mark.ratio * 100}%` }}
-              >
-                {mark.label}
-              </span>
-            ))}
-          </div>
-          {/* Ручка */}
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-hidden
-            disabled={disabled}
-            onPointerDown={(event) => {
-              if (disabled) {
-                return
-              }
-              event.preventDefault()
-              event.stopPropagation()
-              trackRef.current?.focus()
-              setDragging(true)
-            }}
-            className={cn(
-              "absolute top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white/85 text-sm font-semibold text-foreground shadow-lg ring-1 ring-black/10 backdrop-blur-md transition-[left,transform,box-shadow] duration-75 tabular-nums",
-              "before:pointer-events-none before:absolute before:inset-px before:rounded-full before:bg-gradient-to-b before:from-white/90 before:to-white/20",
-              dragging ? "scale-105 shadow-xl ring-brand/40" : "hover:shadow-xl",
-              minutes === null && "border border-dashed border-zinc-300 bg-white/60 text-muted-foreground"
-            )}
-            style={{ left: `${ratio * 100}%`, width: handleSize, height: handleSize, touchAction: "none" }}
-          >
-            <span className="relative">{minutes === null ? "…" : label}</span>
-          </button>
-        </div>
-      </div>
-
-      {presets.length ? (
-        <div className="flex flex-wrap gap-1.5">
-          {presets.map((preset) => {
-            const presetMinutes = parseTimeValue(preset)
-            if (presetMinutes === null || presetMinutes < min || presetMinutes > max) {
-              return null
-            }
-            const active = minutes === presetMinutes
+    <div className={cn("flex flex-col items-center gap-2", disabled && "opacity-60", className)}>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${SIZE} ${SIZE}`}
+        role="slider"
+        tabIndex={disabled ? -1 : 0}
+        aria-labelledby={labelId}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={minutes ?? undefined}
+        aria-valuetext={minutes === null ? "не выбрано" : label}
+        onKeyDown={handleKeyDown}
+        onPointerDown={(event) => {
+          if (disabled) {
+            return
+          }
+          event.preventDefault()
+          event.currentTarget.focus()
+          setDragging(true)
+          fromPointer(event.clientX, event.clientY)
+        }}
+        className="w-full max-w-64 touch-none select-none rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/35"
+        style={{ cursor: disabled ? "default" : dragging ? "grabbing" : "grab" }}
+      >
+        <title id={labelId}>Время</title>
+        {/* Кольцо делений */}
+        {ticks.map((tick) => {
+          const selected = minutes !== null && tick.minutes <= minutes
+          const inner = polar(tick.angle, RING_RADIUS - (tick.hour ? 9 : 5))
+          const outer = polar(tick.angle, RING_RADIUS + (tick.hour ? 9 : 5))
+          return (
+            <line
+              key={tick.minutes}
+              x1={inner.x}
+              y1={inner.y}
+              x2={outer.x}
+              y2={outer.y}
+              strokeWidth={tick.hour ? 2.5 : 1.5}
+              strokeLinecap="round"
+              className={cn(
+                "transition-colors duration-100",
+                selected ? "stroke-brand" : tick.hour ? "stroke-zinc-400" : "stroke-zinc-300"
+              )}
+            />
+          )
+        })}
+        {/* Подписи часов */}
+        {ticks
+          .filter((tick) => tick.label)
+          .map((tick) => {
+            const point = polar(tick.angle, RING_RADIUS + 26)
             return (
-              <button
-                key={preset}
-                type="button"
-                disabled={disabled}
-                onClick={() => commit(presetMinutes)}
-                className={cn(
-                  "h-8 rounded-md px-2.5 text-sm font-medium tabular-nums transition-colors pointer-coarse:h-9",
-                  active ? "bg-brand text-brand-foreground" : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
-                )}
+              <text
+                key={`label-${tick.minutes}`}
+                x={point.x}
+                y={point.y}
+                textAnchor="middle"
+                dominantBaseline="central"
+                className="fill-zinc-500 text-[11px] tabular-nums"
               >
-                {preset}
-              </button>
+                {tick.label}
+              </text>
             )
           })}
-        </div>
-      ) : null}
+        {/* Ручка */}
+        <g style={{ filter: "drop-shadow(0 2px 4px rgb(0 0 0 / 0.18))" }}>
+          <circle
+            cx={knob.x}
+            cy={knob.y}
+            r={knobRadius}
+            className={cn(
+              "fill-white stroke-zinc-200 transition-[r] duration-100",
+              minutes === null && "fill-white/80 stroke-zinc-300",
+              dragging && "stroke-brand"
+            )}
+            strokeWidth={1.5}
+          />
+          <circle cx={knob.x} cy={knob.y} r={4} className={cn(minutes === null ? "fill-zinc-300" : "fill-brand")} />
+        </g>
+        {/* Центр: время */}
+        <text
+          x={CENTER}
+          y={CENTER - 2}
+          textAnchor="middle"
+          dominantBaseline="central"
+          className={cn("font-heading text-[40px] font-semibold tabular-nums", minutes === null ? "fill-zinc-300" : "fill-foreground")}
+        >
+          {hours}
+          <tspan className="fill-zinc-400" dy="-4">:</tspan>
+          {mins}
+        </text>
+        <text x={CENTER} y={CENTER + 26} textAnchor="middle" dominantBaseline="central" className="fill-zinc-500 text-[11px]">
+          {minutes === null ? "потяните ручку" : `шаг ${snap} мин`}
+        </text>
+      </svg>
+
+      <div className="flex w-full max-w-64 flex-wrap items-center justify-center gap-1.5">
+        <StepButton icon={MinusIcon} label={`Минус ${snap} минут`} disabled={disabled || (minutes !== null && minutes <= min)} onClick={() => commit((minutes ?? snapTo(min + span / 2)) - snap)} />
+        {presets.map((preset) => {
+          const presetMinutes = parseTimeValue(preset)
+          if (presetMinutes === null || presetMinutes < min || presetMinutes > max) {
+            return null
+          }
+          const active = minutes === presetMinutes
+          return (
+            <button
+              key={preset}
+              type="button"
+              disabled={disabled}
+              onClick={() => commit(presetMinutes)}
+              className={cn(
+                "h-8 rounded-md px-2 text-sm font-medium tabular-nums transition-colors pointer-coarse:h-9",
+                active ? "bg-brand text-brand-foreground" : "bg-background text-muted-foreground shadow-xs hover:text-foreground"
+              )}
+            >
+              {preset}
+            </button>
+          )
+        })}
+        <StepButton icon={PlusIcon} label={`Плюс ${snap} минут`} disabled={disabled || (minutes !== null && minutes >= max)} onClick={() => commit((minutes ?? snapTo(min + span / 2)) + snap)} />
+      </div>
     </div>
   )
 }
@@ -293,7 +320,7 @@ function StepButton({
       title={label}
       disabled={disabled}
       onClick={onClick}
-      className="flex size-9 items-center justify-center rounded-md bg-muted/60 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40 pointer-coarse:size-10"
+      className="flex size-8 items-center justify-center rounded-md bg-background text-muted-foreground shadow-xs transition-colors hover:text-foreground disabled:opacity-40 pointer-coarse:size-9"
     >
       <Icon className="size-4" />
     </button>

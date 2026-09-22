@@ -3,9 +3,9 @@
 import type React from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
-import { CheckIcon, ExternalLinkIcon, HistoryIcon, Loader2Icon, PencilIcon, PlusIcon, ReceiptTextIcon, UserRoundPlusIcon, XIcon } from "lucide-react"
+import { CheckIcon, ExternalLinkIcon, HistoryIcon, Loader2Icon, PencilIcon, PlusIcon, ReceiptTextIcon, SendIcon, UserRoundPlusIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
-import { createCustomerFromChatAction, updateCustomerFieldAction } from "@/app/actions"
+import { createCustomerFromChatAction, sendOrderToChatAction, updateCustomerFieldAction } from "@/app/actions"
 import type { Customer, CustomerChange, CustomerEditableField, CustomerStats } from "@/lib/crm"
 import type { BouquetTemplate, ChatSummary, Order, OrderImage, Product } from "@/lib/db"
 import { deliveryTypeLabel, sourceLabel } from "@/lib/labels"
@@ -14,6 +14,8 @@ import { OrderDetailsDialog, OrderPhotoMark } from "@/components/orders/order-de
 import { OrderEditSheet } from "@/components/orders/order-edit-sheet"
 import { OrderStatusBadge, dateTimeLong } from "@/components/orders/order-shared"
 import { getSafeOrderImagePath } from "@/lib/order-images"
+import { formatOrderForChat } from "@/lib/order-message"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
@@ -71,6 +73,9 @@ export function ChatContextPanel({
   const [creatingCustomer, setCreatingCustomer] = useState(false)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
   const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
+  // Предпросмотр «состав в чат» перед отправкой.
+  const [sharingOrder, setSharingOrder] = useState<Order | null>(null)
+  const [sharing, setSharing] = useState(false)
 
   const load = useCallback(
     (signal?: AbortSignal) =>
@@ -116,6 +121,25 @@ export function ChatContextPanel({
       return payload.customer ?? null
     } finally {
       setCreatingCustomer(false)
+    }
+  }
+
+  async function shareOrder() {
+    if (!sharingOrder) {
+      return
+    }
+    setSharing(true)
+    try {
+      const result = await sendOrderToChatAction(chat.id, sharingOrder.id)
+      if (result.ok) {
+        toast.success(result.message)
+        setSharingOrder(null)
+        onCustomerChanged()
+      } else {
+        toast.error(result.message)
+      }
+    } finally {
+      setSharing(false)
     }
   }
 
@@ -224,7 +248,7 @@ export function ChatContextPanel({
             <ul className="flex flex-col gap-2">
               {orders.map((order) => (
                 <li key={order.id}>
-                  <OrderRow order={order} onOpen={() => setViewingOrder(order)} />
+                  <OrderRow order={order} onOpen={() => setViewingOrder(order)} onShare={() => setSharingOrder(order)} />
                 </li>
               ))}
             </ul>
@@ -238,6 +262,26 @@ export function ChatContextPanel({
             setEditingOrder(order)
           }}
         />
+        <Dialog open={Boolean(sharingOrder)} onOpenChange={(open) => !open && !sharing && setSharingOrder(null)}>
+          <DialogContent className="rounded-xl sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Отправить состав в чат</DialogTitle>
+              <DialogDescription>Так сообщение увидит клиент — жирный и курсив мессенджер покажет как разметку.</DialogDescription>
+            </DialogHeader>
+            <div className="max-h-[50vh] overflow-y-auto rounded-lg bg-muted/40 px-3 py-2 text-sm whitespace-pre-wrap">
+              {sharingOrder ? renderChatMarkup(formatOrderForChat(sharingOrder)) : null}
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={() => setSharingOrder(null)} disabled={sharing}>
+                Отмена
+              </Button>
+              <Button type="button" onClick={() => void shareOrder()} disabled={sharing}>
+                {sharing ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <SendIcon data-icon="inline-start" />}
+                Отправить
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         {editingOrder ? (
           <OrderEditSheet
             key={editingOrder.id}
@@ -496,10 +540,11 @@ function InlineField({
   )
 }
 
-function OrderRow({ order, onOpen }: { order: Order; onOpen: () => void }) {
+function OrderRow({ order, onOpen, onShare }: { order: Order; onOpen: () => void; onShare: () => void }) {
   const balance = order.total - order.paid
   return (
-    <button type="button" onClick={onOpen} className="flex w-full items-start justify-between gap-2 rounded-lg bg-muted/40 px-3 py-2 text-left transition-colors hover:bg-muted/70">
+    <div className="flex items-start gap-1 rounded-lg bg-muted/40 pr-1 transition-colors hover:bg-muted/70">
+    <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 items-start justify-between gap-2 px-3 py-2 text-left">
       <span className="min-w-0">
         <span className="block text-sm font-medium">
           {order.number || `#${order.id}`}
@@ -517,5 +562,30 @@ function OrderRow({ order, onOpen }: { order: Order; onOpen: () => void }) {
         <OrderStatusBadge status={order.status} />
       </span>
     </button>
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className="mt-1 shrink-0 text-muted-foreground"
+      onClick={onShare}
+      aria-label="Отправить состав в чат"
+      title="Отправить состав в чат"
+    >
+      <SendIcon />
+    </Button>
+    </div>
   )
+}
+
+// Предпросмотр разметки мессенджера: *жирный* и _курсив_ — как их покажет WhatsApp.
+function renderChatMarkup(text: string): React.ReactNode {
+  return text.split(/(\*[^*\n]+\*|_[^_\n]+_)/g).map((part, index) => {
+    if (part.length > 2 && part.startsWith("*") && part.endsWith("*")) {
+      return <strong key={index}>{part.slice(1, -1)}</strong>
+    }
+    if (part.length > 2 && part.startsWith("_") && part.endsWith("_")) {
+      return <em key={index}>{part.slice(1, -1)}</em>
+    }
+    return <span key={index}>{part}</span>
+  })
 }

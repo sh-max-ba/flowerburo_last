@@ -19,7 +19,7 @@ import {
   updateDealStage,
   type CustomerEditableField,
 } from "@/lib/crm"
-import { attachChatMediaToOrder, forwardChatMessage, sendBouquetToChat, sendChatMessage, type SendChatMessageOptions } from "@/lib/chats"
+import { attachChatMediaToOrder, forwardChatMessage, sendBouquetToChat, sendChatMessage, sendOrderSummaryToChat, type SendChatMessageOptions } from "@/lib/chats"
 import {
   connectWazzupWebhookSubscriptions,
   clearWazzupApiKey,
@@ -1373,4 +1373,15 @@ export async function attachChatMediaToOrderAction(
     kind === "receipt" ? "Чек добавлен к новому заказу." : "Фото добавлено к новому заказу.",
     "Не удалось прикрепить фото."
   )
+}
+
+export async function sendOrderToChatAction(chatId: number, orderId: number): Promise<ActionResult> {
+  try {
+    const user = await requireActionRole(["owner", "manager"])
+    await sendOrderSummaryToChat(chatId, orderId, user)
+    revalidateChats()
+    return { ok: true, message: "Состав заказа отправлен в чат" }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Не удалось отправить состав." }
+  }
 }

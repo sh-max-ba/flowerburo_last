@@ -534,6 +534,39 @@ export function listCustomerOrders(customerId: number): Order[] {
   })
 }
 
+// Один заказ с составом и фото (для отправки состава в чат и карточки заказа).
+export function getOrderById(orderId: number): Order | null {
+  const row = db()
+    .prepare(
+      `SELECT id, number, customer_id as customerId, deal_id as dealId,
+        created_by_user_id as createdByUserId, updated_by_user_id as updatedByUserId,
+        customer, phone, COALESCE(recipient_phone, '') as recipientPhone,
+        COALESCE(source, '') as source, COALESCE(delivery_type, 'pickup') as deliveryType,
+        COALESCE(address, '') as address, due_at as dueAt, status,
+        COALESCE(NULLIF(items_total_before_discount, 0), total) as itemsTotalBeforeDiscount,
+        COALESCE(items_discount_total, 0) as itemsDiscountTotal,
+        COALESCE(order_discount_type, 'none') as orderDiscountType,
+        COALESCE(order_discount_value, 0) as orderDiscountValue,
+        COALESCE(order_discount_amount, 0) as orderDiscountAmount,
+        COALESCE(NULLIF(total_before_discount, 0), total) as totalBeforeDiscount,
+        total, COALESCE(prepaid, 0) as prepaid,
+        COALESCE(paid, 0) as paid, COALESCE(delivery_price, 0) as deliveryPrice,
+        COALESCE(courier_payout, 0) as courierPayout,
+        COALESCE(delivery_payout_paid, 0) as deliveryPayoutPaid,
+        COALESCE(is_reserved, 0) as isReserved, note, ready_at as readyAt,
+        handed_to_courier_at as handedToCourierAt, completed_at as completedAt,
+        COALESCE(courier_name, '') as courierName, created_at as createdAt, updated_at as updatedAt
+       FROM orders
+       WHERE id = ?`
+    )
+    .get(Math.trunc(orderId)) as Record<string, unknown> | undefined
+  if (!row) {
+    return null
+  }
+  const id = numberFromRow(row.id)
+  return mapOrderRow(row, loadOrderItemsByOrder(db(), [id]).get(id) ?? [], loadOrderImagesByOrder(db(), [id]).get(id) ?? [])
+}
+
 export function listDealOrders(dealId: number): Order[] {
   const rows = db()
     .prepare(

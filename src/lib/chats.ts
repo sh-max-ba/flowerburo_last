@@ -16,6 +16,8 @@ import {
 } from "@/lib/db"
 import { fetchRemoteMedia } from "@/lib/media-fetch"
 import { storeOrderImage } from "@/lib/order-image-files"
+import { formatOrderForChat } from "@/lib/order-message"
+import { getOrderById } from "@/lib/crm"
 import type { OrderImage, OrderImageKind } from "@/lib/db"
 import { getSafeBouquetImagePath } from "@/lib/product-images"
 import {
@@ -183,6 +185,22 @@ export async function sendBouquetToChat(chatRowId: number, bouquetId: number, cu
     })
   }
   await sendChatMessage(chatRowId, currentUser, { text: buildBouquetMessageText(bouquet) })
+}
+
+// Состав заказа клиенту одним сообщением (разметка мессенджера, см. order-message.ts).
+export async function sendOrderSummaryToChat(chatRowId: number, orderId: number, currentUser: CurrentUser) {
+  const order = getOrderById(orderId)
+  if (!order) {
+    throw new Error("Заказ не найден.")
+  }
+  const chat = getChatById(chatRowId)
+  if (!chat) {
+    throw new Error("Диалог не найден.")
+  }
+  if (order.customerId && chat.customerId && order.customerId !== chat.customerId) {
+    throw new Error("Этот заказ принадлежит другому клиенту.")
+  }
+  return sendChatMessage(chatRowId, currentUser, { text: formatOrderForChat(order) })
 }
 
 // Пересылка: у Wazzup нет нативного forward — отправляем содержимое заново. Вложение сначала
