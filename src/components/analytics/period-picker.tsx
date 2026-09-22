@@ -51,6 +51,20 @@ function isWholeMonth(from: string, to: string): boolean {
   return td === new Date(Date.UTC(ty, tm, 0)).getUTCDate()
 }
 
+// Оформление календарей выбора периода: без «чужих» дней соседних месяцев (они дублировали даты и
+// подсвечивались дважды), диапазон — мягкой заливкой бренда с чёрными концами, сегодня — точкой,
+// а не заливкой (заливка читалась как часть выбора).
+const CALENDAR_CLASS =
+  "p-0 [--cell-size:2.25rem] [&_button[data-range-middle=true]]:bg-brand-subtle [&_button[data-range-middle=true]]:text-foreground [&_button[data-range-start=true]]:bg-primary [&_button[data-range-end=true]]:bg-primary [&_button[data-selected-single=true]]:bg-primary"
+const CALENDAR_CLASSNAMES = {
+  range_start: "relative isolate z-0 rounded-l-(--cell-radius) bg-brand-subtle after:absolute after:inset-y-0 after:right-0 after:w-4 after:bg-brand-subtle",
+  range_middle: "rounded-none bg-brand-subtle",
+  range_end: "relative isolate z-0 rounded-r-(--cell-radius) bg-brand-subtle after:absolute after:inset-y-0 after:left-0 after:w-4 after:bg-brand-subtle",
+  today:
+    "rounded-(--cell-radius) data-[selected=true]:rounded-none [&:not([data-selected=true])_button]:font-semibold [&:not([data-selected=true])_button]:text-brand-strong [&_button]:after:absolute [&_button]:after:bottom-1 [&_button]:after:left-1/2 [&_button]:after:size-1 [&_button]:after:-translate-x-1/2 [&_button]:after:rounded-full [&_button]:after:bg-current",
+  months: "relative flex flex-col gap-4 md:flex-row md:gap-6",
+}
+
 // Подпись периода в кнопке: пресет + даты, один день — с днём недели, свой диапазон — даты.
 export function periodLabel(range: AnalyticsRange): { primary: string; secondary: string } {
   const single = range.from === range.to
@@ -212,14 +226,16 @@ export function PeriodPicker({ range, className }: { range: AnalyticsRange; clas
                   onSelect={handleDaySelect}
                   defaultMonth={fromISO(range.to)}
                   disabled={{ after: fromISO(range.today) ?? new Date() }}
+                  showOutsideDays={false}
                   locale={ru}
-                  className="p-0 [--cell-size:2.25rem]"
+                  className={CALENDAR_CLASS}
+                  classNames={CALENDAR_CLASSNAMES}
                 />
-                <p className="text-xs text-muted-foreground">Выберите день в календаре — данные покажутся сразу.</p>
+                <p className="text-xs text-muted-foreground">Нажмите на день — данные покажутся сразу. Точкой отмечено сегодня.</p>
               </div>
             ) : (
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <div className="flex flex-row flex-wrap gap-0.5 sm:w-40 sm:flex-col">
+              <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
+                <div className="flex flex-row flex-wrap gap-0.5 border-b border-border/40 pb-2 sm:w-40 sm:flex-col sm:border-r sm:border-b-0 sm:pr-3 sm:pb-0">
                   {RANGE_PRESETS.map((preset) => {
                     const active = range.preset === preset.key
                     return (
@@ -273,11 +289,14 @@ export function PeriodPicker({ range, className }: { range: AnalyticsRange; clas
                     numberOfMonths={2}
                     defaultMonth={fromISO(range.from)}
                     disabled={{ after: fromISO(range.today) ?? new Date() }}
+                    showOutsideDays={false}
                     locale={ru}
-                    className="p-0 [--cell-size:2.1rem]"
+                    className={CALENDAR_CLASS}
+                    classNames={CALENDAR_CLASSNAMES}
                   />
                   <p className="text-xs text-muted-foreground">
-                    В календаре — первый клик начало, второй конец. Сейчас: {formatRangeLabel(range.from, range.to)} · {range.days} {plural(range.days, DAYS_FORMS)}.
+                    Первый клик — начало, второй — конец периода.
+                    {draft?.from && !draft?.to ? " Теперь выберите конец." : ` Выбрано: ${formatRangeLabel(range.from, range.to)} · ${range.days} ${plural(range.days, DAYS_FORMS)}.`}
                   </p>
                 </div>
               </div>
