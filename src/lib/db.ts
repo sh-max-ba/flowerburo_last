@@ -22,6 +22,7 @@ export type {
   Movement,
   Order,
   OrderImage,
+  OrderImageKind,
   OrderItem,
   OrderStatus,
   OwnerDashboardData,
@@ -223,6 +224,7 @@ export {
   countOrderDrafts,
 } from "./db/queries/dashboard"
 export type { DraftOrderView } from "./db/queries/dashboard"
+export { loadOrderItemsByOrder } from "./db/queries/dashboard"
 export {
   getOwnerDashboardData,
 } from "./db/queries/owner-dashboard"

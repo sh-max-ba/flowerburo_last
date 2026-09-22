@@ -3,15 +3,17 @@
 import type React from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
-import { CheckIcon, ExternalLinkIcon, HistoryIcon, Loader2Icon, PencilIcon, PlusIcon, UserRoundPlusIcon, XIcon } from "lucide-react"
+import { CheckIcon, ExternalLinkIcon, HistoryIcon, Loader2Icon, PencilIcon, PlusIcon, ReceiptTextIcon, UserRoundPlusIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 import { createCustomerFromChatAction, updateCustomerFieldAction } from "@/app/actions"
 import type { Customer, CustomerChange, CustomerEditableField, CustomerStats } from "@/lib/crm"
-import type { BouquetTemplate, ChatSummary, Order, Product } from "@/lib/db"
+import type { BouquetTemplate, ChatSummary, Order, OrderImage, Product } from "@/lib/db"
 import { deliveryTypeLabel, sourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
+import { OrderDetailsDialog, OrderPhotoMark } from "@/components/orders/order-details-dialog"
 import { OrderEditSheet } from "@/components/orders/order-edit-sheet"
-import { OrderComposition, OrderStatusBadge, dateTimeLong } from "@/components/orders/order-shared"
+import { OrderStatusBadge, dateTimeLong } from "@/components/orders/order-shared"
+import { getSafeOrderImagePath } from "@/lib/order-images"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
@@ -45,6 +47,8 @@ export function ChatContextPanel({
   products,
   bouquets,
   reloadKey,
+  pendingImages,
+  onRemovePendingImage,
   onClose,
   onCreateOrder,
   onCustomerChanged,
@@ -55,6 +59,9 @@ export function ChatContextPanel({
   bouquets: BouquetTemplate[]
   // Растёт после создания заказа/правок — панель перезагружает контекст.
   reloadKey: number
+  // Фото/чеки из чата, отложенные к следующему заказу (живут на экране, пока заказ не создан).
+  pendingImages: OrderImage[]
+  onRemovePendingImage: (imageId: number) => void
   onClose: () => void
   onCreateOrder: (customer: { id: number; name: string; phone: string; defaultDiscountPercent: number }) => void
   onCustomerChanged: () => void
@@ -63,6 +70,7 @@ export function ChatContextPanel({
   const [error, setError] = useState("")
   const [creatingCustomer, setCreatingCustomer] = useState(false)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
 
   const load = useCallback(
     (signal?: AbortSignal) =>
@@ -151,9 +159,9 @@ export function ChatContextPanel({
       <div className="flex h-full flex-col">
         {header}
         <div className="flex flex-col gap-3 px-3">
-          <Skeleton className="h-16 w-full rounded-xl" />
+          <Skeleton className="h-16 w-full rounded-lg" />
           <Skeleton className="h-10 w-2/3" />
-          <Skeleton className="h-24 w-full rounded-xl" />
+          <Skeleton className="h-24 w-full rounded-lg" />
         </div>
       </div>
     )
@@ -181,6 +189,33 @@ export function ChatContextPanel({
             {creatingCustomer ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <PlusIcon data-icon="inline-start" />}
             Создать заказ
           </Button>
+          {pendingImages.length ? (
+            <div className="rounded-lg bg-brand-subtle p-2.5">
+              <div className="mb-1.5 text-xs font-medium text-brand-strong">К новому заказу · {pendingImages.length}</div>
+              <div className="flex flex-wrap gap-1.5">
+                {pendingImages.map((image) => (
+                  <div key={image.id} className="relative size-16 overflow-hidden rounded-md bg-background">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={getSafeOrderImagePath(image.thumbPath || image.imagePath)} alt="" className="size-full object-cover" />
+                    {image.kind === "receipt" ? (
+                      <span className="absolute bottom-1 left-1 rounded-sm bg-background/90 px-1 text-[10px] font-medium">
+                        <ReceiptTextIcon className="inline size-3" /> чек
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => onRemovePendingImage(image.id)}
+                      className="absolute top-0.5 right-0.5 rounded-sm bg-background/90 p-0.5 text-muted-foreground hover:text-foreground"
+                      aria-label="Убрать"
+                    >
+                      <XIcon className="size-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">Попадут в заказ или черновик при создании.</p>
+            </div>
+          ) : null}
           {!customer ? (
             <p className="text-sm text-muted-foreground">Клиент ещё не привязан — при создании заказа он появится автоматически.</p>
           ) : orders.length === 0 ? (
@@ -189,12 +224,20 @@ export function ChatContextPanel({
             <ul className="flex flex-col gap-2">
               {orders.map((order) => (
                 <li key={order.id}>
-                  <OrderRow order={order} onEdit={order.status === "Новый" || order.status === "В работе" ? () => setEditingOrder(order) : undefined} />
+                  <OrderRow order={order} onOpen={() => setViewingOrder(order)} />
                 </li>
               ))}
             </ul>
           )}
         </div>
+        <OrderDetailsDialog
+          order={viewingOrder}
+          onOpenChange={(open) => !open && setViewingOrder(null)}
+          onEdit={(order) => {
+            setViewingOrder(null)
+            setEditingOrder(order)
+          }}
+        />
         {editingOrder ? (
           <OrderEditSheet
             key={editingOrder.id}
@@ -236,7 +279,7 @@ export function ChatContextPanel({
         </div>
 
         {!customer ? (
-          <div className="rounded-xl bg-muted/40 p-3 text-sm">
+          <div className="rounded-lg bg-muted/40 p-3 text-sm">
             <div className="font-medium">Клиент не привязан</div>
             <p className="mt-1 text-muted-foreground">Создайте карточку — имя и телефон возьмутся из чата.</p>
             <Button type="button" size="sm" className="mt-3" disabled={creatingCustomer} onClick={() => void ensureCustomer()}>
@@ -312,7 +355,7 @@ export function ChatContextPanel({
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-xl bg-muted/40 px-3 py-2">
+    <div className="rounded-lg bg-muted/40 px-3 py-2">
       <div className="text-[11px] text-muted-foreground">{label}</div>
       <div className="text-base font-semibold tabular-nums">{value}</div>
       {hint ? <div className="truncate text-[11px] text-muted-foreground">{hint}</div> : null}
@@ -453,40 +496,26 @@ function InlineField({
   )
 }
 
-function OrderRow({ order, onEdit }: { order: Order; onEdit?: () => void }) {
-  const [open, setOpen] = useState(false)
+function OrderRow({ order, onOpen }: { order: Order; onOpen: () => void }) {
   const balance = order.total - order.paid
   return (
-    <div className="rounded-xl bg-muted/40 px-3 py-2">
-      <button type="button" onClick={() => setOpen((value) => !value)} className="flex w-full items-start justify-between gap-2 text-left">
-        <span className="min-w-0">
-          <span className="block text-sm font-medium">
-            {order.number || `#${order.id}`}
-            <span className="font-normal text-muted-foreground"> · {order.dueAt ? dateTimeLong(order.dueAt) : "без срока"}</span>
-          </span>
-          <span className="mt-0.5 block text-xs text-muted-foreground">
-            {deliveryTypeLabel(order.deliveryType)}
-            {order.items.length ? ` · ${order.items.length} поз.` : ""}
-            {balance > 0.009 && order.status !== "Отменен" ? ` · остаток ${formatMoney(balance)}` : ""}
-          </span>
+    <button type="button" onClick={onOpen} className="flex w-full items-start justify-between gap-2 rounded-lg bg-muted/40 px-3 py-2 text-left transition-colors hover:bg-muted/70">
+      <span className="min-w-0">
+        <span className="block text-sm font-medium">
+          {order.number || `#${order.id}`}
+          <span className="font-normal text-muted-foreground"> · {order.dueAt ? dateTimeLong(order.dueAt) : "без срока"}</span>
         </span>
-        <span className="flex shrink-0 flex-col items-end gap-1">
-          <span className="text-sm font-semibold tabular-nums">{formatMoney(order.total)}</span>
-          <OrderStatusBadge status={order.status} />
+        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+          <span>{deliveryTypeLabel(order.deliveryType)}</span>
+          {order.items.length ? <span>· {order.items.length} поз.</span> : null}
+          {balance > 0.009 && order.status !== "Отменен" ? <span>· остаток {formatMoney(balance)}</span> : null}
+          <OrderPhotoMark images={order.images} />
         </span>
-      </button>
-      {open ? (
-        <div className="mt-2 flex flex-col gap-2">
-          <OrderComposition items={order.items} />
-          {order.note ? <div className="text-xs text-muted-foreground">{order.note}</div> : null}
-          {onEdit ? (
-            <Button type="button" variant="ghost" size="sm" className="self-start bg-muted/60" onClick={onEdit}>
-              <PencilIcon data-icon="inline-start" />
-              Изменить
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
+      </span>
+      <span className="flex shrink-0 flex-col items-end gap-1">
+        <span className="text-sm font-semibold tabular-nums">{formatMoney(order.total)}</span>
+        <OrderStatusBadge status={order.status} />
+      </span>
+    </button>
   )
 }

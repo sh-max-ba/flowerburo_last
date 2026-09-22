@@ -15,6 +15,8 @@ import {
   type WazzupMessage,
 } from "@/lib/db"
 import { fetchRemoteMedia } from "@/lib/media-fetch"
+import { storeOrderImage } from "@/lib/order-image-files"
+import type { OrderImage, OrderImageKind } from "@/lib/db"
 import { getSafeBouquetImagePath } from "@/lib/product-images"
 import {
   buildBouquetMessageText,
@@ -212,6 +214,43 @@ export async function forwardChatMessage(messageRowId: number, targetChatRowId: 
   if (text) {
     await sendChatMessage(target.id, currentUser, { text, forwarded: true })
   }
+}
+
+// Вложение из чата → изображение заказа (фото-референс или чек). Забираем байты (свой файл — с
+// диска, Wazzup — по ссылке), прогоняем через общую обработку и создаём строку order_images,
+// ожидающую привязки; форма заказа получит её id через orderImageIds.
+export async function attachChatMediaToOrder(
+  messageRowId: number,
+  kind: OrderImageKind,
+  currentUser: CurrentUser
+): Promise<OrderImage> {
+  const message = getWazzupMessageById(messageRowId)
+  if (!message || !clean(message.contentUri)) {
+    throw new Error("В этом сообщении нет вложения.")
+  }
+  if (message.messageType !== "image") {
+    throw new Error("К заказу можно прикрепить только фото.")
+  }
+  const { bytes, contentType } = await readChatMedia(message.contentUri)
+  return storeOrderImage({
+    bytes,
+    mimeType: contentType,
+    originalName: message.fileName || fileNameFromUri(message.contentUri) || "chat-photo.jpg",
+    kind,
+    userId: currentUser.id,
+  })
+}
+
+async function readChatMedia(uri: string): Promise<{ bytes: Buffer; contentType: string }> {
+  const appUrl = clean(process.env.NEXT_PUBLIC_APP_URL).replace(/\/+$/, "")
+  const relative = uri.startsWith("/uploads/") ? uri : appUrl && uri.startsWith(`${appUrl}/uploads/`) ? uri.slice(appUrl.length) : ""
+  const match = /^\/uploads\/([a-z0-9_-]+)\/([a-z0-9._-]+)$/i.exec(relative.split("?")[0] ?? "")
+  if (match && !match[2].includes("..")) {
+    const bytes = await fs.readFile(path.join(process.cwd(), "public", "uploads", match[1], match[2]))
+    return { bytes, contentType: "image/*" }
+  }
+  const remote = await fetchRemoteMedia(uri, { maxBytes: 15 * 1024 * 1024 })
+  return { bytes: Buffer.from(remote.bytes), contentType: remote.contentType }
 }
 
 // Копия удалённого файла в public/uploads/chat: имя — по хэшу исходного messageId, чтобы повторная

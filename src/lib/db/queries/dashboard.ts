@@ -192,7 +192,7 @@ const ORDER_LIST_COLUMNS = `id, number, customer_id as customerId, deal_id as de
   COALESCE(courier_name, '') as courierName, created_at as createdAt, updated_at as updatedAt,
   COALESCE(is_modified, 0) as isModified`
 
-function loadOrderItemsByOrder(client: Database.Database, orderIds: number[]): Map<number, OrderItem[]> {
+export function loadOrderItemsByOrder(client: Database.Database, orderIds: number[]): Map<number, OrderItem[]> {
   const itemsByOrder = new Map<number, OrderItem[]>()
   if (!orderIds.length) {
     return itemsByOrder

@@ -19,7 +19,7 @@ import {
   updateDealStage,
   type CustomerEditableField,
 } from "@/lib/crm"
-import { forwardChatMessage, sendBouquetToChat, sendChatMessage, type SendChatMessageOptions } from "@/lib/chats"
+import { attachChatMediaToOrder, forwardChatMessage, sendBouquetToChat, sendChatMessage, type SendChatMessageOptions } from "@/lib/chats"
 import {
   connectWazzupWebhookSubscriptions,
   clearWazzupApiKey,
@@ -112,6 +112,7 @@ import {
   type UserRole,
   type CurrentUser,
   type CustomerOption,
+  type OrderImage,
   type BouquetTemplateInput,
   type RefundableOrder,
   type RefundableSale,
@@ -1357,5 +1358,19 @@ export async function openWhatsappChatAction(input: {
     },
     "Диалог открыт.",
     "Не удалось открыть диалог."
+  )
+}
+
+// Фото из чата → к новому заказу (как фото-референс или чек). Возвращает строку order_images,
+// ожидающую привязки; экран чатов передаст её в форму заказа.
+export async function attachChatMediaToOrderAction(
+  messageRowId: number,
+  kind: "photo" | "receipt"
+): Promise<DataActionResult<{ image: OrderImage }>> {
+  return runDataAction(
+    ["owner", "manager"],
+    async (user) => ({ image: await attachChatMediaToOrder(messageRowId, kind, user) }),
+    kind === "receipt" ? "Чек добавлен к новому заказу." : "Фото добавлено к новому заказу.",
+    "Не удалось прикрепить фото."
   )
 }

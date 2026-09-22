@@ -8,6 +8,7 @@ import {
   ImageIcon,
   ImagePlusIcon,
   Loader2Icon,
+  ReceiptTextIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -65,7 +66,7 @@ function OrderImageThumb({
       onClick={onOpen}
       title="Открыть просмотр"
       className={cn(
-        "group relative flex shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted",
+        "group relative flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted",
         "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
         thumbSizeClasses[size],
         className
@@ -83,6 +84,12 @@ function OrderImageThumb({
       ) : (
         <ImageIcon className="size-5 text-muted-foreground" />
       )}
+      {image.kind === "receipt" ? (
+        <span className="absolute bottom-1 left-1 flex items-center gap-0.5 rounded-sm bg-background/90 px-1 text-[10px] font-medium text-foreground shadow-xs">
+          <ReceiptTextIcon className="size-3" />
+          Чек
+        </span>
+      ) : null}
     </button>
   )
 }

@@ -5,10 +5,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter } from "next/navigation"
 import { MessageSquarePlusIcon, MessagesSquareIcon, UsersRoundIcon } from "lucide-react"
 import { toast } from "sonner"
-import { assignChatAction, createOrderAction, createOrderDraftAction, markChatAnsweredAction } from "@/app/actions"
-import type { BouquetTemplate, ChatCounts, ChatSummary, ChatTab, CustomerOption, Product } from "@/lib/db"
+import { assignChatAction, attachChatMediaToOrderAction, createOrderAction, createOrderDraftAction, markChatAnsweredAction } from "@/app/actions"
+import type { BouquetTemplate, ChatCounts, ChatSummary, ChatTab, CustomerOption, OrderImage, Product } from "@/lib/db"
 import { cn } from "@/lib/utils"
-import { OrderDialog } from "@/components/cash/cash-page"
+import { OrderDialog } from "@/components/orders/new-order-dialog"
 import type { ProductLineItem } from "@/components/products/product-line-items"
 import { ScreenBody } from "@/components/screen-body"
 import { HeaderAction, HeaderPrimaryAction, ScreenHeader } from "@/components/screen-header"
@@ -92,6 +92,8 @@ export function ChatsScreen({
   const [newChatOpen, setNewChatOpen] = useState(openNew)
   const [orderCustomer, setOrderCustomer] = useState<CustomerOption | null>(null)
   const [orderItems, setOrderItems] = useState<ProductLineItem[]>([])
+  // Фото/чеки из чата, отложенные к следующему заказу этого экрана.
+  const [pendingImages, setPendingImages] = useState<OrderImage[]>([])
   const [contextReloadKey, setContextReloadKey] = useState(0)
   const [containerWidth, setContainerWidth] = useState<number>(wideContainerPx)
   const [isOrderPending, startOrderTransition] = useTransition()
@@ -246,6 +248,18 @@ export function ChatsScreen({
     }
   }
 
+  async function attachToOrder(message: BubbleMessage, kind: "photo" | "receipt") {
+    const result = await attachChatMediaToOrderAction(message.id, kind)
+    if (!result.ok) {
+      toast.error(result.message)
+      return
+    }
+    setPendingImages((current) => (current.some((image) => image.id === result.data.image.id) ? current : [...current, result.data.image]))
+    toast.success(result.message, {
+      action: { label: "К заказу", onClick: () => setPanel("orders") },
+    })
+  }
+
   async function runChatAction(action: () => Promise<{ ok: boolean; message: string }>) {
     const result = await action()
     if (result.ok) {
@@ -270,6 +284,7 @@ export function ChatsScreen({
         after?.()
         setOrderCustomer(null)
         setOrderItems([])
+        setPendingImages([])
         setContextReloadKey((value) => value + 1)
         refreshInbox()
         router.refresh()
@@ -288,6 +303,8 @@ export function ChatsScreen({
         products={products}
         bouquets={bouquets}
         reloadKey={contextReloadKey}
+        pendingImages={pendingImages}
+        onRemovePendingImage={(imageId) => setPendingImages((current) => current.filter((image) => image.id !== imageId))}
         onClose={() => setPanel(null)}
         onCreateOrder={(customer) => setOrderCustomer(customer)}
         onCustomerChanged={refreshInbox}
@@ -307,6 +324,7 @@ export function ChatsScreen({
   return (
     <>
       <ScreenHeader
+        className="rounded-lg"
         title="Чаты"
         search={{
           value: searchInput,
@@ -320,7 +338,7 @@ export function ChatsScreen({
         tabs={<SegmentedTabs aria-label="Фильтр диалогов" items={tabs} value={tab} onValueChange={setTab} fill />}
       />
 
-      <ScreenBody surface scroll="none">
+      <ScreenBody surface scroll="none" className="rounded-lg">
         <div ref={bodyRef} className="flex h-full min-h-0 min-w-0">
           <aside
             className={cn(
@@ -361,6 +379,7 @@ export function ChatsScreen({
                   onAssign={(userId) => void runChatAction(() => assignChatAction(selected.id, userId))}
                   onBack={() => selectChat(null)}
                   onForward={setForwardMessage}
+                  onAttachToOrder={(message, kind) => void attachToOrder(message, kind)}
                   onActivity={refreshInbox}
                 />
               </section>
@@ -437,6 +456,7 @@ export function ChatsScreen({
           onSubmit={submitOrder}
           initialCustomer={orderCustomer}
           initialSource={selected.chatType}
+          initialImages={pendingImages}
           description={`Заказ для клиента из чата ${selected.name || selected.phone}. Клиент и источник подставлены автоматически.`}
         />
       ) : null}

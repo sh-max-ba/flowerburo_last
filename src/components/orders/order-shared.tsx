@@ -13,6 +13,7 @@ import {
   ExternalLinkIcon,
   FileEditIcon,
   HourglassIcon,
+  ImageIcon,
   ListIcon,
   Loader2Icon,
   MessageCircleIcon,
@@ -506,7 +507,10 @@ function OrderCalendarCard({
       aria-label={`Заказ ${order.number || `#${order.id}`}, ${order.customer || "клиент не указан"}`}
     >
       <div className="flex items-center justify-between gap-1">
-        <span className="text-sm font-semibold tabular-nums">{order.dueAt ? timeValue(order.dueAt) : "—"}</span>
+        <span className="flex items-center gap-1 text-sm font-semibold tabular-nums">
+          {order.dueAt ? timeValue(order.dueAt) : "—"}
+          {order.images.length ? <ImageIcon className="size-3 text-muted-foreground" aria-label={`Фото: ${order.images.length}`} /> : null}
+        </span>
         <OrderStatusDot status={order.status} />
       </div>
       <div className="truncate font-medium">{order.customer || "Клиент не указан"}</div>

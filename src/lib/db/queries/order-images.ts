@@ -3,7 +3,7 @@ import path from "node:path"
 import type Database from "better-sqlite3"
 import { numberFromRow } from "@/lib/db-row"
 import { maxOrderImages, orderImagePublicPathPrefix, orderImageIdsFieldName, parseOrderImageIds } from "@/lib/order-images"
-import type { OrderImage } from "../types"
+import type { OrderImage, OrderImageKind } from "../types"
 import { db } from "../connection"
 
 // Изображения заказа. Жизненный цикл:
@@ -16,13 +16,14 @@ import { db } from "../connection"
 
 export const orderImagesDir = path.join(process.cwd(), "public", "uploads", "orders")
 
-const ORDER_IMAGE_COLUMNS = `id, order_id as orderId, image_path as imagePath, COALESCE(thumb_path, '') as thumbPath,
+const ORDER_IMAGE_COLUMNS = `id, order_id as orderId, COALESCE(kind, 'photo') as kind, image_path as imagePath, COALESCE(thumb_path, '') as thumbPath,
   COALESCE(original_name, '') as originalName, COALESCE(width, 0) as width, COALESCE(height, 0) as height,
   created_at as createdAt`
 
 type OrderImageRow = {
   id: number
   orderId: number | null
+  kind: string
   imagePath: string
   thumbPath: string
   originalName: string
@@ -35,6 +36,7 @@ function mapOrderImageRow(row: OrderImageRow): OrderImage {
   return {
     id: numberFromRow(row.id),
     orderId: row.orderId == null ? null : numberFromRow(row.orderId),
+    kind: row.kind === "receipt" ? "receipt" : "photo",
     imagePath: String(row.imagePath ?? ""),
     thumbPath: String(row.thumbPath ?? "") || String(row.imagePath ?? ""),
     originalName: String(row.originalName ?? ""),
@@ -45,6 +47,7 @@ function mapOrderImageRow(row: OrderImageRow): OrderImage {
 }
 
 export type NewOrderImageInput = {
+  kind?: OrderImageKind
   imagePath: string
   thumbPath: string
   originalName: string
@@ -58,10 +61,18 @@ export function createPendingOrderImage(input: NewOrderImageInput): OrderImage {
   const client = db()
   const inserted = client
     .prepare(
-      `INSERT INTO order_images (order_id, image_path, thumb_path, original_name, width, height, created_by_user_id)
-       VALUES (NULL, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO order_images (order_id, kind, image_path, thumb_path, original_name, width, height, created_by_user_id)
+       VALUES (NULL, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(input.imagePath, input.thumbPath, input.originalName.slice(0, 200), input.width, input.height, input.userId)
+    .run(
+      input.kind === "receipt" ? "receipt" : "photo",
+      input.imagePath,
+      input.thumbPath,
+      input.originalName.slice(0, 200),
+      input.width,
+      input.height,
+      input.userId
+    )
   const row = client
     .prepare(`SELECT ${ORDER_IMAGE_COLUMNS} FROM order_images WHERE id = ?`)
     .get(Number(inserted.lastInsertRowid)) as OrderImageRow

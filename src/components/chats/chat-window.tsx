@@ -12,10 +12,11 @@ import {
   ExternalLinkIcon,
   FileTextIcon,
   Flower2Icon,
+  ImagePlusIcon,
   Loader2Icon,
   MicIcon,
   PaperclipIcon,
-  PhoneIcon,
+  ReceiptTextIcon,
   SendIcon,
   UserRoundIcon,
   UserRoundCheckIcon,
@@ -108,6 +109,7 @@ export function ChatWindow({
   onAssign,
   onBack,
   onForward,
+  onAttachToOrder,
   onActivity,
 }: {
   chat: ChatSummary
@@ -120,6 +122,8 @@ export function ChatWindow({
   onAssign: (userId: number | null) => void
   onBack: () => void
   onForward: (message: BubbleMessage) => void
+  // Фото из чата — к новому заказу (как фото или чек); тянет экран, у него список вложений.
+  onAttachToOrder: (message: BubbleMessage, kind: "photo" | "receipt") => void
   // Что-то изменилось в диалоге (отправка, отметка) — экран обновит список.
   onActivity: () => void
 }) {
@@ -530,6 +534,12 @@ export function ChatWindow({
       case "forward":
         onForward(message)
         return
+      case "toOrderPhoto":
+        onAttachToOrder(message, "photo")
+        return
+      case "toOrderReceipt":
+        onAttachToOrder(message, "receipt")
+        return
       case "copy":
         void copyMessageText(message.text)
         return
@@ -676,9 +686,6 @@ export function ChatWindow({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
-          {phoneDigits ? (
-            <ChatHeaderAction icon={PhoneIcon} label="Позвонить" href={`tel:+${phoneDigits}`} />
-          ) : null}
           <ChatHeaderAction
             icon={UserRoundIcon}
             label="Контакт"
@@ -761,9 +768,9 @@ export function ChatWindow({
       <div ref={scrollRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto bg-muted/40 px-3 py-3 sm:px-5">
         {view.status === "loading" ? (
           <div className="flex flex-col gap-3">
-            <Skeleton className="h-10 w-2/3 rounded-2xl" />
-            <Skeleton className="ml-auto h-10 w-1/2 rounded-2xl" />
-            <Skeleton className="h-16 w-3/4 rounded-2xl" />
+            <Skeleton className="h-10 w-2/3 rounded-lg" />
+            <Skeleton className="ml-auto h-10 w-1/2 rounded-lg" />
+            <Skeleton className="h-16 w-3/4 rounded-lg" />
           </div>
         ) : view.status !== "ok" ? (
           <div className="m-auto max-w-xs text-center text-sm text-muted-foreground">
@@ -785,7 +792,7 @@ export function ChatWindow({
             return (
               <div key={item.key} className="flex flex-col gap-1.5">
                 {showDay ? (
-                  <div className="sticky top-0 z-10 mx-auto my-1 rounded-full bg-background/90 px-3 py-0.5 text-xs text-muted-foreground shadow-xs backdrop-blur">
+                  <div className="sticky top-0 z-10 mx-auto my-1 rounded-md bg-background/90 px-2.5 py-0.5 text-xs text-muted-foreground shadow-xs backdrop-blur">
                     {formatDayLabel(item.dateTime)}
                   </div>
                 ) : null}
@@ -826,7 +833,7 @@ export function ChatWindow({
                 <button
                   type="button"
                   onClick={() => removeAttachment(attachment.id)}
-                  className="absolute top-1 right-1 rounded-full p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+                  className="absolute top-1 right-1 rounded-md p-1 text-muted-foreground hover:bg-background hover:text-foreground"
                   aria-label="Убрать вложение"
                 >
                   <XIcon className="size-3.5" />
@@ -837,7 +844,7 @@ export function ChatWindow({
         ) : null}
 
         {recording ? (
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-2xl bg-muted/40 px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg bg-muted/40 px-3 py-2">
             <span className="flex items-center gap-2 text-sm font-medium">
               <span className="size-2.5 animate-pulse rounded-full bg-red-500" aria-hidden />
               Идёт запись
@@ -857,12 +864,12 @@ export function ChatWindow({
             </div>
           </div>
         ) : transcribing ? (
-          <div className="flex items-center gap-2 rounded-2xl bg-muted/40 px-3 py-2 text-sm font-medium text-muted-foreground">
+          <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm font-medium text-muted-foreground">
             <Loader2Icon className="size-4 animate-spin" />
             Распознаём голос…
           </div>
         ) : (
-          <div className="flex items-end gap-1 rounded-2xl bg-muted/55 p-1 focus-within:bg-background focus-within:ring-3 focus-within:ring-ring/15">
+          <div className="flex items-end gap-1 rounded-lg bg-muted/55 p-1 focus-within:bg-background focus-within:ring-3 focus-within:ring-ring/15">
             <input
               ref={fileInputRef}
               type="file"
@@ -894,7 +901,7 @@ export function ChatWindow({
               <Button
                 type="button"
                 size="icon-lg"
-                className="size-10 shrink-0 rounded-xl"
+                className="size-10 shrink-0 rounded-md"
                 onClick={() => void send()}
                 disabled={sending || view.status !== "ok"}
                 aria-label="Отправить"
@@ -910,8 +917,8 @@ export function ChatWindow({
       </div>
 
       {dragOver ? (
-        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-background/70 text-sm font-medium backdrop-blur-sm">
-          <span className="flex items-center gap-2 rounded-xl bg-background px-4 py-2 shadow-xs">
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-background/70 text-sm font-medium backdrop-blur-sm">
+          <span className="flex items-center gap-2 rounded-lg bg-background px-4 py-2 shadow-xs">
             <PaperclipIcon className="size-4" />
             Отпустите, чтобы прикрепить
           </span>
@@ -930,7 +937,14 @@ export function ChatWindow({
             <>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={mediaUrl(lightbox)} alt={guessFileName(lightbox)} className="max-h-[78vh] w-full rounded-lg object-contain" />
-              <div className="flex items-center justify-end gap-1">
+              <div className="flex flex-wrap items-center justify-end gap-1">
+                <Button variant="ghost" size="sm" onClick={() => handleAction("toOrderPhoto", lightbox)}>
+                  <ImagePlusIcon data-icon="inline-start" />В заказ как фото
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => handleAction("toOrderReceipt", lightbox)}>
+                  <ReceiptTextIcon data-icon="inline-start" />
+                  Как чек
+                </Button>
                 <Button variant="ghost" size="sm" onClick={() => handleAction("forward", lightbox)}>
                   Переслать
                 </Button>
@@ -1007,7 +1021,7 @@ function ComposerButton({
       type="button"
       variant="ghost"
       size="icon-lg"
-      className="size-10 shrink-0 rounded-xl text-muted-foreground hover:text-foreground"
+      className="size-10 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
       onClick={onClick}
       disabled={disabled}
       aria-label={label}

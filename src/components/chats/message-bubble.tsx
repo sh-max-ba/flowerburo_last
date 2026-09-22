@@ -14,9 +14,11 @@ import {
   FileTextIcon,
   ForwardIcon,
   ImageOffIcon,
+  ImagePlusIcon,
   Loader2Icon,
   PauseIcon,
   PlayIcon,
+  ReceiptTextIcon,
   ReplyIcon,
   ShoppingCartIcon,
   WandSparklesIcon,
@@ -59,7 +61,7 @@ export type BubbleMessage = Pick<
   bouquetId?: number | null
 }
 
-export type MessageAction = "reply" | "forward" | "copy" | "open" | "download" | "transcribe"
+export type MessageAction = "reply" | "forward" | "copy" | "open" | "download" | "transcribe" | "toOrderPhoto" | "toOrderReceipt"
 
 export function MessageBubble({
   message,
@@ -84,6 +86,13 @@ export function MessageBubble({
       <MenuItemRow icon={ReplyIcon} label="Ответить" onSelect={() => onAction("reply", message)} />
       <MenuItemRow icon={ForwardIcon} label="Переслать" onSelect={() => onAction("forward", message)} />
       {message.text ? <MenuItemRow icon={CopyIcon} label="Копировать текст" onSelect={() => onAction("copy", message)} /> : null}
+      {hasMedia && message.messageType === "image" ? (
+        <>
+          <MenuSeparatorRow />
+          <MenuItemRow icon={ImagePlusIcon} label="В заказ как фото" onSelect={() => onAction("toOrderPhoto", message)} />
+          <MenuItemRow icon={ReceiptTextIcon} label="В заказ как чек" onSelect={() => onAction("toOrderReceipt", message)} />
+        </>
+      ) : null}
       {hasMedia ? (
         <>
           <MenuSeparatorRow />
@@ -98,8 +107,8 @@ export function MessageBubble({
   const bubble = (
     <div
       className={cn(
-        "group/bubble relative max-w-[min(85%,36rem)] rounded-2xl px-3 py-2 text-sm shadow-xs",
-        outbound ? "rounded-br-md bg-zinc-900 text-zinc-50" : "rounded-bl-md bg-background text-foreground",
+        "group/bubble relative max-w-[min(85%,36rem)] rounded-lg px-3 py-2 text-sm shadow-xs",
+        outbound ? "rounded-br-sm bg-zinc-900 text-zinc-50" : "rounded-bl-sm bg-background text-foreground",
         message.status === "error" && "ring-1 ring-destructive/40"
       )}
     >
@@ -115,7 +124,7 @@ export function MessageBubble({
       {message.quotedText ? (
         <div
           className={cn(
-            "mb-1.5 rounded-md border-l-2 px-2 py-1 text-xs",
+            "mb-1.5 rounded-sm border-l-2 px-2 py-1 text-xs",
             outbound ? "border-zinc-500 bg-white/10 text-zinc-300" : "border-brand bg-muted/60 text-muted-foreground"
           )}
         >
@@ -181,7 +190,7 @@ export function MessageBubble({
       <button
         type="button"
         onClick={() => onAction("reply", message)}
-        className="rounded-full p-1.5 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"
+        className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"
         aria-label="Ответить"
         title="Ответить"
       >
@@ -192,7 +201,7 @@ export function MessageBubble({
           render={
             <button
               type="button"
-              className="rounded-full p-1.5 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 data-popup-open:bg-zinc-200 data-popup-open:opacity-100"
+              className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 data-popup-open:bg-zinc-200 data-popup-open:opacity-100"
               aria-label="Действия с сообщением"
               title="Действия"
             />
@@ -289,7 +298,7 @@ function MessageMedia({
   }
   if (message.messageType === "video") {
     return (
-      <video src={src} controls preload="metadata" className="mb-1 max-h-72 w-full rounded-lg bg-black">
+      <video src={src} controls preload="metadata" className="mb-1 max-h-72 w-full rounded-md bg-black">
         Видео не поддерживается браузером.
       </video>
     )
@@ -304,7 +313,7 @@ function MessageMedia({
       target="_blank"
       rel="noreferrer"
       className={cn(
-        "mb-1 flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
+        "mb-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
         outbound ? "bg-white/10 hover:bg-white/15" : "bg-muted/60 hover:bg-muted"
       )}
     >
@@ -325,7 +334,7 @@ function ImageAttachment({ src, alt, outbound, onOpen }: { src: string; alt: str
   const [state, setState] = useState<"loading" | "ready" | "error">("loading")
   if (state === "error") {
     return (
-      <div className={cn("mb-1 flex items-center gap-2 rounded-lg px-2 py-2 text-xs", outbound ? "bg-white/10 text-zinc-300" : "bg-muted/60 text-muted-foreground")}>
+      <div className={cn("mb-1 flex items-center gap-2 rounded-md px-2 py-2 text-xs", outbound ? "bg-white/10 text-zinc-300" : "bg-muted/60 text-muted-foreground")}>
         <ImageOffIcon className="size-4 shrink-0" />
         Фото недоступно — ссылка устарела
       </div>
@@ -336,7 +345,7 @@ function ImageAttachment({ src, alt, outbound, onOpen }: { src: string; alt: str
       type="button"
       onClick={onOpen}
       className={cn(
-        "mb-1 block w-full overflow-hidden rounded-lg outline-none focus-visible:ring-3 focus-visible:ring-ring/35",
+        "mb-1 block w-full overflow-hidden rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/35",
         state === "loading" && "h-40 w-56 max-w-full animate-pulse bg-zinc-200/70"
       )}
       aria-label="Открыть фото"

@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { AlertTriangleIcon, ArrowDownUpIcon, CalendarDaysIcon, ListIcon, PencilIcon, PlusIcon } from "lucide-react"
+import { AlertTriangleIcon, ArrowDownUpIcon, CalendarDaysIcon, ExpandIcon, ListIcon, PencilIcon, PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
   cancelOrderAction,
@@ -53,6 +53,7 @@ import {
   sortWorkOrders,
   startOfWeek,
 } from "@/components/orders/order-shared"
+import { OrderDetailsDialog, OrderPhotoMark } from "@/components/orders/order-details-dialog"
 import { OrderEditSheet } from "@/components/orders/order-edit-sheet"
 import { OrderImageStrip } from "@/components/orders/order-images"
 import { cn } from "@/lib/utils"
@@ -97,6 +98,7 @@ export function OrdersPage({
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [pendingOrderId, setPendingOrderId] = useState<number | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
   const [, startTransition] = useTransition()
 
   const queueOrders = useMemo(
@@ -247,15 +249,7 @@ export function OrdersPage({
               onToday={() => setWeekStart(startOfWeek(new Date()))}
               onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
               onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
-              onOpenOrder={(order) => {
-                // Из календаря — сразу в правку (новый/в работе); готовый показываем в списке.
-                if (order.status === "Новый" || order.status === "В работе") {
-                  setEditingOrder(order)
-                } else {
-                  setSearch(order.number || `#${order.id}`)
-                  setViewMode("list")
-                }
-              }}
+              onOpenOrder={setViewingOrder}
             />
           </div>
         ) : (
@@ -286,6 +280,7 @@ export function OrdersPage({
                       }
                       onCancel={(target) => run(target.id, () => cancelOrderAction(target.id))}
                       onEdit={setEditingOrder}
+                      onOpen={setViewingOrder}
                     />
                   ))}
                 </div>
@@ -294,6 +289,17 @@ export function OrdersPage({
           </div>
         )}
       </ScreenBody>
+
+      <OrderDetailsDialog
+        order={viewingOrder}
+        onOpenChange={(open) => !open && setViewingOrder(null)}
+        onEdit={(order) => {
+          setViewingOrder(null)
+          setEditingOrder(order)
+        }}
+        chatHref={viewingOrder?.customerId && ["whatsapp", "instagram", "telegram"].includes(viewingOrder.source) ? `/chats?customer=${viewingOrder.customerId}` : null}
+        showMoney={false}
+      />
 
       {editingOrder && (
         <OrderEditSheet
@@ -320,6 +326,7 @@ function WorkOrderCard({
   onReady,
   onCancel,
   onEdit,
+  onOpen,
 }: {
   order: Order
   pendingAction: boolean
@@ -327,6 +334,7 @@ function WorkOrderCard({
   onReady: (order: Order) => void
   onCancel: (order: Order) => void
   onEdit: (order: Order) => void
+  onOpen: (order: Order) => void
 }) {
   const urgency = orderUrgency(order)
   // Иерархия действий по статусу: главное действие — primary, остальные — вторичны.
@@ -336,10 +344,19 @@ function WorkOrderCard({
     <div className={cn("flex min-w-0 flex-col gap-4 rounded-2xl bg-background p-4 shadow-xs", urgency.cardClass)}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-sm text-muted-foreground">
-            {order.number || `#${order.id}`}
-            <span className="text-muted-foreground/70"> · создан {dateTime(order.createdAt)}</span>
-          </div>
+          <button
+            type="button"
+            onClick={() => onOpen(order)}
+            className="flex items-center gap-1.5 text-left text-sm text-muted-foreground hover:text-foreground"
+            title="Открыть карточку заказа"
+          >
+            <ExpandIcon className="size-3.5" />
+            <span>
+              {order.number || `#${order.id}`}
+              <span className="text-muted-foreground/70"> · создан {dateTime(order.createdAt)}</span>
+            </span>
+            <OrderPhotoMark images={order.images} />
+          </button>
           <div className="text-2xl font-semibold">{order.dueAt ? dateTimeLong(order.dueAt) : "Без срока"}</div>
         </div>
         <div className="flex flex-col items-end gap-1.5">

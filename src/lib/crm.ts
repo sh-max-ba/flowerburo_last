@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3"
-import { initDb, listUsers, loadOrderImagesByOrder, type CurrentUser, type CustomerOption, type Order, type Product, type Sale } from "@/lib/db"
+import { initDb, listUsers, loadOrderImagesByOrder, loadOrderItemsByOrder, type CurrentUser, type CustomerOption, type Order, type Product, type Sale } from "@/lib/db"
 import { linkChatCustomer, renameChatsOfCustomer } from "@/lib/db/queries/chats"
 import { mapOrderRow, numberFromRow } from "@/lib/db-row"
 import { parseForm } from "@/lib/forms/parse"
@@ -524,7 +524,14 @@ export function listCustomerOrders(customerId: number): Order[] {
     )
     .all(customerId) as Array<Record<string, unknown>>
 
-  return rows.map((row) => mapOrderRow(row))
+  // Состав и фото нужны карточке заказа в чате (панель «Заказы» и просмотр заказа).
+  const orderIds = rows.map((row) => numberFromRow(row.id))
+  const itemsByOrder = loadOrderItemsByOrder(db(), orderIds)
+  const imagesByOrder = loadOrderImagesByOrder(db(), orderIds)
+  return rows.map((row) => {
+    const id = numberFromRow(row.id)
+    return mapOrderRow(row, itemsByOrder.get(id) ?? [], imagesByOrder.get(id) ?? [])
+  })
 }
 
 export function listDealOrders(dealId: number): Order[] {

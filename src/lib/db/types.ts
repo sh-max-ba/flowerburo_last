@@ -297,9 +297,13 @@ export type OrderItem = {
 
 // Изображение, прикреплённое к заказу (референс для флориста). Оригинал нормализован в webp
 // (см. /api/orders/images), thumbPath — уменьшенная копия для карточек.
+export type OrderImageKind = "photo" | "receipt"
+
 export type OrderImage = {
   id: number
   orderId: number | null
+  // photo — референс/фото к заказу, receipt — чек (скриншот оплаты).
+  kind: OrderImageKind
   imagePath: string
   thumbPath: string
   originalName: string

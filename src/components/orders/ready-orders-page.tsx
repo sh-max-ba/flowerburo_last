@@ -58,6 +58,7 @@ import {
   sortReadyOrders,
 } from "@/components/orders/order-shared"
 import { OrderImageStrip } from "@/components/orders/order-images"
+import { OrderDetailsDialog } from "@/components/orders/order-details-dialog"
 
 type OpenShift = DashboardData["stats"]["openShift"]
 type Result = Awaited<ReturnType<typeof completePickupOrderAction>>
@@ -102,6 +103,7 @@ export function ReadyOrdersPage({
   const [statusFilter, setStatusFilter] = useState<ReadyStatusFilter>("pending")
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [handoverOrder, setHandoverOrder] = useState<Order | null>(null)
+  const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
   const [pendingOrderId, setPendingOrderId] = useState<number | null>(null)
   const [, startTransition] = useTransition()
 
@@ -164,6 +166,7 @@ export function ReadyOrdersPage({
   return (
     <>
       <OrdersActivityRefresh />
+      <OrderDetailsDialog order={viewingOrder} onOpenChange={(open) => !open && setViewingOrder(null)} />
       <ScreenHeader
         title="Готовые заказы"
         search={{
@@ -246,7 +249,7 @@ export function ReadyOrdersPage({
               onToday={() => setWeekStart(startOfWeek(new Date()))}
               onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
               onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
-              onOpenOrder={() => setViewMode("list")}
+              onOpenOrder={setViewingOrder}
             />
           </div>
         ) : (

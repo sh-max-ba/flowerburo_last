@@ -1367,3 +1367,9 @@ export function migrateChats(client: Database.Database) {
         AND d.responsible_user_id IS NOT NULL)
   `)
 }
+
+// v28: вид изображения заказа — «фото» (референс/пример букета, kind='photo') или «чек» (скриншот
+// оплаты от клиента, kind='receipt'). Вложения из чата прикрепляются к заказу с нужным видом.
+export function migrateOrderImageKind(client: Database.Database) {
+  ensureColumn("order_images", "kind", "ALTER TABLE order_images ADD COLUMN kind TEXT NOT NULL DEFAULT 'photo'", client)
+}
