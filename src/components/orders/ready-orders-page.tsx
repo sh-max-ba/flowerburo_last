@@ -54,8 +54,8 @@ import {
   type OrderViewMode,
   addDays,
   dateTime,
+  startOfWeek,
   sortReadyOrders,
-  startOfLocalDay,
 } from "@/components/orders/order-shared"
 import { OrderImageStrip } from "@/components/orders/order-images"
 
@@ -100,7 +100,7 @@ export function ReadyOrdersPage({
   const [sortMode, setSortMode] = useState<OrderSortMode>("default")
   const [viewMode, setViewMode] = useState<OrderViewMode>("list")
   const [statusFilter, setStatusFilter] = useState<ReadyStatusFilter>("pending")
-  const [weekStart, setWeekStart] = useState(() => startOfLocalDay(new Date()))
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [handoverOrder, setHandoverOrder] = useState<Order | null>(null)
   const [pendingOrderId, setPendingOrderId] = useState<number | null>(null)
   const [, startTransition] = useTransition()
@@ -243,7 +243,7 @@ export function ReadyOrdersPage({
               orders={orders}
               weekStart={weekStart}
               showMoney
-              onToday={() => setWeekStart(startOfLocalDay(new Date()))}
+              onToday={() => setWeekStart(startOfWeek(new Date()))}
               onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
               onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
               onOpenOrder={() => setViewMode("list")}

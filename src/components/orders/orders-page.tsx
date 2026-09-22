@@ -39,16 +39,19 @@ import {
   OrderStatusBadge,
   OrderUrgencyBadge,
   OrderCalendarView,
+  OrderChatLink,
   Spinner,
+  groupOrdersByDueDay,
   orderMatchesSearch,
   orderSortOptions,
   orderUrgency,
   type OrderSortMode,
   type OrderViewMode,
   addDays,
+  dateTime,
   dateTimeLong,
   sortWorkOrders,
-  startOfLocalDay,
+  startOfWeek,
 } from "@/components/orders/order-shared"
 import { OrderEditSheet } from "@/components/orders/order-edit-sheet"
 import { OrderImageStrip } from "@/components/orders/order-images"
@@ -91,7 +94,7 @@ export function OrdersPage({
   const [sortMode, setSortMode] = useState<OrderSortMode>("default")
   const [viewMode, setViewMode] = useState<OrderViewMode>("list")
   const [statusFilter, setStatusFilter] = useState<WorkStatusFilter>("all")
-  const [weekStart, setWeekStart] = useState(() => startOfLocalDay(new Date()))
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [pendingOrderId, setPendingOrderId] = useState<number | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
   const [, startTransition] = useTransition()
@@ -241,30 +244,52 @@ export function OrdersPage({
               orders={orders}
               weekStart={weekStart}
               showMoney={false}
-              onToday={() => setWeekStart(startOfLocalDay(new Date()))}
+              onToday={() => setWeekStart(startOfWeek(new Date()))}
               onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
               onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
-              onOpenOrder={() => setViewMode("list")}
+              onOpenOrder={(order) => {
+                // Из календаря — сразу в правку (новый/в работе); готовый показываем в списке.
+                if (order.status === "Новый" || order.status === "В работе") {
+                  setEditingOrder(order)
+                } else {
+                  setSearch(order.number || `#${order.id}`)
+                  setViewMode("list")
+                }
+              }}
             />
           </div>
         ) : (
-          // Сетка на всю ширину: столько карточек, сколько влезает по 360px, а не одна слева.
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(min(360px,100%),1fr))] gap-3 pb-2">
-            {orders.map((order) => (
-              <WorkOrderCard
-                key={order.id}
-                order={order}
-                pendingAction={pendingOrderId === order.id}
-                onStart={(target) => run(target.id, () => startOrderWorkAction(target.id))}
-                onReady={(target) =>
-                  run(target.id, () => markOrderReadyAction(target.id), {
-                    label: "Открыть «Готовые»",
-                    href: "/ready-orders",
-                  })
-                }
-                onCancel={(target) => run(target.id, () => cancelOrderAction(target.id))}
-                onEdit={setEditingOrder}
-              />
+          // Секции по сроку (Просрочено / Сегодня / Завтра / Позже / Без срока) — флорист видит,
+          // что горит, не вглядываясь в даты. При сортировке «сначала новые» секций нет.
+          <div className="flex flex-col gap-3 pb-2">
+            {(sortMode === "new" ? [{ key: "all", label: "", orders }] : groupOrdersByDueDay(orders)).map((group) => (
+              <section key={group.key} className="flex flex-col gap-2" aria-label={group.label || "Заказы"}>
+                {group.label ? (
+                  <h2 className={cn("flex items-baseline gap-2 px-1 text-sm font-semibold", group.key === "overdue" && "text-destructive")}>
+                    {group.label}
+                    <span className="text-xs font-normal text-muted-foreground tabular-nums">{group.orders.length}</span>
+                  </h2>
+                ) : null}
+                {/* Сетка на всю ширину: столько карточек, сколько влезает по 360px, а не одна слева. */}
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(min(360px,100%),1fr))] gap-3">
+                  {group.orders.map((order) => (
+                    <WorkOrderCard
+                      key={order.id}
+                      order={order}
+                      pendingAction={pendingOrderId === order.id}
+                      onStart={(target) => run(target.id, () => startOrderWorkAction(target.id))}
+                      onReady={(target) =>
+                        run(target.id, () => markOrderReadyAction(target.id), {
+                          label: "Открыть «Готовые»",
+                          href: "/ready-orders",
+                        })
+                      }
+                      onCancel={(target) => run(target.id, () => cancelOrderAction(target.id))}
+                      onEdit={setEditingOrder}
+                    />
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         )}
@@ -311,7 +336,10 @@ function WorkOrderCard({
     <div className={cn("flex min-w-0 flex-col gap-4 rounded-2xl bg-background p-4 shadow-xs", urgency.cardClass)}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-sm text-muted-foreground">{order.number || `#${order.id}`}</div>
+          <div className="text-sm text-muted-foreground">
+            {order.number || `#${order.id}`}
+            <span className="text-muted-foreground/70"> · создан {dateTime(order.createdAt)}</span>
+          </div>
           <div className="text-2xl font-semibold">{order.dueAt ? dateTimeLong(order.dueAt) : "Без срока"}</div>
         </div>
         <div className="flex flex-col items-end gap-1.5">
@@ -331,7 +359,10 @@ function WorkOrderCard({
         {order.recipientPhone && <div>Получатель: {order.recipientPhone}</div>}
         {order.address && <div>{order.address}</div>}
         {order.note && <div className="text-muted-foreground">{order.note}</div>}
-        <OrderDealLink dealId={order.dealId} className="mt-0.5" />
+        <div className="flex flex-wrap items-center gap-x-3">
+          <OrderChatLink order={order} className="mt-0.5" />
+          <OrderDealLink dealId={order.dealId} className="mt-0.5" />
+        </div>
       </div>
       {/* Фото-референсы — флористу важно видеть их крупно, рядом с составом. */}
       <OrderImageStrip images={order.images} size="lg" />

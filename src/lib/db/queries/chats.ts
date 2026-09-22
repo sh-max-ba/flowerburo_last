@@ -433,3 +433,16 @@ export function findOrCreateWhatsappChat(input: {
     })
   return { id: Number(result.lastInsertRowid), created: true }
 }
+
+// Диалог клиента (самый свежий из привязанных): для ссылки «Открыть чат» из заказа/карточки клиента.
+export function getChatByCustomerId(customerId: number): ChatSummary | null {
+  const row = db()
+    .prepare(
+      `${SUMMARY_SELECT}
+       WHERE chats.customer_id = ? AND chats.is_group = 0
+       ORDER BY COALESCE(chats.last_message_at, chats.created_at) DESC, chats.id DESC
+       LIMIT 1`
+    )
+    .get(Math.trunc(customerId)) as Record<string, unknown> | undefined
+  return row ? mapChat(row) : null
+}

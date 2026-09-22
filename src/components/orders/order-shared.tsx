@@ -5,26 +5,26 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
   AlertTriangleIcon,
-  ArrowLeftIcon,
-  ArrowRightIcon,
   CalendarDaysIcon,
   CheckCircle2Icon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ClockIcon,
   ExternalLinkIcon,
   FileEditIcon,
   HourglassIcon,
   ListIcon,
   Loader2Icon,
+  MessageCircleIcon,
   PackageCheckIcon,
   TruckIcon,
 } from "lucide-react"
 import type { Order, OrderItem, OrderStatus } from "@/lib/db"
-import { deliveryTypeLabel, sourceLabel } from "@/lib/labels"
+import { sourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { formatDeadline, formatInstant } from "@/lib/datetime"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import {
   Select,
   SelectContent,
@@ -130,14 +130,6 @@ function dateKeyFromValue(value: string) {
 // Время срока заказа (due_at — наивное локальное время, без сдвига пояса).
 function timeValue(value: string) {
   return formatDeadline(value, { date: false }) || "-"
-}
-
-function dayLabel(date: Date) {
-  return new Intl.DateTimeFormat("ru-RU", {
-    weekday: "short",
-    day: "2-digit",
-    month: "2-digit",
-  }).format(date)
 }
 
 function weekRangeLabel(startDate: Date) {
@@ -319,6 +311,43 @@ export function OrderToolbar({
   )
 }
 
+// Неделя с понедельника (ISO), чтобы сетка календаря не «плыла» от сегодняшнего дня недели.
+export function startOfWeek(date: Date) {
+  const day = startOfLocalDay(date)
+  const shift = (day.getDay() + 6) % 7
+  return addDays(day, -shift)
+}
+
+function weekdayShort(date: Date) {
+  return new Intl.DateTimeFormat("ru-RU", { weekday: "short" }).format(date).replace(".", "")
+}
+
+function monthShort(date: Date) {
+  return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short" }).format(date).replace(".", "")
+}
+
+// Сроки заказов группируются по дню (ключ — локальная дата due_at).
+function groupOrdersByDay(orders: Order[]) {
+  const byDate = new Map<string, Order[]>()
+  const withoutDate: Order[] = []
+  for (const order of orders) {
+    const key = order.dueAt ? dateKeyFromValue(order.dueAt) : noDueDateKey
+    if (key === noDueDateKey) {
+      withoutDate.push(order)
+      continue
+    }
+    byDate.set(key, [...(byDate.get(key) ?? []), order])
+  }
+  for (const list of byDate.values()) {
+    list.sort(compareDueAt)
+  }
+  return { byDate, withoutDate }
+}
+
+// Календарь недели: полоса навигации без рамок (← Сегодня →, диапазон), семь колонок с днём и
+// счётчиком, сегодня — акцентом бренда. Карточка заказа — время, клиент, статус; клик открывает
+// заказ (onOpenOrder). В узком контейнере (< @4xl) вместо сетки — повестка: дни с заказами
+// стопкой, чтобы на планшете портретом не было семи колонок по 90px.
 export function OrderCalendarView({
   orders,
   weekStart,
@@ -337,106 +366,101 @@ export function OrderCalendarView({
   onOpenOrder: (order: Order) => void
 }) {
   const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index))
-  const dayKeys = new Set(days.map(dateKey))
-  const ordersByDate = new Map<string, Order[]>()
-  const ordersWithoutDate: Order[] = []
-
-  for (const order of orders) {
-    const key = order.dueAt ? dateKeyFromValue(order.dueAt) : noDueDateKey
-    if (key === noDueDateKey) {
-      ordersWithoutDate.push(order)
-      continue
-    }
-
-    if (!dayKeys.has(key)) {
-      continue
-    }
-
-    ordersByDate.set(key, [...(ordersByDate.get(key) ?? []), order])
-  }
+  const todayKey = dateKey(new Date())
+  const { byDate, withoutDate } = groupOrdersByDay(orders)
+  const weekCount = days.reduce((sum, day) => sum + (byDate.get(dateKey(day))?.length ?? 0), 0)
+  const isCurrentWeek = days.some((day) => dateKey(day) === todayKey)
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="text-sm font-medium">Неделя</div>
-          <div className="text-sm text-muted-foreground">{weekRangeLabel(weekStart)}</div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" size="sm" variant="outline" onClick={onToday}>
-            Сегодня
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={onPreviousWeek}
-            aria-label="Предыдущая неделя"
-          >
-            <ArrowLeftIcon data-icon="inline-start" />
-            Пред. неделя
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={onNextWeek}
-            aria-label="Следующая неделя"
-          >
-            След. неделя
-            <ArrowRightIcon data-icon="inline-end" />
-          </Button>
+    <div className="@container/calendar flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-1">
+        <Button type="button" variant="ghost" size="icon-lg" className="size-10 text-muted-foreground" onClick={onPreviousWeek} aria-label="Предыдущая неделя">
+          <ChevronLeftIcon />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          className={cn("h-10 px-3", isCurrentWeek && "text-muted-foreground")}
+          onClick={onToday}
+          disabled={isCurrentWeek}
+        >
+          Сегодня
+        </Button>
+        <Button type="button" variant="ghost" size="icon-lg" className="size-10 text-muted-foreground" onClick={onNextWeek} aria-label="Следующая неделя">
+          <ChevronRightIcon />
+        </Button>
+        <div className="ml-1 min-w-0">
+          <div className="text-sm font-semibold">{weekRangeLabel(weekStart)}</div>
+          <div className="text-xs text-muted-foreground">
+            {weekCount ? `${weekCount} ${plural(weekCount, ["заказ", "заказа", "заказов"])} на неделе` : "На этой неделе заказов нет"}
+          </div>
         </div>
       </div>
 
-      <div className="grid gap-3 xl:grid-cols-7">
+      {/* Сетка недели (широкий контейнер) */}
+      <div className="hidden grid-cols-7 gap-2 @4xl/calendar:grid">
         {days.map((day) => {
           const key = dateKey(day)
-          const dayOrders = ordersByDate.get(key) ?? []
-
+          const dayOrders = byDate.get(key) ?? []
+          const isToday = key === todayKey
           return (
-            <div key={key} className="flex min-h-40 flex-col gap-2 rounded-lg border bg-background p-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-medium capitalize">{dayLabel(day)}</div>
-                <Badge variant="outline">{dayOrders.length}</Badge>
-              </div>
-              {dayOrders.length ? (
-                <div className="flex flex-col gap-2">
-                  {dayOrders.map((order) => (
-                    <OrderCalendarCard
-                      key={order.id}
-                      order={order}
-                      showMoney={showMoney}
-                      onOpenOrder={onOpenOrder}
-                    />
-                  ))}
+            <div key={key} className={cn("flex min-h-56 min-w-0 flex-col gap-1.5 rounded-xl p-2", isToday ? "bg-brand-subtle" : "bg-muted/40")}>
+              <div className="flex items-baseline justify-between gap-1 px-1">
+                <div className={cn("text-sm font-semibold", isToday && "text-brand-strong")}>
+                  <span className="capitalize">{weekdayShort(day)}</span>{" "}
+                  <span className="font-normal text-muted-foreground">{monthShort(day)}</span>
                 </div>
-              ) : (
-                <Empty className="min-h-24 rounded-lg border py-3">
-                  <EmptyHeader>
-                    <EmptyTitle className="text-sm">На этот день заказов нет</EmptyTitle>
-                  </EmptyHeader>
-                </Empty>
-              )}
+                {dayOrders.length ? <span className="text-xs text-muted-foreground tabular-nums">{dayOrders.length}</span> : null}
+              </div>
+              {dayOrders.map((order) => (
+                <OrderCalendarCard key={order.id} order={order} showMoney={showMoney} onOpenOrder={onOpenOrder} />
+              ))}
             </div>
           )
         })}
       </div>
 
-      {ordersWithoutDate.length > 0 && (
-        <div className="flex flex-col gap-2 rounded-lg border bg-background p-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-sm font-medium">Без даты</div>
-            <Badge variant="outline">{ordersWithoutDate.length}</Badge>
+      {/* Повестка (узкий контейнер): только дни с заказами + сегодня */}
+      <div className="flex flex-col gap-2 @4xl/calendar:hidden">
+        {days
+          .filter((day) => dateKey(day) === todayKey || (byDate.get(dateKey(day))?.length ?? 0) > 0)
+          .map((day) => {
+            const key = dateKey(day)
+            const dayOrders = byDate.get(key) ?? []
+            const isToday = key === todayKey
+            return (
+              <div key={key} className={cn("rounded-xl p-2", isToday ? "bg-brand-subtle" : "bg-muted/40")}>
+                <div className="flex items-baseline justify-between gap-2 px-1 pb-1.5">
+                  <div className={cn("text-sm font-semibold", isToday && "text-brand-strong")}>
+                    <span className="capitalize">{weekdayShort(day)}</span>{" "}
+                    <span className="font-normal text-muted-foreground">{monthShort(day)}</span>
+                    {isToday ? <span className="ml-1 text-xs font-normal text-brand-strong">сегодня</span> : null}
+                  </div>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {dayOrders.length ? `${dayOrders.length} ${plural(dayOrders.length, ["заказ", "заказа", "заказов"])}` : "нет заказов"}
+                  </span>
+                </div>
+                {dayOrders.length ? (
+                  <div className="grid gap-1.5 @xl/calendar:grid-cols-2 @3xl/calendar:grid-cols-3">
+                    {dayOrders.map((order) => (
+                      <OrderCalendarCard key={order.id} order={order} showMoney={showMoney} onOpenOrder={onOpenOrder} />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+      </div>
+
+      {withoutDate.length > 0 && (
+        <div className="rounded-xl bg-muted/40 p-2">
+          <div className="flex items-baseline justify-between gap-2 px-1 pb-1.5">
+            <div className="text-sm font-semibold">Без срока</div>
+            <span className="text-xs text-muted-foreground tabular-nums">{withoutDate.length}</span>
           </div>
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-            {ordersWithoutDate.map((order) => (
-              <OrderCalendarCard
-                key={order.id}
-                order={order}
-                showMoney={showMoney}
-                onOpenOrder={onOpenOrder}
-              />
+          <div className="grid gap-1.5 @xl/calendar:grid-cols-2 @3xl/calendar:grid-cols-3 @5xl/calendar:grid-cols-4">
+            {withoutDate.map((order) => (
+              <OrderCalendarCard key={order.id} order={order} showMoney={showMoney} onOpenOrder={onOpenOrder} />
             ))}
           </div>
         </div>
@@ -445,6 +469,20 @@ export function OrderCalendarView({
   )
 }
 
+function plural(count: number, forms: [string, string, string]) {
+  const mod10 = count % 10
+  const mod100 = count % 100
+  if (mod10 === 1 && mod100 !== 11) {
+    return forms[0]
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
+    return forms[1]
+  }
+  return forms[2]
+}
+
+// Карточка заказа в календаре: время крупно, клиент, способ получения, статус точкой-бейджем.
+// Просрочка/сегодня подкрашивают карточку (orderUrgency), вся карточка — кнопка «открыть заказ».
 function OrderCalendarCard({
   order,
   showMoney,
@@ -455,37 +493,57 @@ function OrderCalendarCard({
   onOpenOrder: (order: Order) => void
 }) {
   const balance = order.total - order.paid
+  const urgency = orderUrgency(order)
 
   return (
-    <div className={cn("flex flex-col gap-2 rounded-lg bg-background p-3 text-xs shadow-xs", orderUrgencyClass(order))}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate font-medium">{order.number || `#${order.id}`}</div>
-          <div className="text-muted-foreground">{order.dueAt ? timeValue(order.dueAt) : "Без срока"}</div>
-        </div>
-        {order.status === "Готов" || order.status === "Передан курьеру" ? (
-          <ReadyStatusBadge status={order.status} />
-        ) : (
-          <OrderBadge status={order.status} />
-        )}
+    <button
+      type="button"
+      onClick={() => onOpenOrder(order)}
+      className={cn(
+        "flex w-full min-w-0 flex-col gap-1 rounded-lg bg-background p-2 text-left text-xs shadow-xs outline-none transition-colors hover:bg-zinc-50 focus-visible:ring-3 focus-visible:ring-ring/35",
+        urgency.cardClass
+      )}
+      aria-label={`Заказ ${order.number || `#${order.id}`}, ${order.customer || "клиент не указан"}`}
+    >
+      <div className="flex items-center justify-between gap-1">
+        <span className="text-sm font-semibold tabular-nums">{order.dueAt ? timeValue(order.dueAt) : "—"}</span>
+        <OrderStatusDot status={order.status} />
       </div>
-      <div className="min-w-0">
-        <div className="truncate font-medium">{order.customer || "Клиент не указан"}</div>
-        {order.recipientPhone && (
-          <div className="truncate text-muted-foreground">Получатель: {order.recipientPhone}</div>
-        )}
-        <div className="truncate text-muted-foreground">{deliveryTypeLabel(order.deliveryType)}</div>
+      <div className="truncate font-medium">{order.customer || "Клиент не указан"}</div>
+      <div className="flex min-w-0 items-center gap-1 text-muted-foreground">
+        {order.deliveryType === "delivery" ? <TruckIcon className="size-3 shrink-0" aria-hidden /> : null}
+        <span className="truncate">{order.deliveryType === "delivery" ? order.address || "Доставка" : "Самовывоз"}</span>
       </div>
+      {order.items.length ? (
+        <div className="truncate text-muted-foreground">{order.items.slice(0, 3).map((item) => item.name).join(", ")}</div>
+      ) : null}
       {showMoney && (
-        <div className="grid grid-cols-2 gap-2 rounded-md bg-muted p-2">
-          <Info label="Сумма" value={formatMoney(order.total)} />
-          <Info label="Остаток" value={formatMoney(balance)} />
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 whitespace-nowrap tabular-nums">
+          <span className="font-semibold">{formatMoney(order.total)}</span>
+          {balance > 0.009 ? <span className="text-amber-700">долг {formatMoney(balance)}</span> : <span className="text-muted-foreground">оплачен</span>}
         </div>
       )}
-      <Button type="button" size="sm" variant="outline" className="mt-auto" onClick={() => onOpenOrder(order)}>
-        К списку
-      </Button>
-    </div>
+    </button>
+  )
+}
+
+// Статус точкой с подписью — компактнее бейджа, в календарной карточке места мало.
+const statusDotClass: Record<OrderStatus, string> = {
+  "Черновик": "bg-zinc-300",
+  "Новый": "bg-zinc-400",
+  "В работе": "bg-violet-500",
+  "Готов": "bg-emerald-500",
+  "Передан курьеру": "bg-sky-500",
+  "Выдан": "bg-emerald-700",
+  "Отменен": "bg-red-400",
+}
+
+function OrderStatusDot({ status }: { status: OrderStatus }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1 text-[11px] whitespace-nowrap text-muted-foreground" title={status}>
+      <span className={cn("size-2 shrink-0 rounded-full", statusDotClass[status] ?? "bg-zinc-400")} aria-hidden />
+      <span className="truncate">{status}</span>
+    </span>
   )
 }
 
@@ -531,10 +589,6 @@ export function orderUrgency(order: Order, now: Date = new Date()): OrderUrgency
   }
 
   return { level: "future", label: "", cardClass: "" }
-}
-
-function orderUrgencyClass(order: Order) {
-  return orderUrgency(order).cardClass
 }
 
 // P0: текстовая+иконочная метка срочности. Цвет в монохроме читается плохо,
@@ -743,6 +797,70 @@ export function OrderSourceBadge({ source, className }: { source: string; classN
       {sourceLabel(source)}
     </Badge>
   )
+}
+
+// Ссылка в переписку с клиентом: заказ пришёл из мессенджера (source) и привязан к клиенту —
+// открываем его диалог в «Чатах» (?customer=), чтобы уточнить детали, не ища его в списке.
+const messengerSources = new Set(["whatsapp", "instagram", "telegram"])
+
+export function OrderChatLink({ order, className }: { order: Pick<Order, "customerId" | "source">; className?: string }) {
+  if (!order.customerId || !messengerSources.has(order.source)) {
+    return null
+  }
+
+  return (
+    <Link
+      href={`/chats?customer=${order.customerId}`}
+      className={cn(
+        "inline-flex items-center gap-1 text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline",
+        className
+      )}
+    >
+      <MessageCircleIcon className="size-3.5" />
+      Открыть чат
+    </Link>
+  )
+}
+
+export type OrderDueGroup = { key: "overdue" | "today" | "tomorrow" | "later" | "none"; label: string; orders: Order[] }
+
+// Секции списка по сроку: просрочено / сегодня / завтра / позже / без срока. Внутри секции
+// порядок — как пришёл (страница уже отсортировала). Пустые секции не возвращаются.
+export function groupOrdersByDueDay(orders: Order[], now: Date = new Date()): OrderDueGroup[] {
+  const todayKey = dateKey(now)
+  const tomorrowKey = dateKey(addDays(now, 1))
+  const buckets: Record<OrderDueGroup["key"], Order[]> = { overdue: [], today: [], tomorrow: [], later: [], none: [] }
+  for (const order of orders) {
+    if (!order.dueAt) {
+      buckets.none.push(order)
+      continue
+    }
+    const due = new Date(order.dueAt)
+    if (Number.isNaN(due.getTime())) {
+      buckets.none.push(order)
+      continue
+    }
+    const key = dateKey(due)
+    if (due.getTime() < now.getTime()) {
+      buckets.overdue.push(order)
+    } else if (key === todayKey) {
+      buckets.today.push(order)
+    } else if (key === tomorrowKey) {
+      buckets.tomorrow.push(order)
+    } else {
+      buckets.later.push(order)
+    }
+  }
+  const labels: Record<OrderDueGroup["key"], string> = {
+    overdue: "Просрочено",
+    today: "Сегодня",
+    tomorrow: "Завтра",
+    later: "Позже",
+    none: "Без срока",
+  }
+  return (Object.keys(buckets) as OrderDueGroup["key"][])
+    .filter((key) => buckets[key].length > 0)
+    .map((key) => ({ key, label: labels[key], orders: buckets[key] }))
 }
 
 // P1: ненавязчивая ссылка на сделку-источник, чтобы быстро уточнить детали.

@@ -163,6 +163,7 @@ export {
   getChatsRevision,
   getChatById,
   getChatByIdentity,
+  getChatByCustomerId,
   getChatAvatarUri,
   listChatsForPicker,
   touchChatOnMessage,
