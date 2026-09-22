@@ -3,6 +3,7 @@
 import {
   BanknoteIcon,
   BarChart3Icon,
+  ChartSplineIcon,
   BoxesIcon,
   CalendarClockIcon,
   ClipboardCheckIcon,
@@ -26,6 +27,7 @@ import type { LucideIcon } from "lucide-react"
 // "use client"-модуль, чтобы nav.ts оставался серверно-нейтральным (без lucide).
 export const NAV_ICONS: Record<string, LucideIcon> = {
   dashboard: LayoutDashboardIcon,
+  analytics: ChartSplineIcon,
   deals: TagsIcon,
   clients: UserCheckIcon,
   bouquets: Flower2Icon,

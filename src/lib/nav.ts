@@ -2,6 +2,7 @@ import type { UserRole } from "@/lib/db"
 
 export type NavSectionId =
   | "dashboard"
+  | "analytics"
   | "deals"
   | "clients"
   | "bouquets"
@@ -48,6 +49,7 @@ export type NavGroup = {
 // открытой смене (canAccessCash = canUseCash) — см. getNavForRole.
 export const NAV: NavItem[] = [
   { id: "dashboard", label: "Дашборд", href: "/dashboard", iconKey: "dashboard", roles: ["owner"] },
+  { id: "analytics", label: "Аналитика", href: "/analytics", iconKey: "analytics", roles: ["owner"] },
   { id: "deals", label: "Сделки", href: "/deals", iconKey: "deals", roles: ["owner", "manager"] },
   { id: "clients", label: "Клиенты", href: "/clients", iconKey: "clients", roles: ["owner", "manager"] },
   { id: "bouquets", label: "Букеты", href: "/bouquets", iconKey: "bouquets", roles: ["owner", "manager"] },
@@ -70,7 +72,7 @@ export const NAV: NavItem[] = [
 ]
 
 export const NAV_GROUPS: NavGroup[] = [
-  { id: "overview", label: "Обзор", ids: ["dashboard"] },
+  { id: "overview", label: "Обзор", ids: ["dashboard", "analytics"] },
   { id: "crm", label: "CRM", ids: ["deals", "clients", "bouquets"] },
   { id: "work", label: "Работа", ids: ["sales", "orders", "order-drafts", "ready-orders", "history-cash"] },
   { id: "stock", label: "Склад", ids: ["stock", "stock-report", "stock-acts", "stock-lots", "stock-inventory", "suppliers", "history"] },

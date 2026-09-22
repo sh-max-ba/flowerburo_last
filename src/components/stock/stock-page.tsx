@@ -10,6 +10,7 @@ import {
   ArchiveRestoreIcon,
   ArrowDownIcon,
   ArrowUpIcon,
+  ChartSplineIcon,
   ChevronsUpDownIcon,
   DownloadIcon,
   FilterIcon,
@@ -228,15 +229,23 @@ export function StockPage({
   const router = useRouter()
   const searchParams = useSearchParams()
   const requestedDocType = searchParams.get("new")
+  // ?edit=<код> — открыть форму товара сразу (ссылка «Редактировать» из карточки товара).
+  const requestedEditCode = searchParams.get("edit")
   const [view, setView] = useState<"active" | "archived">("active")
   const [query, setQuery] = useState("")
   const [categoryFilter, setCategoryFilter] = useState(allCategoriesValue)
   const [levelFilter, setLevelFilter] = useState<StockLevelFilter>("all")
   const [sort, setSort] = useState<SortState>(null)
-  const [productSheet, setProductSheet] = useState(false)
+  const [editingProduct, setEditingProduct] = useState<Product | null>(() =>
+    requestedEditCode
+      ? (products.find((product) => product.code === requestedEditCode) ??
+        archivedProducts.find((product) => product.code === requestedEditCode) ??
+        null)
+      : null
+  )
+  const [productSheet, setProductSheet] = useState(() => Boolean(requestedEditCode && editingProduct))
   const [categoriesOpen, setCategoriesOpen] = useState(false)
   const [clearingCategory, setClearingCategory] = useState<CategorySummary | null>(null)
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [archivingProduct, setArchivingProduct] = useState<Product | null>(null)
   const [deletingProduct, setDeletingProduct] = useState<Product | null>(null)
   // Диалог акта живёт в URL (?new=stock_in|stock_out): ссылки «Пополнить/Списать» из полосы
@@ -366,6 +375,7 @@ export function StockPage({
           setEditingProduct(null)
           setProductSheet(true)
         }}
+        onOpen={(product) => router.push(`/stock/products/${encodeURIComponent(product.code)}`)}
         onEdit={(product) => {
           setEditingProduct(product)
           setProductSheet(true)
@@ -553,6 +563,7 @@ function StockSection({
   categoryFilter,
   setCategoryFilter,
   onCreate,
+  onOpen,
   onEdit,
   onImport,
   onOpenCategories,
@@ -579,6 +590,7 @@ function StockSection({
   categoryFilter: string
   setCategoryFilter: (value: string) => void
   onCreate: () => void
+  onOpen: (product: Product) => void
   onEdit: (product: Product) => void
   onImport: () => void
   onOpenCategories: () => void
@@ -715,6 +727,7 @@ function StockSection({
           isArchiveView={isArchiveView}
           hasActiveFilters={hasActiveFilters}
           onResetFilters={onResetFilters}
+          onOpen={onOpen}
           onEdit={onEdit}
           onArchive={onArchive}
           onRestore={onRestore}
@@ -735,6 +748,7 @@ function ProductsTable({
   isArchiveView,
   hasActiveFilters,
   onResetFilters,
+  onOpen,
   onEdit,
   onArchive,
   onRestore,
@@ -747,6 +761,8 @@ function ProductsTable({
   isArchiveView: boolean
   hasActiveFilters: boolean
   onResetFilters: () => void
+  // Открыть карточку товара (движения, поставщики, продажи за период).
+  onOpen: (product: Product) => void
   onEdit: (product: Product) => void
   onArchive: (product: Product) => void
   onRestore: (product: Product) => void
@@ -795,7 +811,15 @@ function ProductsTable({
         </TableHeader>
         <TableBody>
           {products.map((product) => (
-            <TableRow key={product.code} className="group">
+            <TableRow
+              key={product.code}
+              className="group cursor-pointer"
+              onClick={(event) => {
+                // Кнопки действий в строке работают сами — в карточку уходим только по клику по строке.
+                if ((event.target as HTMLElement).closest("a, button, [role=menuitem]")) return
+                onOpen(product)
+              }}
+            >
               <TableCell>
                 <div className="flex min-w-40 items-center gap-2.5">
                   <ProductThumbnail name={product.name} imagePath={product.imagePath} size="md" />
@@ -816,6 +840,15 @@ function ProductsTable({
               <TableCell className="text-right tabular-nums">{formatMoney(product.salePrice)}</TableCell>
               <TableCell>
                 <div className="flex justify-end gap-0.5 text-muted-foreground">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    render={<Link href={`/stock/products/${encodeURIComponent(product.code)}`} />}
+                    title="Карточка товара: движения и поставщики"
+                    aria-label="Карточка товара"
+                  >
+                    <ChartSplineIcon />
+                  </Button>
                   {isArchiveView ? (
                     <>
                       <Button

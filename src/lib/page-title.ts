@@ -4,6 +4,7 @@
 // разбираются регулярками в getPageTitle/getPageContext ниже.
 const routeTitles: Record<string, string> = {
   "/dashboard": "Дашборд",
+  "/analytics": "Аналитика",
   "/cash": "Касса",
   "/orders": "Стол заказов",
   "/orders/drafts": "Черновики",
@@ -27,6 +28,7 @@ const routeTitles: Record<string, string> = {
 
 const routeContexts: Record<string, string> = {
   "/dashboard": "Сводка по магазину",
+  "/analytics": "Склад и продажи",
   "/cash": "Продажи и заказы смены",
   "/orders": "Заказы в работе",
   "/orders/drafts": "Несогласованные заказы",
@@ -67,6 +69,10 @@ export function getPageTitle(pathname: string) {
     return "Акт склада"
   }
 
+  if (/^\/stock\/products\/[^/]+$/.test(path)) {
+    return "Карточка товара"
+  }
+
   if (/^\/suppliers\/[^/]+$/.test(path)) {
     return "Поставщик"
   }
@@ -99,6 +105,10 @@ export function getPageContext(pathname: string) {
 
   if (/^\/stock\/acts\/[^/]+(?:\/edit)?$/.test(path)) {
     return "Детали документа"
+  }
+
+  if (/^\/stock\/products\/[^/]+$/.test(path)) {
+    return "Движения и поставщики"
   }
 
   if (/^\/suppliers\/[^/]+$/.test(path)) {
