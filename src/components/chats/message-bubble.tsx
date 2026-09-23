@@ -22,6 +22,7 @@ import {
   ReplyIcon,
   ShoppingCartIcon,
   WandSparklesIcon,
+  ZapIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import type { WazzupMessage } from "@/lib/db"
@@ -64,7 +65,16 @@ export type BubbleMessage = Pick<
   bouquetId?: number | null
 }
 
-export type MessageAction = "reply" | "forward" | "copy" | "open" | "download" | "transcribe" | "toOrderPhoto" | "toOrderReceipt"
+export type MessageAction =
+  | "reply"
+  | "forward"
+  | "copy"
+  | "saveQuickReply"
+  | "open"
+  | "download"
+  | "transcribe"
+  | "toOrderPhoto"
+  | "toOrderReceipt"
 
 export function MessageBubble({
   message,
@@ -98,6 +108,9 @@ export function MessageBubble({
       <MenuItemRow icon={ReplyIcon} label="Ответить" onSelect={() => onAction("reply", message)} />
       <MenuItemRow icon={ForwardIcon} label="Переслать" onSelect={() => onAction("forward", message)} />
       {message.text ? <MenuItemRow icon={CopyIcon} label="Копировать текст" onSelect={() => onAction("copy", message)} /> : null}
+      {message.text && !message.isDeleted ? (
+        <MenuItemRow icon={ZapIcon} label="Сохранить как быстрый ответ" onSelect={() => onAction("saveQuickReply", message)} />
+      ) : null}
       {hasMedia && message.messageType === "image" ? (
         <>
           <MenuSeparatorRow />

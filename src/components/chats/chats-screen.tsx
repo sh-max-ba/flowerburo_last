@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import { MessageSquarePlusIcon, MessagesSquareIcon, UsersRoundIcon } from "lucide-react"
 import { toast } from "sonner"
 import { assignChatAction, attachChatMediaToOrderAction, createOrderAction, createOrderDraftAction, markChatAnsweredAction } from "@/app/actions"
-import type { BouquetTemplate, ChatCounts, ChatSummary, ChatTab, CustomerOption, OrderImage, Product } from "@/lib/db"
+import type { BouquetTemplate, ChatCounts, ChatSummary, ChatTab, CustomerOption, OrderImage, Product, QuickReply } from "@/lib/db"
 import { cn } from "@/lib/utils"
 import { OrderDialog } from "@/components/orders/new-order-dialog"
 import type { ProductLineItem } from "@/components/products/product-line-items"
@@ -57,6 +57,7 @@ export function ChatsScreen({
   currentUser,
   users,
   bouquets,
+  initialQuickReplies,
   products,
   customers,
   initialChats,
@@ -69,6 +70,7 @@ export function ChatsScreen({
   currentUser: { id: number; name: string }
   users: Array<{ id: number; name: string }>
   bouquets: BouquetTemplate[]
+  initialQuickReplies: QuickReply[]
   products: Product[]
   customers: CustomerOption[]
   initialChats: ChatSummary[]
@@ -84,6 +86,7 @@ export function ChatsScreen({
   const [query, setQuery] = useState("")
   const [groups, setGroups] = useState(false)
   const [chats, setChats] = useState<ChatSummary[]>(initialChats)
+  const [quickReplies, setQuickReplies] = useState<QuickReply[]>(initialQuickReplies)
   const [counts, setCounts] = useState<ChatCounts>(initialCounts)
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<ChatSummary | null>(initialChat)
@@ -373,6 +376,8 @@ export function ChatsScreen({
                   currentUser={currentUser}
                   users={users}
                   bouquets={bouquets}
+                  quickReplies={quickReplies}
+                  onQuickRepliesChange={setQuickReplies}
                   panel={panel}
                   showBack={!showList}
                   onTogglePanel={(next) => setPanel((current) => (current === next ? null : next))}

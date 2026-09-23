@@ -12,6 +12,7 @@ import {
   getChatsRevision,
   listBouquetTemplates,
   listChats,
+  listQuickReplies,
   listUsers,
   type ChatTab,
 } from "@/lib/db"
@@ -57,6 +58,7 @@ export default async function ChatsPage({
         currentUser={{ id: user.id, name: user.name }}
         users={users}
         bouquets={listBouquetTemplates({ activeOnly: true })}
+        initialQuickReplies={listQuickReplies()}
         products={listProducts()}
         customers={listCustomerOptions()}
         initialChats={listChats({ tab, userId: user.id })}

@@ -22,10 +22,11 @@ import {
   UserRoundCheckIcon,
   WandSparklesIcon,
   XIcon,
+  ZapIcon,
 } from "lucide-react"
 import { toast } from "sonner"
-import { markChatAnsweredAction, sendBouquetToChatAction, sendChatMessageAction } from "@/app/actions"
-import type { BouquetTemplate, ChatSummary, WazzupMessage } from "@/lib/db"
+import { markChatAnsweredAction, markQuickReplyUsedAction, sendBouquetToChatAction, sendChatMessageAction } from "@/app/actions"
+import type { BouquetTemplate, ChatSummary, QuickReply, WazzupMessage } from "@/lib/db"
 import { chatUploadTypes, maxChatUploadSize } from "@/lib/chat-uploads"
 import { parseDbInstant } from "@/lib/datetime"
 import { wazzupMessageTypeLabel } from "@/lib/labels"
@@ -48,10 +49,18 @@ import { Textarea } from "@/components/ui/textarea"
 import { BouquetPickerDialog } from "./bouquet-picker"
 import { ChatAvatar, channelMeta, formatDayLabel, formatPhone, formatWaiting, sameDay } from "./chat-shared"
 import { copyMessageText, formatSeconds, guessFileName, mediaUrl, MessageBubble, type BubbleMessage, type MessageAction } from "./message-bubble"
+import {
+  applyQuickReply,
+  filterQuickReplies,
+  parseSlashQuery,
+  QuickRepliesPanel,
+  QuickReplyDialog,
+  type QuickReplyDraft,
+} from "./quick-replies"
 
 // Окно диалога: шапка с контактом и действиями (позвонить, контакт, заказы, ответственный),
 // лента сообщений с поллингом по revision, композер (текст, вложения перетаскиванием/вставкой/
-// скрепкой, голосовое, букет из каталога, ответ на сообщение). Монтируется с key=chat.id —
+// скрепкой, голосовое, букет из каталога, быстрые ответы, ответ на сообщение). Монтируется с key=chat.id —
 // смена диалога = свежее состояние без ручных сбросов.
 
 const pollIntervalMs = 3000
@@ -104,6 +113,8 @@ export function ChatWindow({
   currentUser,
   users,
   bouquets,
+  quickReplies,
+  onQuickRepliesChange,
   panel,
   showBack,
   onTogglePanel,
@@ -117,6 +128,9 @@ export function ChatWindow({
   currentUser: { id: number; name: string }
   users: Array<{ id: number; name: string }>
   bouquets: BouquetTemplate[]
+  // Быстрые ответы живут на экране: окно диалога пересоздаётся при смене чата, а правки должны остаться.
+  quickReplies: QuickReply[]
+  onQuickRepliesChange: (replies: QuickReply[]) => void
   panel: "contact" | "orders" | null
   showBack: boolean
   onTogglePanel: (panel: "contact" | "orders") => void
@@ -141,6 +155,12 @@ export function ChatWindow({
   const [recording, setRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
   const [transcribing, setTranscribing] = useState(false)
+  // Быстрые ответы: «/» в начале поля или кнопка ⚡ (browse — со своим поиском).
+  const [quickBrowse, setQuickBrowse] = useState(false)
+  const [quickSearch, setQuickSearch] = useState("")
+  const [quickIndex, setQuickIndex] = useState(0)
+  const [slashDismissed, setSlashDismissed] = useState<string | null>(null)
+  const [quickDraft, setQuickDraft] = useState<QuickReplyDraft | null>(null)
 
   const revisionRef = useRef("")
   const tempIdRef = useRef(-1)
@@ -153,6 +173,8 @@ export function ChatWindow({
   const streamRef = useRef<MediaStream | null>(null)
   const recordActionRef = useRef<RecordAction>("send")
   const stickToBottomRef = useRef(true)
+  // Позиция курсора в поле на момент открытия ⚡ — туда и вставим выбранный ответ.
+  const caretRef = useRef<{ start: number; end: number } | null>(null)
 
   const chatId = chat.id
   const liveChat = view.status === "ok" ? view.chat : chat
@@ -561,6 +583,9 @@ export function ChatWindow({
       case "copy":
         void copyMessageText(message.text)
         return
+      case "saveQuickReply":
+        setQuickDraft({ id: null, title: "", text: message.text })
+        return
       case "open":
         window.open(mediaUrl(message), "_blank", "noopener")
         return
@@ -581,7 +606,88 @@ export function ChatWindow({
     }
   }
 
+  const slashQuery = parseSlashQuery(input)
+  const quickMode: "slash" | "browse" | null = quickBrowse ? "browse" : slashQuery !== null && input !== slashDismissed ? "slash" : null
+  const quickQuery = quickMode === "browse" ? quickSearch : (slashQuery ?? "")
+  const quickFiltered = useMemo(
+    () => (quickMode ? filterQuickReplies(quickReplies, quickQuery) : []),
+    [quickMode, quickReplies, quickQuery]
+  )
+  const quickActive = Math.min(quickIndex, Math.max(quickFiltered.length - 1, 0))
+
+  const closeQuick = useCallback(() => {
+    setQuickBrowse(false)
+    setQuickSearch("")
+    setQuickIndex(0)
+    // «/запрос» остаётся в поле как текст — панель не всплывает снова, пока его не изменят.
+    setSlashDismissed(input)
+  }, [input])
+
+  function toggleQuickBrowse() {
+    if (quickBrowse) {
+      closeQuick()
+      textareaRef.current?.focus()
+      return
+    }
+    const el = textareaRef.current
+    caretRef.current = el ? { start: el.selectionStart, end: el.selectionEnd } : null
+    setQuickSearch("")
+    setQuickIndex(0)
+    setQuickBrowse(true)
+  }
+
+  // Выбор ответа: из «/» — заменяет запрос в поле; из ⚡ — вставляется в место курсора.
+  function pickQuickReply(reply: QuickReply) {
+    const text = applyQuickReply(reply.text, liveChat.name)
+    let next = text
+    let caret = text.length
+    if (quickMode === "browse" && parseSlashQuery(input) === null && input.trim()) {
+      const start = Math.min(caretRef.current?.start ?? input.length, input.length)
+      const end = Math.min(caretRef.current?.end ?? input.length, input.length)
+      const before = input.slice(0, start)
+      const after = input.slice(end)
+      const lead = before && !/\s$/.test(before) ? " " : ""
+      const trail = after && !/^\s/.test(after) ? " " : ""
+      next = `${before}${lead}${text}${trail}${after}`
+      caret = before.length + lead.length + text.length
+    }
+    setInput(next)
+    setQuickBrowse(false)
+    setQuickSearch("")
+    setQuickIndex(0)
+    setSlashDismissed(null)
+    void markQuickReplyUsedAction(reply.id)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      el?.focus()
+      el?.setSelectionRange(caret, caret)
+    })
+  }
+
+  function handleQuickSaved(replies: QuickReply[]) {
+    onQuickRepliesChange(replies)
+    setQuickIndex(0)
+  }
+
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (quickMode === "slash") {
+      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && quickFiltered.length) {
+        event.preventDefault()
+        const delta = event.key === "ArrowDown" ? 1 : -1
+        setQuickIndex((quickActive + delta + quickFiltered.length) % quickFiltered.length)
+        return
+      }
+      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && quickFiltered[quickActive]) {
+        event.preventDefault()
+        pickQuickReply(quickFiltered[quickActive])
+        return
+      }
+      if (event.key === "Escape") {
+        event.preventDefault()
+        closeQuick()
+        return
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault()
       void send()
@@ -827,7 +933,25 @@ export function ChatWindow({
       </div>
 
       {/* Композер */}
-      <div className="flex shrink-0 flex-col bg-background px-3 py-2.5 sm:px-4">
+      <div className="relative flex shrink-0 flex-col bg-background px-3 py-2.5 sm:px-4">
+        {quickMode ? (
+          <QuickRepliesPanel
+            replies={quickReplies}
+            filtered={quickFiltered}
+            mode={quickMode}
+            query={quickQuery}
+            activeIndex={quickActive}
+            draftText={slashQuery === null ? input : ""}
+            onQueryChange={(value) => {
+              setQuickSearch(value)
+              setQuickIndex(0)
+            }}
+            onActiveIndexChange={setQuickIndex}
+            onPick={pickQuickReply}
+            onEdit={setQuickDraft}
+            onClose={closeQuick}
+          />
+        ) : null}
         <div className="flex flex-col gap-2">
           {replyTo ? (
             <div className="flex items-start gap-2 rounded-xl border-l-2 border-brand bg-zinc-100 px-3 py-2 text-xs">
@@ -909,13 +1033,24 @@ export function ChatWindow({
               />
               <ComposerButton icon={PaperclipIcon} label="Прикрепить файл" onClick={() => fileInputRef.current?.click()} disabled={sending} />
               <ComposerButton icon={Flower2Icon} label="Предложить букет" onClick={() => setBouquetOpen(true)} disabled={sending} />
+              <ComposerButton
+                icon={ZapIcon}
+                label="Быстрые ответы"
+                onClick={toggleQuickBrowse}
+                disabled={sending || view.status !== "ok"}
+                active={quickMode !== null}
+                toggle
+              />
               <Textarea
                 ref={textareaRef}
                 value={input}
-                onChange={(event) => setInput(event.target.value)}
+                onChange={(event) => {
+                  setInput(event.target.value)
+                  setQuickIndex(0)
+                }}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
-                placeholder="Сообщение…"
+                placeholder={quickReplies.length ? "Сообщение… «/» — быстрые ответы" : "Сообщение…"}
                 rows={1}
                 className="max-h-40 min-h-10 flex-1 resize-none border-0 bg-transparent px-2 py-2.5 text-base shadow-none field-sizing-content focus-visible:ring-0 sm:text-sm"
                 disabled={sending || view.status !== "ok"}
@@ -949,6 +1084,16 @@ export function ChatWindow({
           </span>
         </div>
       ) : null}
+
+      <QuickReplyDialog
+        draft={quickDraft}
+        onOpenChange={(open) => {
+          if (!open) {
+            setQuickDraft(null)
+          }
+        }}
+        onSaved={handleQuickSaved}
+      />
 
       <BouquetPickerDialog open={bouquetOpen} onOpenChange={setBouquetOpen} bouquets={bouquets} busyId={bouquetBusy} onSend={sendBouquet} />
 
@@ -1048,22 +1193,28 @@ function ComposerButton({
   label,
   onClick,
   disabled,
+  active,
+  toggle = false,
 }: {
   icon: React.ComponentType<{ className?: string }>
   label: string
   onClick: () => void
   disabled?: boolean
+  active?: boolean
+  // Кнопка-переключатель панели: помечается для «клика мимо» и держит aria-pressed.
+  toggle?: boolean
 }) {
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon-lg"
-      className="size-10 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+      className={cn("size-10 shrink-0 rounded-full text-muted-foreground hover:text-foreground", active && "bg-background text-foreground shadow-xs")}
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
       title={label}
+      {...(toggle ? { "data-quick-replies-toggle": "", "aria-pressed": Boolean(active) } : {})}
     >
       <Icon className="size-5" />
     </Button>

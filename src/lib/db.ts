@@ -177,6 +177,16 @@ export {
   isGroupChatType,
 } from "./db/queries/chats"
 export type { ChatTab, ChatSummary, ChatCounts } from "./db/queries/chats"
+export {
+  listQuickReplies,
+  createQuickReply,
+  updateQuickReply,
+  deleteQuickReply,
+  markQuickReplyUsed,
+  quickReplyTextMax,
+  quickReplyTitleMax,
+} from "./db/queries/quick-replies"
+export type { QuickReply, QuickReplyInput } from "./db/queries/quick-replies"
 export type {
   WazzupChatIdentity,
   OutboundWazzupMessageInput,

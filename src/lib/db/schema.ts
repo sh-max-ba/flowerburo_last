@@ -1373,3 +1373,21 @@ export function migrateChats(client: Database.Database) {
 export function migrateOrderImageKind(client: Database.Database) {
   ensureColumn("order_images", "kind", "ALTER TABLE order_images ADD COLUMN kind TEXT NOT NULL DEFAULT 'photo'", client)
 }
+
+// v29: быстрые ответы для чатов — общие для команды заготовки текста (реквизиты, доставка,
+// приветствие). Создают и правят owner и manager; usage_count поднимает частые наверх списка.
+export function migrateQuickReplies(client: Database.Database) {
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS quick_replies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL DEFAULT '',
+      text TEXT NOT NULL,
+      usage_count INTEGER NOT NULL DEFAULT 0,
+      last_used_at TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `)
+}

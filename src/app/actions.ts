@@ -108,6 +108,13 @@ import {
   markChatAnswered,
   getChatById,
   findOrCreateWhatsappChat,
+  listQuickReplies,
+  createQuickReply,
+  updateQuickReply,
+  deleteQuickReply,
+  markQuickReplyUsed,
+  type QuickReply,
+  type QuickReplyInput,
   type StockDocumentType,
   type UserRole,
   type CurrentUser,
@@ -1289,6 +1296,49 @@ export async function assignChatAction(chatId: number, userId: number | null): P
     assignChat(chatId, target ? { id: target.id, name: target.name } : null)
     revalidateChats()
   }, userId === null ? "Ответственный снят." : "Ответственный назначен.")
+}
+
+// Быстрые ответы: общий список команды, правят owner и manager. Мутации возвращают свежий список —
+// композер сразу показывает изменения без перезагрузки страницы.
+export async function saveQuickReplyAction(
+  id: number | null,
+  input: QuickReplyInput
+): Promise<DataActionResult<{ id: number; replies: QuickReply[] }>> {
+  return runDataAction(
+    ["owner", "manager"],
+    (user) => {
+      let savedId = id ?? 0
+      if (id) {
+        updateQuickReply(id, input)
+      } else {
+        savedId = createQuickReply(input, user)
+      }
+      return { id: savedId, replies: listQuickReplies() }
+    },
+    id ? "Быстрый ответ сохранён." : "Быстрый ответ добавлен.",
+    "Не удалось сохранить быстрый ответ."
+  )
+}
+
+export async function deleteQuickReplyAction(id: number): Promise<DataActionResult<{ replies: QuickReply[] }>> {
+  return runDataAction(
+    ["owner", "manager"],
+    () => {
+      deleteQuickReply(id)
+      return { replies: listQuickReplies() }
+    },
+    "Быстрый ответ удалён.",
+    "Не удалось удалить быстрый ответ."
+  )
+}
+
+export async function markQuickReplyUsedAction(id: number): Promise<void> {
+  try {
+    await requireActionRole(["owner", "manager"])
+    markQuickReplyUsed(id)
+  } catch {
+    // счётчик — только для сортировки, ошибка не должна мешать ответу клиенту
+  }
 }
 
 export async function markChatAnsweredAction(chatId: number): Promise<ActionResult> {
