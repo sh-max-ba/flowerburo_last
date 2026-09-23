@@ -16,8 +16,9 @@ import { useSidebar } from "@/components/ui/sidebar"
 // пятая вкладка показывает его и подсвечена — видно, где ты.
 
 // Порядок важности разделов на телефоне: первые четыре доступных роли попадают на панель.
-// owner → Дашборд, Чаты, Касса, Заказы; manager → Чаты, Касса, Заказы, Готовые; florist → Заказы (+Касса).
-const MOBILE_PRIORITY: NavSectionId[] = ["dashboard", "chats", "sales", "orders", "ready-orders", "clients"]
+// owner → Аналитика, Чаты, Касса, Заказы (Дашборд — в «Ещё»); manager → Чаты, Касса, Заказы, Готовые;
+// florist → Заказы (+Касса).
+const MOBILE_PRIORITY: NavSectionId[] = ["analytics", "chats", "sales", "orders", "ready-orders", "clients"]
 const MOBILE_SLOTS = 4
 
 const SHORT_LABELS: Partial<Record<NavSectionId, string>> = {
@@ -95,6 +96,9 @@ const DOCK_LIFT = 8
 const DOCK_SPREAD = 2
 // Сдвиг пальца, после которого отпускание — «выбор скольжением», а не обычный тап.
 const DRAG_THRESHOLD_PX = 8
+// Лупа включается только при зажатии: палец держат дольше этого (мс) или ведут по доку.
+// Обычный тап её не трогает — док не дёргается.
+const HOLD_DELAY_MS = 250
 
 type MobileTabBarProps = {
   items: NavItem[]
@@ -114,17 +118,29 @@ type DockEntry = {
   ariaExpanded?: boolean
 }
 
-// Док-панель на телефоне: плавающая стеклянная капсула. Палец, ведомый по доку, увеличивает
-// иконку под собой и (слабее) соседей; отпускание над иконкой открывает раздел.
+// Док-панель на телефоне: плавающая стеклянная капсула. Тап — просто открывает раздел. Если палец
+// зажать или повести по доку, иконка под ним увеличивается (слабее — соседи); отпускание над
+// иконкой открывает раздел.
 export function MobileTabBar({ items, active, hidden = false, badges }: MobileTabBarProps) {
   const router = useRouter()
   const { setOpenMobile, openMobile } = useSidebar()
   const dockRef = useRef<HTMLDivElement | null>(null)
   const itemRefs = useRef<Array<HTMLElement | null>>([])
-  const pointerRef = useRef<{ id: number; startX: number; dragged: boolean } | null>(null)
+  const pointerRef = useRef<{ id: number; startX: number; lastX: number; held: boolean } | null>(null)
+  const holdTimerRef = useRef<number | null>(null)
   const suppressClickRef = useRef(false)
   // «Лупа»: позиция пальца/мыши по X внутри дока и замеренные центры иконок (null — выключена).
   const [lens, setLens] = useState<Lens | null>(null)
+
+  // Уход со страницы посреди зажатия — таймер лупы не должен сработать после размонтирования.
+  useEffect(() => {
+    const timers = holdTimerRef
+    return () => {
+      if (timers.current !== null) {
+        window.clearTimeout(timers.current)
+      }
+    }
+  }, [])
 
   const tabs = getMobileTabs(items)
   const activeInTabs = tabs.some((item) => item.id === active)
@@ -199,39 +215,55 @@ export function MobileTabBar({ items, active, hidden = false, badges }: MobileTa
     }
   }
 
+  function clearHoldTimer() {
+    if (holdTimerRef.current !== null) {
+      window.clearTimeout(holdTimerRef.current)
+      holdTimerRef.current = null
+    }
+  }
+
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
-    pointerRef.current = { id: event.pointerId, startX: event.clientX, dragged: false }
+    clearHoldTimer()
+    const pointer = { id: event.pointerId, startX: event.clientX, lastX: event.clientX, held: false }
+    pointerRef.current = pointer
     suppressClickRef.current = false
-    setLens(measure(event.clientX))
+    // Лупу не показываем сразу — только если палец задержался на доке.
+    holdTimerRef.current = window.setTimeout(() => {
+      holdTimerRef.current = null
+      if (pointerRef.current === pointer) {
+        pointer.held = true
+        setLens(measure(pointer.lastX))
+      }
+    }, HOLD_DELAY_MS)
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
     const pointer = pointerRef.current
-    if (event.pointerType === "mouse" && !pointer) {
-      // Мышь (планшет с мышью, отладка): лупа по наведению, как у дока macOS.
-      setLens(measure(event.clientX))
-      return
-    }
     if (!pointer || pointer.id !== event.pointerId) {
       return
     }
-    if (!pointer.dragged && Math.abs(event.clientX - pointer.startX) > DRAG_THRESHOLD_PX) {
-      pointer.dragged = true
+    pointer.lastX = event.clientX
+    // Повёл пальцем по доку — это тоже зажатие: лупа сразу, без ожидания.
+    if (!pointer.held && Math.abs(event.clientX - pointer.startX) > DRAG_THRESHOLD_PX) {
+      pointer.held = true
+      clearHoldTimer()
     }
-    setLens(measure(event.clientX))
+    if (pointer.held) {
+      setLens(measure(event.clientX))
+    }
   }
 
   function handlePointerUp(event: React.PointerEvent<HTMLDivElement>) {
     const pointer = pointerRef.current
     pointerRef.current = null
-    if (event.pointerType !== "mouse") {
-      setLens(null)
-    }
-    if (!pointer || !pointer.dragged) {
+    clearHoldTimer()
+    setLens(null)
+    if (!pointer || !pointer.held) {
+      // Обычный тап — работает штатный click по ссылке/кнопке.
       return
     }
-    // Скольжение: открываем раздел под пальцем, а синтетический click (на иконке, где палец
-    // коснулся) гасим.
+    // Зажатие/скольжение: открываем раздел под пальцем, а синтетический click (на иконке,
+    // где палец коснулся) гасим.
     const current = measure(event.clientX)
     suppressClickRef.current = true
     if (current) {
@@ -241,6 +273,7 @@ export function MobileTabBar({ items, active, hidden = false, badges }: MobileTa
 
   function handlePointerCancel() {
     pointerRef.current = null
+    clearHoldTimer()
     setLens(null)
   }
 
@@ -257,16 +290,11 @@ export function MobileTabBar({ items, active, hidden = false, badges }: MobileTa
       <nav aria-label="Разделы" className="pointer-events-auto w-full max-w-md">
         <div
           ref={dockRef}
-          className="relative flex touch-none items-end gap-0.5 rounded-[26px] bg-white/80 p-1.5 shadow-[0_10px_30px_-8px_rgba(24,24,27,0.28),inset_0_1px_0_rgba(255,255,255,0.75)] ring-1 ring-zinc-950/[0.07] backdrop-blur-2xl backdrop-saturate-150 select-none [-webkit-tap-highlight-color:transparent]"
+          className="relative flex touch-none items-end gap-0.5 rounded-[26px] bg-white/80 p-1.5 shadow-[0_10px_30px_-8px_rgba(24,24,27,0.28),inset_0_1px_0_rgba(255,255,255,0.75)] ring-1 ring-zinc-950/[0.07] backdrop-blur-2xl backdrop-saturate-150 select-none [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none]"
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
-          onPointerLeave={(event) => {
-            if (event.pointerType === "mouse") {
-              setLens(null)
-            }
-          }}
           onClickCapture={handleClickCapture}
           onContextMenu={(event) => event.preventDefault()}
         >
