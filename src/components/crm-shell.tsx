@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils"
 import { NAV_ICONS } from "@/lib/nav-icons"
 import { getPageTitle } from "@/lib/page-title"
 import { HeaderAction, HeaderPrimaryAction, ScreenChromeProvider, ScreenHeader } from "@/components/screen-header"
-import { MobileChromeProvider, MobileTabBadge, MobileTabBar } from "@/components/mobile-nav"
+import { MobileChromeProvider, MobileTabBadge, MobileTabBar, useTextInputFocused } from "@/components/mobile-nav"
 import { ShiftChip } from "@/components/shift-chip"
 import { SoundToggle } from "@/components/notifications/sound-toggle"
 import { ShiftSheet } from "@/components/shifts/shift-sheet"
@@ -93,6 +93,9 @@ export function CrmShell({
   const pathname = usePathname()
   const [shiftSheet, setShiftSheet] = useState(false)
   const [mobileNavHidden, setMobileNavHidden] = useState(false)
+  // Док прячется, пока экран просит (открытый чат) или открыта клавиатура.
+  const typing = useTextInputFocused()
+  const dockVisible = !mobileNavHidden && !typing
   const [isPending, startTransition] = useTransition()
   // Большинство CrmShell-страниц — owner/manager (clients/deals/shifts/...), для них
   // canAccessCash=false воспроизводит прежнее поведение (visibleItems по roles).
@@ -269,7 +272,9 @@ export function CrmShell({
             <div
               className={cn(
                 "flex min-h-0 flex-1 flex-col gap-2 p-2 md:gap-3 md:p-4",
-                layout === "fill" ? "overflow-hidden" : "overflow-y-auto"
+                layout === "fill" ? "overflow-hidden" : "overflow-y-auto",
+                // Док плавает поверх контента — снизу место под него (56px + поля + safe-area).
+                dockVisible && "max-md:pb-[calc(5.25rem+env(safe-area-inset-bottom))]"
               )}
             >
               {autoHeader}
@@ -277,11 +282,11 @@ export function CrmShell({
             </div>
           </ScreenChromeProvider>
         </MobileChromeProvider>
-        {/* Телефон (< md): нижняя панель разделов вместо гамбургера; «Ещё» открывает полное меню. */}
+        {/* Телефон (< md): стеклянный док разделов вместо гамбургера; «Ещё» открывает полное меню. */}
         <MobileTabBar
           items={visibleItems}
           active={sidebarActive}
-          hidden={mobileNavHidden}
+          hidden={!dockVisible}
           badges={{
             chats: <MobileCountBadge url="/api/chats/unanswered-count" />,
             "ready-orders": <MobileCountBadge url="/api/ready-orders/count" />,
