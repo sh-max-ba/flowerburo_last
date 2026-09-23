@@ -99,15 +99,15 @@ export function StockActsTable({ documents }: { documents: StockDocument[] }) {
             <TableRow>
               <ColHead>Документ</ColHead>
               <ColHead>Статус</ColHead>
-              <ColHead>Поставщик</ColHead>
-              <ColHead>Дата операции</ColHead>
+              <ColHead className="hidden @2xl/acts:table-cell">Поставщик</ColHead>
+              <ColHead className="hidden @2xl/acts:table-cell">Дата операции</ColHead>
               <ColHead className="hidden @5xl/acts:table-cell">Ответственный</ColHead>
               <ColHead className="hidden text-right @4xl/acts:table-cell">Позиций</ColHead>
               <ColHead className="text-right">Сумма</ColHead>
               <ColHead className="hidden text-right @5xl/acts:table-cell">Долг поставщику</ColHead>
               <ColHead className="hidden text-right @6xl/acts:table-cell">Сумма доставки</ColHead>
               <ColHead className="hidden @7xl/acts:table-cell">Комментарий</ColHead>
-              <ColHead className="w-8" />
+              <ColHead className="hidden w-8 @2xl/acts:table-cell" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -121,14 +121,19 @@ export function StockActsTable({ documents }: { documents: StockDocument[] }) {
                       <div className="min-w-0">
                         <div className="font-medium">{document.number}</div>
                         <div className="text-xs text-muted-foreground">{stockDocumentTypeLabel(document.type)}</div>
+                        {/* Узкий экран: дата и поставщик — строкой под номером вместо своих колонок. */}
+                        <div className="max-w-[44vw] truncate text-xs text-muted-foreground tabular-nums @2xl/acts:hidden">
+                          {formatOperation(document.operationAt ?? document.createdAt)}
+                          {document.supplierName ? ` · ${document.supplierName}` : ""}
+                        </div>
                       </div>
                     </div>
                   </TableCell>
                   <TableCell>
                     <StockDocumentStatusDot status={document.status} />
                   </TableCell>
-                  <TableCell className="max-w-32 truncate">{document.supplierName || "—"}</TableCell>
-                  <TableCell>
+                  <TableCell className="hidden max-w-32 truncate @2xl/acts:table-cell">{document.supplierName || "—"}</TableCell>
+                  <TableCell className="hidden @2xl/acts:table-cell">
                     <div className="font-medium tabular-nums">
                       {formatOperation(document.operationAt ?? document.createdAt)}
                     </div>
@@ -170,7 +175,7 @@ export function StockActsTable({ documents }: { documents: StockDocument[] }) {
                   <TableCell className="hidden @7xl/acts:table-cell">
                     <span className="block max-w-64 truncate text-muted-foreground">{document.comment || "—"}</span>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
+                  <TableCell className="hidden text-muted-foreground @2xl/acts:table-cell">
                     <ChevronRightIcon className="size-4" />
                   </TableCell>
                 </TableRow>

@@ -31,6 +31,7 @@ import { chatUploadTypes, maxChatUploadSize } from "@/lib/chat-uploads"
 import { parseDbInstant } from "@/lib/datetime"
 import { wazzupMessageTypeLabel } from "@/lib/labels"
 import { cn } from "@/lib/utils"
+import { useIsPhone } from "@/hooks/use-mobile"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
@@ -142,6 +143,7 @@ export function ChatWindow({
   // Что-то изменилось в диалоге (отправка, отметка) — экран обновит список.
   onActivity: () => void
 }) {
+  const phone = useIsPhone()
   const [view, setView] = useState<FeedView>({ status: "loading" })
   const [pending, setPending] = useState<PendingMessage[]>([])
   const [input, setInput] = useState("")
@@ -823,6 +825,7 @@ export function ChatWindow({
             active={panel === "orders"}
             onClick={() => onTogglePanel("orders")}
           />
+          {!phone ? (
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
@@ -860,6 +863,7 @@ export function ChatWindow({
               </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>
+          ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger
               render={<Button type="button" variant="ghost" size="icon-lg" className="size-10 text-muted-foreground" aria-label="Ещё" />}
@@ -883,6 +887,27 @@ export function ChatWindow({
                 <Loader2Icon />
                 Обновить ленту
               </DropdownMenuItem>
+              {phone ? (
+                // На телефоне в шапке нет места под «Ответственного» — выбор здесь.
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel>Ответственный</DropdownMenuLabel>
+                    <DropdownMenuRadioGroup
+                      value={liveChat.assignedUserId ? String(liveChat.assignedUserId) : "none"}
+                      onValueChange={(value) => onAssign(value === "none" ? null : Number(value))}
+                    >
+                      <DropdownMenuRadioItem value="none">Не назначен</DropdownMenuRadioItem>
+                      {users.map((user) => (
+                        <DropdownMenuRadioItem key={user.id} value={String(user.id)}>
+                          {user.name}
+                          {user.id === currentUser.id ? " (я)" : ""}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuGroup>
+                </>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

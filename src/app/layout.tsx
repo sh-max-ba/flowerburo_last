@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Golos_Text } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -17,6 +17,16 @@ const golosText = Golos_Text({
 export const metadata: Metadata = {
   title: "FlowerBuro | sellz",
   description: "Backoffice for a flower shop",
+};
+
+// Телефон: контент под вырезами (safe-area через env()), клавиатура Android сжимает окно,
+// а не перекрывает нижние кнопки.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  interactiveWidget: "resizes-content",
+  themeColor: "#ffffff",
 };
 
 export default function RootLayout({

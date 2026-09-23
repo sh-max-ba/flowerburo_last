@@ -223,7 +223,7 @@ export function ProductCard({ data }: { data: ProductCardData }) {
         leading={
           <>
             <HeaderAction icon={ArrowLeftIcon} label="Товары" href="/stock" className="pr-2" />
-            <span className="mx-0.5 h-5 w-px shrink-0 bg-border/60" aria-hidden />
+            <span className="mx-0.5 h-5 w-px shrink-0 bg-border/60 max-sm:hidden" aria-hidden />
             <PeriodPicker range={range} />
           </>
         }

@@ -1,20 +1,32 @@
 import * as React from "react"
 
-const MOBILE_BREAKPOINT = 768
-
+// Ниже md (768px) — телефон. Через useMediaQuery: при гидратации false, как на сервере,
+// иначе сайдбар (десктоп-разметка на сервере, лист на клиенте) ломал гидратацию всей страницы.
 export function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(() =>
-    typeof window === "undefined" ? undefined : window.innerWidth < MOBILE_BREAKPOINT
+  return useMediaQuery(PHONE_MEDIA)
+}
+
+function subscribeMedia(query: string) {
+  return (callback: () => void) => {
+    const mql = window.matchMedia(query)
+    mql.addEventListener("change", callback)
+    return () => mql.removeEventListener("change", callback)
+  }
+}
+
+// Медиазапрос без расхождения гидратации: на сервере и при гидратации — false, затем реальное значение.
+export function useMediaQuery(query: string) {
+  const subscribe = React.useMemo(() => subscribeMedia(query), [query])
+  return React.useSyncExternalStore(
+    subscribe,
+    () => window.matchMedia(query).matches,
+    () => false
   )
+}
 
-  React.useEffect(() => {
-    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
-    const onChange = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
-    }
-    mql.addEventListener("change", onChange)
-    return () => mql.removeEventListener("change", onChange)
-  }, [])
+// Телефон: уже md (768px) — там нижняя панель вместо сайдбара.
+export const PHONE_MEDIA = "(max-width: 767px)"
 
-  return !!isMobile
+export function useIsPhone() {
+  return useMediaQuery(PHONE_MEDIA)
 }

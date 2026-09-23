@@ -176,7 +176,7 @@ export function OrderDialog({
       <DialogContent className="flex h-[min(94vh,64rem)] max-h-[94vh] flex-col gap-0 overflow-hidden rounded-xl p-0 sm:max-w-3xl lg:max-w-6xl xl:max-w-7xl">
         <DialogHeader className="shrink-0 px-5 pt-4 pb-3">
           <DialogTitle>Новый заказ</DialogTitle>
-          <DialogDescription>{description ?? "Слева — состав, справа — клиент, получение и оплата."}</DialogDescription>
+          <DialogDescription className="max-sm:sr-only">{description ?? "Слева — состав, справа — клиент, получение и оплата."}</DialogDescription>
         </DialogHeader>
         <NewOrderForm
           products={products}
@@ -440,9 +440,10 @@ function NewOrderForm({
         <input type="hidden" name="recipientPhone" value={phoneForSubmit(recipientPhone)} />
         {initialSource ? <input type="hidden" name="source" value={initialSource} /> : null}
 
-        <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,11fr)_minmax(0,10fr)] lg:overflow-hidden">
-          {/* Левая колонка — состав */}
-          <section className="flex min-h-0 flex-col gap-3 bg-muted/30 px-5 py-4 lg:overflow-y-auto" aria-label="Состав заказа">
+        <div className="grid min-h-0 flex-1 content-start overflow-y-auto lg:grid-cols-[minmax(0,11fr)_minmax(0,10fr)] lg:content-stretch lg:overflow-hidden">
+          {/* Левая колонка — состав. Одной колонкой (ниже lg) секции высотой по содержимому —
+              min-h-0 там схлопывал строки сетки, и блоки наезжали друг на друга. */}
+          <section className="flex flex-col gap-3 bg-muted/30 px-4 py-4 sm:px-5 lg:min-h-0 lg:overflow-y-auto" aria-label="Состав заказа">
             <div className="flex items-center justify-between gap-2">
               <h3 className="font-heading text-sm font-semibold">Состав</h3>
               <span className="text-xs text-muted-foreground tabular-nums">
@@ -480,11 +481,11 @@ function NewOrderForm({
           </section>
 
           {/* Правая колонка — этапы */}
-          <section className="flex min-h-0 flex-col lg:overflow-hidden" aria-label="Данные заказа">
-            <div className="shrink-0 px-5 pt-4">
+          <section className="flex flex-col lg:min-h-0 lg:overflow-hidden" aria-label="Данные заказа">
+            <div className="shrink-0 px-4 pt-4 sm:px-5">
               <StepSwitch value={step} done={stepDone} onChange={setStep} />
             </div>
-            <div className="flex min-h-0 flex-1 flex-col gap-5 px-5 py-4 lg:overflow-y-auto">
+            <div className="flex flex-1 flex-col gap-5 px-4 py-4 sm:px-5 lg:min-h-0 lg:overflow-y-auto">
               {/* 1. Клиент */}
               <div className={cn("flex flex-col gap-4", step !== "customer" && "hidden")}>
                 <FieldGroup>
@@ -710,12 +711,12 @@ function NewOrderForm({
         </div>
 
         {/* Футер: итог + остаток + главное действие. */}
-        <div className="shrink-0 border-t border-border/40 bg-background px-5 py-3">
+        <div className="shrink-0 border-t border-border/40 bg-background px-4 py-3 sm:px-5">
           <div className="flex flex-col gap-3 @3xl/order:flex-row @3xl/order:items-center @3xl/order:justify-between">
             <div className="flex items-end gap-6">
               <div>
                 <div className="text-xs text-muted-foreground">Итого после скидок</div>
-                <div className="text-2xl font-semibold leading-tight tabular-nums">{formatMoney(total)}</div>
+                <div className="text-xl font-semibold leading-tight tabular-nums sm:text-2xl">{formatMoney(total)}</div>
               </div>
               <div>
                 {fullyPaid ? (
@@ -726,17 +727,18 @@ function NewOrderForm({
                 ) : (
                   <>
                     <div className="text-xs text-muted-foreground">Остаток к доплате</div>
-                    <div className="text-2xl font-semibold leading-tight tabular-nums">{formatMoney(Math.max(0, balance))}</div>
+                    <div className="text-xl font-semibold leading-tight tabular-nums sm:text-2xl">{formatMoney(Math.max(0, balance))}</div>
                   </>
                 )}
               </div>
             </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 sm:flex sm:flex-row sm:items-center">
               {/* Черновик: недоформленный заказ (минимум — имя клиента), без резерва склада. Доступен
                   даже без позиций/смены, поэтому НЕ гейтится orderDisabled. */}
               <Button type="submit" data-intent="draft" variant="ghost" className="h-11 bg-muted/60 sm:min-w-44" disabled={pending || prepaidSplit.enabled}>
                 <ReceiptTextIcon data-icon="inline-start" />
-                Сохранить черновик
+                <span className="sm:hidden">Черновик</span>
+                <span className="max-sm:hidden">Сохранить черновик</span>
               </Button>
               <TooltipProvider>
                 <Tooltip>
@@ -757,6 +759,10 @@ function NewOrderForm({
               </TooltipProvider>
             </div>
           </div>
+          {/* На тач-экране подсказки по наведению нет — причину показываем текстом. */}
+          {orderDisabledReason && !pending ? (
+            <p className="mt-2 text-xs text-muted-foreground sm:hidden">{orderDisabledReason}</p>
+          ) : null}
           {prepaidSplit.enabled && (
             <p className="mt-2 text-xs text-muted-foreground">
               Черновик хранит один способ предоплаты — уберите смешанную оплату или проведите заказ сразу.

@@ -10,6 +10,7 @@ import type { BouquetTemplate, ChatCounts, ChatSummary, ChatTab, CustomerOption,
 import { cn } from "@/lib/utils"
 import { OrderDialog } from "@/components/orders/new-order-dialog"
 import type { ProductLineItem } from "@/components/products/product-line-items"
+import { useHideMobileNav } from "@/components/mobile-nav"
 import { ScreenBody } from "@/components/screen-body"
 import { HeaderAction, HeaderPrimaryAction, ScreenHeader } from "@/components/screen-header"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
@@ -122,6 +123,23 @@ export function ChatsScreen({
 
   const wide = containerWidth >= wideContainerPx
   const showList = containerWidth >= listContainerPx || !selected
+  // Узкий экран с открытым диалогом: переписка на весь экран — без шапки раздела и нижней панели.
+  const chatFocused = !showList
+  useHideMobileNav(chatFocused)
+  // Диалог, открытый из списка на узком экране, кладёт запись в историю — системное «назад»
+  // (жест, кнопка Android) возвращает к списку, а не уводит из чатов.
+  const chatHistoryEntryRef = useRef(false)
+
+  useEffect(() => {
+    function onPopState() {
+      if (!new URL(window.location.href).searchParams.get("chat")) {
+        chatHistoryEntryRef.current = false
+        setSelected(null)
+      }
+    }
+    window.addEventListener("popstate", onPopState)
+    return () => window.removeEventListener("popstate", onPopState)
+  }, [])
 
   // Поиск — на сервере, с задержкой набора.
   useEffect(() => {
@@ -213,7 +231,7 @@ export function ChatsScreen({
     loadInbox().catch(() => undefined)
   }, [loadInbox])
 
-  function syncUrl(chatId: number | null) {
+  function syncUrl(chatId: number | null, mode: "replace" | "push" = "replace") {
     const url = new URL(window.location.href)
     if (chatId) {
       url.searchParams.set("chat", String(chatId))
@@ -225,12 +243,30 @@ export function ChatsScreen({
     url.searchParams.delete("new")
     url.searchParams.delete("tab")
     url.searchParams.delete("customer")
-    window.history.replaceState(window.history.state, "", url.toString())
+    if (mode === "push") {
+      window.history.pushState(window.history.state, "", url.toString())
+    } else {
+      window.history.replaceState(window.history.state, "", url.toString())
+    }
   }
 
   function selectChat(chat: ChatSummary | null) {
+    const pushEntry = Boolean(chat) && !selected && containerWidth < listContainerPx
     setSelected(chat)
-    syncUrl(chat?.id ?? null)
+    syncUrl(chat?.id ?? null, pushEntry ? "push" : "replace")
+    if (pushEntry) {
+      chatHistoryEntryRef.current = true
+    }
+  }
+
+  // «К списку»: если диалог открыт своей записью истории — назад по истории (popstate закроет его).
+  function closeChat() {
+    if (chatHistoryEntryRef.current) {
+      chatHistoryEntryRef.current = false
+      window.history.back()
+      return
+    }
+    selectChat(null)
   }
 
   async function selectChatById(chatId: number) {
@@ -327,7 +363,7 @@ export function ChatsScreen({
   return (
     <>
       <ScreenHeader
-        className="rounded-lg"
+        className={cn("rounded-lg", chatFocused && "hidden")}
         title="Чаты"
         search={{
           value: searchInput,
@@ -382,7 +418,7 @@ export function ChatsScreen({
                   showBack={!showList}
                   onTogglePanel={(next) => setPanel((current) => (current === next ? null : next))}
                   onAssign={(userId) => void runChatAction(() => assignChatAction(selected.id, userId))}
-                  onBack={() => selectChat(null)}
+                  onBack={closeChat}
                   onForward={setForwardMessage}
                   onAttachToOrder={(message, kind) => void attachToOrder(message, kind)}
                   onActivity={refreshInbox}
@@ -416,7 +452,7 @@ export function ChatsScreen({
 
       {!wide ? (
         <Sheet open={Boolean(panel && selected)} onOpenChange={(open) => !open && setPanel(null)}>
-          <SheetContent side="right" showCloseButton={false} className="w-full gap-0 p-0 sm:max-w-md">
+          <SheetContent side="right" showCloseButton={false} className="w-full gap-0 p-0 data-[side=right]:w-full sm:max-w-md data-[side=right]:sm:max-w-md">
             <SheetHeader className="sr-only">
               <SheetTitle>{panel === "contact" ? "Контакт" : "Заказы клиента"}</SheetTitle>
               <SheetDescription>Панель диалога</SheetDescription>

@@ -132,8 +132,9 @@ export function ProductCombobox({
   }, [clearBlurTimeout])
 
   // Автофокус на поле поиска при входе на экран продажи — позиции набивают руками.
+  // На телефоне не фокусируем: клавиатура закрыла бы полэкрана сразу при входе.
   useEffect(() => {
-    if (autoFocus) {
+    if (autoFocus && !window.matchMedia("(max-width: 767px)").matches) {
       inputRef.current?.focus({ preventScroll: true })
     }
   }, [autoFocus])
@@ -286,11 +287,8 @@ export function ProductCombobox({
                 onActivate={setActiveIndex}
                 onSelect={selectResult}
                 className="fixed z-[9999]"
-                style={{
-                  left: dropdownRect.left,
-                  top: dropdownRect.bottom + 6,
-                  width: dropdownRect.width,
-                }}
+                style={portalDropdownStyle(dropdownRect)}
+                maxListHeight={Math.max(160, window.innerHeight - dropdownRect.bottom - 24)}
               />,
               document.body
             )
@@ -310,6 +308,16 @@ export function ProductCombobox({
   )
 }
 
+// Выпадающий список у поля: на телефоне поле узкое (рядом чип смены и кнопки) — список на всю
+// ширину экрана с отступами, чтобы названия и остатки читались.
+function portalDropdownStyle(rect: DOMRect): React.CSSProperties {
+  const viewportWidth = window.innerWidth
+  if (viewportWidth < 640) {
+    return { left: 8, top: rect.bottom + 6, width: viewportWidth - 16 }
+  }
+  return { left: rect.left, top: rect.bottom + 6, width: rect.width }
+}
+
 function ProductComboboxDropdown({
   results,
   showTypeBadge,
@@ -320,6 +328,7 @@ function ProductComboboxDropdown({
   onSelect,
   className,
   style,
+  maxListHeight = 336,
 }: {
   results: ProductComboboxResult[]
   showTypeBadge: boolean
@@ -330,6 +339,7 @@ function ProductComboboxDropdown({
   onSelect: (result: ProductComboboxResult) => void
   className?: string
   style?: React.CSSProperties
+  maxListHeight?: number
 }) {
   return (
     <div
@@ -337,7 +347,7 @@ function ProductComboboxDropdown({
       style={style}
     >
       {results.length > 0 ? (
-        <ScrollArea style={{ height: Math.min(results.length * 72, 336) }}>
+        <ScrollArea style={{ height: Math.min(results.length * 72, 336, maxListHeight) }}>
           <div className="flex flex-col gap-1" role="listbox" id={listboxId}>
             {results.map((result, index) => {
               const active = index === activeIndex

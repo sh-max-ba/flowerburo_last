@@ -25,6 +25,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { LineComposition } from "@/components/cash/line-composition"
 import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
 import { cn, formatMoney } from "@/lib/utils"
+import { useIsPhone } from "@/hooks/use-mobile"
 import { cashTransactionTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import type { CashLedgerEntry, CashTransactionType } from "@/lib/db"
 
@@ -46,6 +47,7 @@ export function CashLedger({ entries, showStockHistoryLink = false }: { entries:
   const [methodFilter, setMethodFilter] = useState("all")
   const [query, setQuery] = useState("")
   const [openId, setOpenId] = useState<number | null>(null)
+  const phone = useIsPhone()
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -119,6 +121,57 @@ export function CashLedger({ entries, showStockHistoryLink = false }: { entries:
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
+        ) : phone ? (
+          // Телефон: карточки вместо 8 колонок — тип и сумма крупно, время/способ/кто строкой ниже.
+          <ul className="flex flex-col">
+            {filtered.map((entry) => {
+              const outflow = OUTFLOW_TYPES.has(entry.type)
+              const expandable = isExpandable(entry)
+              const isOpen = openId === entry.id
+              return (
+                <li key={entry.id} className="border-b border-border/40 last:border-b-0">
+                  <button
+                    type="button"
+                    className="flex w-full flex-col gap-1 px-3 py-3 text-left outline-none focus-visible:bg-muted/50 disabled:opacity-100"
+                    disabled={!expandable}
+                    aria-expanded={expandable ? isOpen : undefined}
+                    onClick={() => setOpenId(isOpen ? null : entry.id)}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <Badge variant={entry.type === "cash_refund" ? "destructive" : "outline"}>
+                        {cashTransactionTypeLabel(entry.type)}
+                      </Badge>
+                      <span className="flex items-center gap-1">
+                        <span className={cn("text-base font-semibold tabular-nums", outflow ? "text-red-600" : "text-zinc-900")}>
+                          {outflow ? "−" : "+"}
+                          {formatMoney(entry.amount)}
+                        </span>
+                        {expandable ? (
+                          <ChevronDownIcon
+                            className={cn("size-4 shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-180")}
+                            aria-hidden
+                          />
+                        ) : null}
+                      </span>
+                    </span>
+                    {entry.orderId || entry.saleId || entry.customerName ? (
+                      <span className="truncate text-sm">{renderLink(entry)}</span>
+                    ) : null}
+                    <span className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+                      <span className="tabular-nums">{formatDateTime(entry.createdAt)}</span>
+                      <span>{getPaymentMethodLabel(entry.paymentMethod)}</span>
+                      {entry.userName ? <span>{entry.userName}</span> : null}
+                      {entry.discountAmount > 0 ? (
+                        <span className="text-emerald-700">скидка −{formatMoney(entry.discountAmount)}</span>
+                      ) : null}
+                    </span>
+                    {entry.comment ? <span className="text-xs text-muted-foreground">{entry.comment}</span> : null}
+                  </button>
+                  {expandable && isOpen ? <div className="bg-muted/30">{renderEntryPanels(entry)}</div> : null}
+                </li>
+              )
+            })}
+          </ul>
         ) : (
           <div className="overflow-x-auto">
             <Table>
@@ -137,11 +190,7 @@ export function CashLedger({ entries, showStockHistoryLink = false }: { entries:
               <TableBody>
                 {filtered.map((entry) => {
                   const outflow = OUTFLOW_TYPES.has(entry.type)
-                  const expandable =
-                    entry.items.length > 0 ||
-                    entry.orderId !== null ||
-                    entry.type === "cash_in" ||
-                    entry.type === "cash_out"
+                  const expandable = isExpandable(entry)
                   const isOpen = openId === entry.id
                   return (
                     <Fragment key={entry.id}>
@@ -199,16 +248,7 @@ export function CashLedger({ entries, showStockHistoryLink = false }: { entries:
                       {expandable && isOpen && (
                         <TableRow>
                           <TableCell colSpan={8} className="bg-muted/30 p-0">
-                            {entry.items.length > 0 ? <LineComposition items={entry.items} /> : null}
-                            {/* Для выплат (cash_out) по заказу правильное действие — встречная
-                                операция, а не отмена всего заказа: панель отмены тут не место. */}
-                            {entry.orderId !== null && entry.type !== "cash_out" ? (
-                              <OrderCancelPanel entry={entry} />
-                            ) : null}
-                            {entry.type === "cash_in" || entry.type === "cash_out" ? (
-                              <ReverseOpPanel entry={entry} />
-                            ) : null}
-                            {entry.type === "sale" ? <SaleStornoPanel entry={entry} /> : null}
+                            {renderEntryPanels(entry)}
                           </TableCell>
                         </TableRow>
                       )}
@@ -224,6 +264,23 @@ export function CashLedger({ entries, showStockHistoryLink = false }: { entries:
   )
 }
 
+function isExpandable(entry: CashLedgerEntry) {
+  return entry.items.length > 0 || entry.orderId !== null || entry.type === "cash_in" || entry.type === "cash_out"
+}
+
+// Раскрытая строка: состав и действия (отмена заказа, отмена операции, сторно продажи).
+function renderEntryPanels(entry: CashLedgerEntry) {
+  return (
+    <>
+      {entry.items.length > 0 ? <LineComposition items={entry.items} /> : null}
+      {/* Для выплат (cash_out) по заказу правильное действие — встречная
+          операция, а не отмена всего заказа: панель отмены тут не место. */}
+      {entry.orderId !== null && entry.type !== "cash_out" ? <OrderCancelPanel entry={entry} /> : null}
+      {entry.type === "cash_in" || entry.type === "cash_out" ? <ReverseOpPanel entry={entry} /> : null}
+      {entry.type === "sale" ? <SaleStornoPanel entry={entry} /> : null}
+    </>
+  )
+}
 
 function renderLink(entry: CashLedgerEntry) {
   if (entry.orderId) {

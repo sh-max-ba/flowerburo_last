@@ -805,8 +805,8 @@ function ProductsTable({
             <SortableHead label="Товар" field="name" sort={sort} onToggleSort={onToggleSort} />
             <SortableHead label="Категория" field="category" sort={sort} onToggleSort={onToggleSort} className="hidden @3xl/products:table-cell" />
             <SortableHead label="Доступно" field="available" sort={sort} onToggleSort={onToggleSort} align="right" />
-            <SortableHead label="Цена" field="price" sort={sort} onToggleSort={onToggleSort} align="right" />
-            <TableHead className="w-28" />
+            <SortableHead label="Цена" field="price" sort={sort} onToggleSort={onToggleSort} align="right" className="hidden @xl/products:table-cell" />
+            <TableHead className="w-12 @xl/products:w-28" />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -821,12 +821,16 @@ function ProductsTable({
               }}
             >
               <TableCell>
-                <div className="flex min-w-40 items-center gap-2.5">
+                <div className="flex min-w-0 items-center gap-2.5 @xl/products:min-w-40">
                   <ProductThumbnail name={product.name} imagePath={product.imagePath} size="md" />
-                  <div className="min-w-0 max-w-72">
+                  <div className="min-w-0 max-w-[40vw] @xl/products:max-w-72">
                     <div className="truncate font-medium" title={product.name}>{product.name}</div>
-                    <div className="truncate text-xs text-muted-foreground">
+                    <div className="hidden truncate text-xs text-muted-foreground @xl/products:block">
                       {product.article || "Артикул не указан"}
+                    </div>
+                    {/* Узкий экран: колонки «Цена» нет — цена строкой под названием. */}
+                    <div className="truncate text-xs text-muted-foreground tabular-nums @xl/products:hidden">
+                      {formatMoney(product.salePrice)}
                     </div>
                   </div>
                 </div>
@@ -837,9 +841,48 @@ function ProductsTable({
               <TableCell className="text-right">
                 <StockBadge product={product} />
               </TableCell>
-              <TableCell className="text-right tabular-nums">{formatMoney(product.salePrice)}</TableCell>
+              <TableCell className="hidden text-right tabular-nums @xl/products:table-cell">{formatMoney(product.salePrice)}</TableCell>
               <TableCell>
-                <div className="flex justify-end gap-0.5 text-muted-foreground">
+                {/* Узкий экран (телефон): действия строки одним меню «⋯» — пять иконок не помещаются. */}
+                <div className="flex justify-end @xl/products:hidden">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button variant="ghost" size="icon" className="text-muted-foreground" aria-label={`Действия: ${product.name}`} />
+                      }
+                    >
+                      <MoreHorizontalIcon />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-52">
+                      <DropdownMenuItem render={<Link href={`/stock/products/${encodeURIComponent(product.code)}`} />}>
+                        <ChartSplineIcon />
+                        Карточка товара
+                      </DropdownMenuItem>
+                      {isArchiveView ? (
+                        <DropdownMenuItem onClick={() => onRestore(product)} disabled={pending}>
+                          <ArchiveRestoreIcon />
+                          Восстановить
+                        </DropdownMenuItem>
+                      ) : (
+                        <>
+                          <DropdownMenuItem onClick={() => onEdit(product)}>
+                            <PencilIcon />
+                            Редактировать
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => onArchive(product)}>
+                            <ArchiveIcon />
+                            В архив
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                      <DropdownMenuItem variant="destructive" onClick={() => onDelete(product)}>
+                        <Trash2Icon />
+                        {isArchiveView ? "Удалить навсегда" : "Удалить"}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                <div className="hidden justify-end gap-0.5 text-muted-foreground @xl/products:flex">
                   <Button
                     variant="ghost"
                     size="icon-sm"

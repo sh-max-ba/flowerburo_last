@@ -173,7 +173,7 @@ function StockCard({
 function StockStatusPill({ status }: { status: "negative" | "low" }) {
   if (status === "negative") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
+      <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-red-700">
         <TrendingDownIcon className="size-3 shrink-0" />
         В минусе
       </span>
@@ -181,7 +181,7 @@ function StockStatusPill({ status }: { status: "negative" | "low" }) {
   }
 
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-amber-700">
       <TriangleAlertIcon className="size-3 shrink-0" />
       Заканчивается
     </span>

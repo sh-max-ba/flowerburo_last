@@ -8,7 +8,6 @@ import {
   ArrowLeftIcon,
   Flower2Icon,
   LogOutIcon,
-  MenuIcon,
   MinusCircleIcon,
   PlusCircleIcon,
   PlusIcon,
@@ -23,6 +22,7 @@ import { cn } from "@/lib/utils"
 import { NAV_ICONS } from "@/lib/nav-icons"
 import { getPageTitle } from "@/lib/page-title"
 import { HeaderAction, HeaderPrimaryAction, ScreenChromeProvider, ScreenHeader } from "@/components/screen-header"
+import { MobileChromeProvider, MobileTabBadge, MobileTabBar } from "@/components/mobile-nav"
 import { ShiftChip } from "@/components/shift-chip"
 import { SoundToggle } from "@/components/notifications/sound-toggle"
 import { ShiftSheet } from "@/components/shifts/shift-sheet"
@@ -44,7 +44,6 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarRail,
-  SidebarTrigger,
 } from "@/components/ui/sidebar"
 
 type CrmShellProps = {
@@ -93,6 +92,7 @@ export function CrmShell({
   const router = useRouter()
   const pathname = usePathname()
   const [shiftSheet, setShiftSheet] = useState(false)
+  const [mobileNavHidden, setMobileNavHidden] = useState(false)
   const [isPending, startTransition] = useTransition()
   // Большинство CrmShell-страниц — owner/manager (clients/deals/shifts/...), для них
   // canAccessCash=false воспроизводит прежнее поведение (visibleItems по roles).
@@ -135,7 +135,11 @@ export function CrmShell({
             onShiftAction={() => setShiftSheet(true)}
           />
         ) : null}
-        {showSound ? <SoundToggle /> : null}
+        {showSound ? (
+          <span className="flex @max-xl/screen:hidden">
+            <SoundToggle />
+          </span>
+        ) : null}
       </>
     ) : null
 
@@ -146,6 +150,8 @@ export function CrmShell({
   // Вкладок «Склада» семь — им нужна своя строка; двум вкладкам стола заказов хватает 30% справа.
   const chrome = {
     leading,
+    // На телефоне звук уезжает из leading в раскрывающийся ряд действий — поле поиска шире.
+    compactActions: showSound ? <SoundToggle /> : null,
     tabs: subnavTabs,
     tabsPlacement: (subnav && subnav.tabs.length > 3 ? "row" : "inline") as "row" | "inline",
   }
@@ -258,24 +264,29 @@ export function CrmShell({
       </Sidebar>
 
       <SidebarInset className="h-svh min-h-0 overflow-hidden bg-muted/60">
-        {/* Мобильная полоса (< md): кнопка меню + раздел. На планшете и шире сайдбар всегда виден. */}
-        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/40 bg-background px-2 md:hidden">
-          <SidebarTrigger variant="ghost" size="icon" aria-label="Меню">
-            <MenuIcon />
-          </SidebarTrigger>
-          <span className="truncate text-sm font-medium">{pageTitle}</span>
-        </div>
-        <ScreenChromeProvider value={chrome}>
-          <div
-            className={cn(
-              "flex min-h-0 flex-1 flex-col gap-3 p-3 md:p-4",
-              layout === "fill" ? "overflow-hidden" : "overflow-y-auto"
-            )}
-          >
-            {autoHeader}
-            {children}
-          </div>
-        </ScreenChromeProvider>
+        <MobileChromeProvider value={{ setNavHidden: setMobileNavHidden }}>
+          <ScreenChromeProvider value={chrome}>
+            <div
+              className={cn(
+                "flex min-h-0 flex-1 flex-col gap-2 p-2 md:gap-3 md:p-4",
+                layout === "fill" ? "overflow-hidden" : "overflow-y-auto"
+              )}
+            >
+              {autoHeader}
+              {children}
+            </div>
+          </ScreenChromeProvider>
+        </MobileChromeProvider>
+        {/* Телефон (< md): нижняя панель разделов вместо гамбургера; «Ещё» открывает полное меню. */}
+        <MobileTabBar
+          items={visibleItems}
+          active={sidebarActive}
+          hidden={mobileNavHidden}
+          badges={{
+            chats: <MobileCountBadge url="/api/chats/unanswered-count" />,
+            "ready-orders": <MobileCountBadge url="/api/ready-orders/count" />,
+          }}
+        />
       </SidebarInset>
       {shiftContext ? (
         <ShiftSheet
@@ -440,8 +451,18 @@ function ReadyOrdersSidebarBadge() {
   return <SidebarMenuBadge>{count}</SidebarMenuBadge>
 }
 
+// Бейдж на нижней панели телефона — опрашивает только на узком экране (на планшете/ПК
+// тот же счётчик уже опрашивает сайдбар).
+function MobileCountBadge({ url }: { url: string }) {
+  const count = usePolledCount(url, MOBILE_MEDIA)
+  return <MobileTabBadge count={count} />
+}
+
+const MOBILE_MEDIA = "(max-width: 767px)"
+
 // Опрос счётчика раз в 5 сек, только пока вкладка видима; предыдущий запрос отменяется.
-function usePolledCount(url: string) {
+// media — опрашивать, только пока совпадает медиазапрос.
+function usePolledCount(url: string, media?: string) {
   const [count, setCount] = useState(0)
 
   useEffect(() => {
@@ -450,6 +471,9 @@ function usePolledCount(url: string) {
 
     async function loadCount() {
       if (document.visibilityState !== "visible") {
+        return
+      }
+      if (media && !window.matchMedia(media).matches) {
         return
       }
 
@@ -484,7 +508,7 @@ function usePolledCount(url: string) {
       controller?.abort()
       window.clearInterval(intervalId)
     }
-  }, [url])
+  }, [url, media])
 
   return count
 }

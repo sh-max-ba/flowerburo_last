@@ -1,9 +1,9 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useId } from "react"
+import { createContext, useCallback, useContext, useEffect, useId, useState } from "react"
 import Link from "next/link"
-import { SearchIcon, XIcon } from "lucide-react"
+import { SearchIcon, SlidersHorizontalIcon, XIcon } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -25,6 +25,8 @@ import {
 // Страница может переопределить вкладки своими (tabs) — тогда вкладки раздела не рисуются.
 export type ScreenChrome = {
   leading: React.ReactNode
+  // Кнопки, которые на телефоне уезжают из leading в раскрывающийся ряд действий (звук).
+  compactActions?: React.ReactNode
   tabs: React.ReactNode
   // "inline" — вкладки в первой строке справа (~30%); "row" — отдельной строкой на всю ширину
   // (когда вкладок много, как у «Склада»).
@@ -37,6 +39,29 @@ export const ScreenChromeProvider = ScreenChromeContext.Provider
 
 export function useScreenChrome() {
   return useContext(ScreenChromeContext)
+}
+
+// На телефоне второстепенные действия прячутся под одну кнопку — она помечается точкой,
+// если внутри включён фильтр. Фильтры сообщают о себе через этот контекст.
+const ActiveFiltersContext = createContext<(delta: number) => void>(() => undefined)
+// Кнопка лежит в ряду действий (а не в leading): на телефоне этот ряд раскрыт вторым рядом
+// во всю ширину — там подписи видны.
+const ActionsRowContext = createContext(false)
+
+// Подпись кнопки поля: в широкой шапке — с @5xl, в ряду действий на телефоне — всегда.
+function useActionLabelClass() {
+  return useContext(ActionsRowContext) ? "hidden @max-xl/screen:inline @5xl/screen:inline" : "hidden @5xl/screen:inline"
+}
+
+function useReportActiveFilter(active: boolean) {
+  const report = useContext(ActiveFiltersContext)
+  useEffect(() => {
+    if (!active) {
+      return
+    }
+    report(1)
+    return () => report(-1)
+  }, [active, report])
 }
 
 export type ScreenSearch = {
@@ -74,6 +99,8 @@ type ScreenHeaderProps = {
 
 // Единственная карточка-шапка экрана вместо трёх полос: первая строка — поле поиска (~70%)
 // с кнопками внутри и вкладки (~30%); ниже lg вкладки уходят второй строкой.
+// Телефон (контейнер < @xl, 576px): в поле остаются поиск и главная кнопка, остальные действия —
+// под кнопкой «Фильтры и действия», которая раскрывает их вторым рядом внутри того же поля.
 export function ScreenHeader({
   title,
   search,
@@ -88,6 +115,10 @@ export function ScreenHeader({
 }: ScreenHeaderProps) {
   const chrome = useScreenChrome()
   const inputId = useId()
+  const actionsId = useId()
+  const [actionsOpen, setActionsOpen] = useState(false)
+  const [activeFilters, setActiveFilters] = useState(0)
+  const reportActive = useCallback((delta: number) => setActiveFilters((count) => count + delta), [])
   const resolvedTabs = tabs === undefined ? chrome.tabs : tabs
   const placement = tabsPlacement ?? (tabs === undefined ? chrome.tabsPlacement : "inline")
   const inlineTabs = resolvedTabs && placement === "inline" ? resolvedTabs : null
@@ -96,11 +127,13 @@ export function ScreenHeader({
   const hasLeading = Boolean(chrome.leading) || Boolean(leading)
   // Шапка только из вкладок (напр. настройки): строку поля не рисуем вовсе.
   const hasBar = hasSearch || hasLeading || Boolean(actions) || Boolean(primaryAction) || Boolean(meta)
+  const compactActions = chrome.compactActions
+  const hasActions = Boolean(actions) || Boolean(compactActions)
 
   return (
     <header
       data-slot="screen-header"
-      className={cn("@container/screen shrink-0 rounded-2xl border border-border/65 bg-background p-3", className)}
+      className={cn("@container/screen shrink-0 rounded-2xl border border-border/65 bg-background p-2 sm:p-3", className)}
     >
       <h1 className="sr-only">{title}</h1>
       <div
@@ -115,7 +148,7 @@ export function ScreenHeader({
         <div
           data-search={hasSearch ? "" : undefined}
           className={cn(
-            "flex h-12 min-w-0 items-center gap-1 rounded-xl border border-transparent pl-1 pr-1 transition-colors",
+            "flex min-h-12 min-w-0 flex-wrap items-center gap-1 rounded-xl border border-transparent pl-1 pr-1 transition-colors @xl/screen:h-12 @xl/screen:flex-nowrap",
             hasSearch &&
               "bg-muted/55 focus-within:border-ring/50 focus-within:bg-background focus-within:ring-3 focus-within:ring-ring/15"
           )}
@@ -147,7 +180,7 @@ export function ScreenHeader({
                 value={search.value}
                 placeholder={search.placeholder}
                 onChange={(event) => search.onChange(event.target.value)}
-                className="h-full min-w-24 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground sm:text-sm [&::-webkit-search-cancel-button]:hidden"
+                className="h-12 min-w-16 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground sm:text-sm [&::-webkit-search-cancel-button]:hidden"
                 {...search.inputProps}
               />
               {search.value ? (
@@ -173,12 +206,45 @@ export function ScreenHeader({
               {search?.pending ? "Поиск…" : meta}
             </span>
           ) : null}
-          {actions || primaryAction ? (
-            <div className="flex shrink-0 items-center gap-1">
-              {actions}
-              {primaryAction}
-            </div>
+          {hasActions ? (
+            <ActiveFiltersContext.Provider value={reportActive}>
+              <ActionsRowContext.Provider value={true}>
+              <div
+                id={actionsId}
+                className={cn(
+                  "flex shrink-0 items-center gap-1",
+                  // Телефон: отдельный ряд под поиском (внутри того же поля), с подписями.
+                  "@max-xl/screen:order-last @max-xl/screen:basis-full @max-xl/screen:flex-wrap @max-xl/screen:border-t @max-xl/screen:border-border/40 @max-xl/screen:py-1",
+                  !actionsOpen && "@max-xl/screen:hidden"
+                )}
+              >
+                {compactActions ? <span className="flex @xl/screen:hidden">{compactActions}</span> : null}
+                {actions}
+              </div>
+              </ActionsRowContext.Provider>
+            </ActiveFiltersContext.Provider>
           ) : null}
+          {hasActions ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className={cn(
+                "relative size-10 shrink-0 text-muted-foreground @xl/screen:hidden",
+                actionsOpen && "bg-muted text-foreground"
+              )}
+              aria-expanded={actionsOpen}
+              aria-controls={actionsId}
+              aria-label="Фильтры и действия"
+              title="Фильтры и действия"
+              onClick={() => setActionsOpen((open) => !open)}
+            >
+              <SlidersHorizontalIcon className="size-4" aria-hidden />
+              {activeFilters > 0 && !actionsOpen ? (
+                <span className="absolute top-2 right-2 size-1.5 rounded-full bg-foreground" aria-hidden />
+              ) : null}
+            </Button>
+          ) : null}
+          {primaryAction ? <div className="flex shrink-0 items-center">{primaryAction}</div> : null}
         </div>
         ) : null}
         {inlineTabs ? (
@@ -216,6 +282,8 @@ export function HeaderAction({
   alwaysLabel = false,
   className,
 }: HeaderActionProps) {
+  useReportActiveFilter(active)
+  const labelClass = useActionLabelClass()
   const classes = cn(
     buttonVariants({ variant: "ghost" }),
     "h-10 min-w-10 gap-1.5 px-2.5 text-muted-foreground hover:text-foreground",
@@ -225,7 +293,7 @@ export function HeaderAction({
   const content = (
     <>
       <Icon className="size-4 shrink-0" aria-hidden />
-      <span className={alwaysLabel ? "inline" : "hidden @5xl/screen:inline"}>{label}</span>
+      <span className={alwaysLabel ? "inline" : labelClass}>{label}</span>
     </>
   )
 
@@ -318,6 +386,8 @@ export function HeaderFilter<V extends string>({
   disabled,
 }: HeaderFilterProps<V>) {
   const active = value !== allValue
+  useReportActiveFilter(active)
+  const labelClass = useActionLabelClass()
   const current = options.find((option) => option.value === value)
   const caption = active && current ? current.label : label
 
@@ -339,9 +409,9 @@ export function HeaderFilter<V extends string>({
         }
       >
         <Icon className="size-4 shrink-0" aria-hidden />
-        <span className="hidden max-w-36 truncate @5xl/screen:inline">{caption}</span>
+        <span className={cn("max-w-36 truncate", labelClass)}>{caption}</span>
         {active ? (
-          <span className="size-1.5 shrink-0 rounded-full bg-foreground @5xl/screen:hidden" aria-hidden />
+          <span className="size-1.5 shrink-0 rounded-full bg-foreground @max-xl/screen:hidden @5xl/screen:hidden" aria-hidden />
         ) : null}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
@@ -409,6 +479,8 @@ type HeaderPopoverProps = {
 
 // Кнопка внутри поля, раскрывающая поповер с произвольными фильтрами (период, сумма, поставщик…).
 export function HeaderPopover({ icon: Icon, label, active = false, count, align = "end", className, children }: HeaderPopoverProps) {
+  useReportActiveFilter(active)
+  const labelClass = useActionLabelClass()
   const caption = active && count ? `${label} · ${count}` : label
 
   return (
@@ -428,8 +500,8 @@ export function HeaderPopover({ icon: Icon, label, active = false, count, align 
         }
       >
         <Icon className="size-4 shrink-0" aria-hidden />
-        <span className="hidden @5xl/screen:inline">{caption}</span>
-        {active ? <span className="size-1.5 shrink-0 rounded-full bg-foreground @5xl/screen:hidden" aria-hidden /> : null}
+        <span className={labelClass}>{caption}</span>
+        {active ? <span className="size-1.5 shrink-0 rounded-full bg-foreground @max-xl/screen:hidden @5xl/screen:hidden" aria-hidden /> : null}
       </PopoverTrigger>
       <PopoverContent align={align} className={cn("w-80 p-4", className)}>
         {children}
@@ -449,7 +521,7 @@ type FilterChipsProps<V extends string> = {
 // Второй уровень фильтров внутри контента: ряд чипов без рамок, активный — заливкой.
 export function FilterChips<V extends string>({ label, value, options, onValueChange, className }: FilterChipsProps<V>) {
   return (
-    <div className={cn("flex min-w-0 flex-wrap items-center gap-1", className)} role="group" aria-label={label}>
+    <div className={cn("flex min-w-0 flex-wrap items-center gap-1 max-sm:-mx-1 max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:px-1 max-sm:[scrollbar-width:none]", className)} role="group" aria-label={label}>
       {label ? (
         <span className="mr-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{label}</span>
       ) : null}

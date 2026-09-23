@@ -11,6 +11,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
     <Sonner
       theme="light"
       className="toaster group"
+      // Телефон: над нижней панелью разделов (56px + safe-area), а не поверх неё.
+      mobileOffset={{ bottom: "calc(4.25rem + env(safe-area-inset-bottom))", left: 12, right: 12 }}
       icons={{
         success: (
           <CircleCheckIcon className="size-4" />
