@@ -17,14 +17,15 @@ export async function GET(request: NextRequest) {
 
   const params = request.nextUrl.searchParams
   const includeGroups = params.get("groups") === "1"
+  const archived = params.get("archived") === "1"
   const revision = getChatsRevision()
-  const counts = getChatCounts(user.id, includeGroups)
+  const counts = getChatCounts(user.id, includeGroups, archived)
   if (params.get("probe") === "1") {
     return NextResponse.json({ status: "ok", revision, counts }, { headers: noStoreHeaders })
   }
 
   const rawTab = params.get("tab") ?? "all"
   const tab = tabs.has(rawTab as ChatTab) ? (rawTab as ChatTab) : "all"
-  const chats = listChats({ tab, search: params.get("q") ?? "", userId: user.id, includeGroups })
+  const chats = listChats({ tab, search: params.get("q") ?? "", userId: user.id, includeGroups, archived })
   return NextResponse.json({ status: "ok", revision, counts, chats }, { headers: noStoreHeaders })
 }

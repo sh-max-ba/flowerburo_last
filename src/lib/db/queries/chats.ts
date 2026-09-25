@@ -30,6 +30,9 @@ export type ChatSummary = {
   lastInboundAt: string
   lastOutboundAt: string
   unansweredCount: number
+  // Входящие без ответа, но мы уже отвечали в этом разговоре (с телефона или из CRM) — счётчик бледный.
+  repliedRecently: boolean
+  archived: boolean
   // Сводка по клиенту для строки списка и шапки чата.
   customerDiscount: number
   ordersCount: number
@@ -72,8 +75,15 @@ export function normalizeChatId(chatType: string, chatId: string) {
   return chatType === "whatsapp" || chatType === "viber" ? value.replace(/\D/g, "") : value
 }
 
+// «Уже отвечали»: наш последний ответ (из CRM или эхо Wazzup с телефона) был не раньше чем за двое суток
+// до последнего входящего — разговор идёт, очередное «спасибо» не срочное, его счётчик бледный. Ярко —
+// только диалоги, где не отвечали вообще или клиент вернулся после долгой паузы (новый запрос).
+const REPLIED_RECENTLY_SQL =
+  "(chats.last_outbound_at IS NOT NULL AND julianday(chats.last_inbound_at) - julianday(chats.last_outbound_at) <= 2)"
+
 const SUMMARY_SELECT = `
   SELECT chats.*,
+    ${REPLIED_RECENTLY_SQL} AS replied_recently,
     COALESCE(customers.default_discount_percent, 0) AS customer_discount,
     (SELECT COUNT(*) FROM orders o
       WHERE o.customer_id = chats.customer_id AND o.status NOT IN ('Отменен', 'Черновик')) AS orders_count,
@@ -119,6 +129,8 @@ function mapChat(row: Record<string, unknown>): ChatSummary {
     lastInboundAt: String(row.last_inbound_at ?? ""),
     lastOutboundAt: String(row.last_outbound_at ?? ""),
     unansweredCount: numberFromRow(row.unanswered_count),
+    repliedRecently: numberFromRow(row.replied_recently) === 1,
+    archived: Boolean(clean(String(row.archived_at ?? ""))),
     customerDiscount: numberFromRow(row.customer_discount),
     ordersCount: numberFromRow(row.orders_count),
     activeOrdersCount: numberFromRow(row.active_orders_count),
@@ -131,11 +143,13 @@ export function listChats(options: {
   search?: string
   userId: number
   includeGroups?: boolean
+  // true — только архив, иначе архивные диалоги скрыты.
+  archived?: boolean
   limit?: number
 }): ChatSummary[] {
   const tab = options.tab ?? "all"
   const search = clean(options.search ?? "")
-  const conditions = [tabCondition(tab)]
+  const conditions = [tabCondition(tab), options.archived ? "chats.archived_at IS NOT NULL" : "chats.archived_at IS NULL"]
   const params: Record<string, unknown> = { userId: options.userId }
   if (!options.includeGroups) {
     conditions.push("chats.is_group = 0")
@@ -170,8 +184,8 @@ export function listChats(options: {
   return rows.map(mapChat)
 }
 
-export function getChatCounts(userId: number, includeGroups = false): ChatCounts {
-  const groups = includeGroups ? "" : "AND is_group = 0"
+export function getChatCounts(userId: number, includeGroups = false, archived = false): ChatCounts {
+  const groups = `${includeGroups ? "" : "AND is_group = 0"} AND archived_at IS ${archived ? "NOT NULL" : "NULL"}`
   const row = db()
     .prepare(
       `SELECT
@@ -191,12 +205,18 @@ export function getChatCounts(userId: number, includeGroups = false): ChatCounts
   }
 }
 
-// Число диалогов, ждущих ответа (бейдж в сайдбаре), — без групп.
-export function countUnansweredChats(): number {
+// Диалоги, ждущие ответа (бейдж «Чаты»), — без групп и архива: count — где не отвечали (яркий),
+// repliedCount — где разговор уже идёт (бледный, см. REPLIED_RECENTLY_SQL).
+export function countUnansweredChats(): { count: number; repliedCount: number } {
   const row = db()
-    .prepare("SELECT COUNT(*) AS count FROM chats WHERE unanswered_count > 0 AND is_group = 0")
-    .get() as { count: number } | undefined
-  return Number(row?.count ?? 0)
+    .prepare(
+      `SELECT
+        COALESCE(SUM(CASE WHEN ${REPLIED_RECENTLY_SQL} THEN 0 ELSE 1 END), 0) AS count,
+        COALESCE(SUM(CASE WHEN ${REPLIED_RECENTLY_SQL} THEN 1 ELSE 0 END), 0) AS replied_count
+       FROM chats WHERE unanswered_count > 0 AND is_group = 0 AND archived_at IS NULL`
+    )
+    .get() as { count: number; replied_count: number } | undefined
+  return { count: Number(row?.count ?? 0), repliedCount: Number(row?.replied_count ?? 0) }
 }
 
 // Ревизия списка для поллинга: меняется при любом апдейте диалога (новое сообщение, статус,
@@ -357,6 +377,17 @@ export function markChatAnswered(chatRowId: number, client: Database.Database = 
        WHERE id = ?`
     )
     .run(Math.trunc(chatRowId))
+}
+
+// Архив: диалог пропадает из списков и счётчиков, сообщения в нём продолжают сохраняться.
+export function setChatArchived(chatRowId: number, archived: boolean, client: Database.Database = db()) {
+  client
+    .prepare(
+      `UPDATE chats SET archived_at = CASE WHEN @archived = 1 THEN COALESCE(archived_at, CURRENT_TIMESTAMP) END,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = @id`
+    )
+    .run({ id: Math.trunc(chatRowId), archived: archived ? 1 : 0 })
 }
 
 export function setChatChannel(chatRowId: number, channelId: string, client: Database.Database = db()) {

@@ -1391,3 +1391,9 @@ export function migrateQuickReplies(client: Database.Database) {
     );
   `)
 }
+
+// v30: архив диалогов — скрытый чат не попадает в списки, счётчики вкладок и бейдж «Чаты»; новые
+// сообщения в нём копятся, но не высвечиваются. Вернуть — «Вернуть из архива» в меню строки.
+export function migrateChatArchive(client: Database.Database) {
+  ensureColumn("chats", "archived_at", "ALTER TABLE chats ADD COLUMN archived_at TEXT", client)
+}

@@ -4,6 +4,8 @@ import type React from "react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import {
+  ArchiveIcon,
+  ArchiveRestoreIcon,
   ArrowLeftIcon,
   CheckIcon,
   ClipboardListIcon,
@@ -120,6 +122,7 @@ export function ChatWindow({
   showBack,
   onTogglePanel,
   onAssign,
+  onArchive,
   onBack,
   onForward,
   onAttachToOrder,
@@ -136,6 +139,8 @@ export function ChatWindow({
   showBack: boolean
   onTogglePanel: (panel: "contact" | "orders") => void
   onAssign: (userId: number | null) => void
+  // Скрыть диалог в архив (true) или вернуть (false).
+  onArchive: (archived: boolean) => void
   onBack: () => void
   onForward: (message: BubbleMessage) => void
   // Фото из чата — к новому заказу (как фото или чек); тянет экран, у него список вложений.
@@ -886,6 +891,10 @@ export function ChatWindow({
               <DropdownMenuItem onClick={() => void refreshFeed()}>
                 <Loader2Icon />
                 Обновить ленту
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onArchive(!liveChat.archived)}>
+                {liveChat.archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
+                {liveChat.archived ? "Вернуть из архива" : "В архив"}
               </DropdownMenuItem>
               {phone ? (
                 // На телефоне в шапке нет места под «Ответственного» — выбор здесь.

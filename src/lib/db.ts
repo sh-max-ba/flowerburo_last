@@ -170,6 +170,7 @@ export {
   touchChatOnMessage,
   assignChat,
   markChatAnswered,
+  setChatArchived,
   setChatChannel,
   linkChatCustomer,
   renameChatsOfCustomer,

@@ -29,6 +29,7 @@ import {
   migrateChats,
   migrateOrderImageKind,
   migrateQuickReplies,
+  migrateChatArchive,
 } from "./schema"
 import { seedDefaultDealPipeline } from "./seed"
 
@@ -67,6 +68,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 27, up: migrateChats },
   { version: 28, up: migrateOrderImageKind },
   { version: 29, up: migrateQuickReplies },
+  { version: 30, up: migrateChatArchive },
 ]
 
 export function migrate(client: Database.Database) {

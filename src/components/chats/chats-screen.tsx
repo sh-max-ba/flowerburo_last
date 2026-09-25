@@ -3,9 +3,16 @@
 import type React from "react"
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { MessageSquarePlusIcon, MessagesSquareIcon, UsersRoundIcon } from "lucide-react"
+import { ArchiveIcon, MessageSquarePlusIcon, MessagesSquareIcon, UsersRoundIcon } from "lucide-react"
 import { toast } from "sonner"
-import { assignChatAction, attachChatMediaToOrderAction, createOrderAction, createOrderDraftAction, markChatAnsweredAction } from "@/app/actions"
+import {
+  assignChatAction,
+  attachChatMediaToOrderAction,
+  createOrderAction,
+  createOrderDraftAction,
+  markChatAnsweredAction,
+  setChatArchivedAction,
+} from "@/app/actions"
 import type { BouquetTemplate, ChatCounts, ChatSummary, ChatTab, CustomerOption, OrderImage, Product, QuickReply } from "@/lib/db"
 import { cn } from "@/lib/utils"
 import { OrderDialog } from "@/components/orders/new-order-dialog"
@@ -54,6 +61,8 @@ const emptyHints: Record<ChatTab, string> = {
   new: "Новых диалогов без ответа нет.",
 }
 
+const archiveHint = "Архив пуст. Скрыть диалог — правая кнопка по строке или меню «⋯» в переписке → «В архив»."
+
 export function ChatsScreen({
   currentUser,
   users,
@@ -86,6 +95,8 @@ export function ChatsScreen({
   const [searchInput, setSearchInput] = useState("")
   const [query, setQuery] = useState("")
   const [groups, setGroups] = useState(false)
+  // Режим «Архив»: список показывает только скрытые диалоги (вкладки и поиск работают внутри).
+  const [archived, setArchived] = useState(false)
   const [chats, setChats] = useState<ChatSummary[]>(initialChats)
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>(initialQuickReplies)
   const [counts, setCounts] = useState<ChatCounts>(initialCounts)
@@ -153,6 +164,9 @@ export function ChatsScreen({
       if (groups) {
         params.set("groups", "1")
       }
+      if (archived) {
+        params.set("archived", "1")
+      }
       const response = await fetch(`/api/chats/inbox?${params.toString()}`, { cache: "no-store", signal })
       const data = (await response.json()) as InboxResponse
       if (data.status !== "ok") {
@@ -171,7 +185,7 @@ export function ChatsScreen({
         return data.chats?.find((chat) => chat.id === current.id) ?? current
       })
     },
-    [tab, query, groups]
+    [tab, query, groups, archived]
   )
 
   // Первичная загрузка по вкладке/поиску/группам (кроме самого первого рендера — данные с сервера).
@@ -204,6 +218,9 @@ export function ChatsScreen({
         if (groups) {
           params.set("groups", "1")
         }
+        if (archived) {
+          params.set("archived", "1")
+        }
         const response = await fetch(`/api/chats/inbox?${params.toString()}`, { cache: "no-store", signal: controller.signal })
         const data = (await response.json()) as InboxResponse
         if (!active || data.status !== "ok") {
@@ -225,7 +242,7 @@ export function ChatsScreen({
       controller?.abort()
       window.clearInterval(id)
     }
-  }, [loadInbox, groups])
+  }, [loadInbox, groups, archived])
 
   const refreshInbox = useCallback(() => {
     loadInbox().catch(() => undefined)
@@ -297,6 +314,27 @@ export function ChatsScreen({
     toast.success(result.message, {
       action: { label: "К заказу", onClick: () => setPanel("orders") },
     })
+  }
+
+  // Архивированный (или возвращённый) диалог уходит из текущего списка — открытую переписку закрываем.
+  async function archiveChat(chat: ChatSummary, value: boolean) {
+    const result = await setChatArchivedAction(chat.id, value)
+    if (!result.ok) {
+      toast.error(result.message)
+      return
+    }
+    if (selected?.id === chat.id) {
+      setPanel(null)
+      selectChat(null)
+    }
+    setChats((current) => current.filter((item) => item.id !== chat.id))
+    toast.success(result.message, {
+      action: {
+        label: "Отменить",
+        onClick: () => void setChatArchivedAction(chat.id, !value).then(() => refreshInbox()),
+      },
+    })
+    refreshInbox()
   }
 
   async function runChatAction(action: () => Promise<{ ok: boolean; message: string }>) {
@@ -372,7 +410,12 @@ export function ChatsScreen({
           pending: loading && Boolean(searchInput),
           inputProps: { "aria-label": "Поиск диалогов" },
         }}
-        actions={<HeaderAction icon={UsersRoundIcon} label="Группы" active={groups} onClick={() => setGroups((value) => !value)} />}
+        actions={
+          <>
+            <HeaderAction icon={UsersRoundIcon} label="Группы" active={groups} onClick={() => setGroups((value) => !value)} />
+            <HeaderAction icon={ArchiveIcon} label="Архив" active={archived} onClick={() => setArchived((value) => !value)} />
+          </>
+        }
         primaryAction={<HeaderPrimaryAction icon={MessageSquarePlusIcon} label="Новый чат" onClick={() => setNewChatOpen(true)} />}
         tabs={<SegmentedTabs aria-label="Фильтр диалогов" items={tabs} value={tab} onValueChange={setTab} fill />}
       />
@@ -393,11 +436,12 @@ export function ChatsScreen({
                 selectedId={selected?.id ?? null}
                 currentUserId={currentUser.id}
                 loading={loading}
-                emptyHint={query ? "По этому запросу ничего не найдено." : emptyHints[tab]}
+                emptyHint={query ? "По этому запросу ничего не найдено." : archived ? archiveHint : emptyHints[tab]}
                 onSelect={selectChat}
                 onMarkAnswered={(chat) => void runChatAction(() => markChatAnsweredAction(chat.id))}
                 onAssignToMe={(chat) => void runChatAction(() => assignChatAction(chat.id, currentUser.id))}
                 onUnassign={(chat) => void runChatAction(() => assignChatAction(chat.id, null))}
+                onArchive={(chat, value) => void archiveChat(chat, value)}
               />
             </div>
           </aside>
@@ -418,6 +462,7 @@ export function ChatsScreen({
                   showBack={!showList}
                   onTogglePanel={(next) => setPanel((current) => (current === next ? null : next))}
                   onAssign={(userId) => void runChatAction(() => assignChatAction(selected.id, userId))}
+                  onArchive={(value) => void archiveChat(selected, value)}
                   onBack={closeChat}
                   onForward={setForwardMessage}
                   onAttachToOrder={(message, kind) => void attachToOrder(message, kind)}

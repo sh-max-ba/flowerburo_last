@@ -106,6 +106,7 @@ import {
   assignChat,
   listUsers,
   markChatAnswered,
+  setChatArchived,
   getChatById,
   findOrCreateWhatsappChat,
   listQuickReplies,
@@ -1346,6 +1347,13 @@ export async function markChatAnsweredAction(chatId: number): Promise<ActionResu
     markChatAnswered(chatId)
     revalidateChats()
   }, "Диалог отмечен отвеченным.")
+}
+
+export async function setChatArchivedAction(chatId: number, archived: boolean): Promise<ActionResult> {
+  return runRoleAction(["owner", "manager"], () => {
+    setChatArchived(chatId, archived)
+    revalidateChats()
+  }, archived ? "Диалог в архиве — его сообщения больше не высвечиваются." : "Диалог возвращён из архива.")
 }
 
 export async function updateCustomerFieldAction(
