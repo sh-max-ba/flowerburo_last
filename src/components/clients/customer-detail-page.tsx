@@ -37,6 +37,7 @@ import {
   pluralize,
   telLink,
 } from "@/components/clients/customers-page"
+import { formatDeadline } from "@/lib/datetime"
 
 type ActionResult = Awaited<ReturnType<typeof updateCustomerAction>>
 
@@ -370,7 +371,7 @@ function OrdersTable({ orders }: { orders: Order[] }) {
               <TableCell className="text-right font-semibold">
                 {formatMoney(Math.max(0, order.total - order.paid))}
               </TableCell>
-              <TableCell>{dateTime(order.dueAt)}</TableCell>
+              <TableCell>{order.dueAt ? formatDeadline(order.dueAt) : "—"}</TableCell>
               <TableCell>
                 {order.dealId ? (
                   <Button size="sm" variant="outline" render={<Link href={`/deals/${order.dealId}`} />}>

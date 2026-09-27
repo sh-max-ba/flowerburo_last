@@ -9,6 +9,7 @@ import {
   handOrderToCourierAction,
 } from "@/app/actions"
 import type { DashboardData, Order } from "@/lib/db"
+import { formatDeadline } from "@/lib/datetime"
 import { deliveryTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -364,7 +365,7 @@ function ReadyOrderCard({
             {order.recipientPhone ? (
               <Info label="Номер получателя" value={order.recipientPhone} />
             ) : (
-              <Info label="К сроку" value={order.dueAt ? dateTime(order.dueAt) : "-"} />
+              <Info label="К сроку" value={order.dueAt ? formatDeadline(order.dueAt) : "-"} />
             )}
           </div>
         </div>
@@ -414,7 +415,7 @@ function ReadyOrderCard({
               </div>
             )}
             <div className="grid grid-cols-2 gap-2 border-t pt-2 text-sm">
-              <Info label="К сроку" value={order.dueAt ? dateTime(order.dueAt) : "-"} />
+              <Info label="К сроку" value={order.dueAt ? formatDeadline(order.dueAt) : "-"} />
               <Info label="Готов" value={order.readyAt ? dateTime(order.readyAt) : "-"} />
             </div>
           </div>
