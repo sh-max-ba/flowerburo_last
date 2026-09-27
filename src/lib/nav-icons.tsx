@@ -4,6 +4,7 @@ import {
   BanknoteIcon,
   BarChart3Icon,
   ChartSplineIcon,
+  BookOpenTextIcon,
   BoxesIcon,
   CalendarClockIcon,
   ClipboardCheckIcon,
@@ -47,4 +48,5 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   shifts: BanknoteIcon,
   settings: SettingsIcon,
   users: UsersIcon,
+  guides: BookOpenTextIcon,
 }

@@ -22,8 +22,9 @@ export type NavSectionId =
   | "history-cash"
   | "settings"
   | "users"
+  | "guides"
 
-export type NavGroupId = "overview" | "crm" | "work" | "stock" | "admin"
+export type NavGroupId = "overview" | "crm" | "work" | "stock" | "admin" | "help"
 
 export type NavItem = {
   id: NavSectionId
@@ -73,6 +74,8 @@ export const NAV: NavItem[] = [
   { id: "shifts", label: "Смены", href: "/shifts", iconKey: "shifts", roles: ["owner"] },
   { id: "settings", label: "Настройки", href: "/settings", iconKey: "settings", roles: ["owner"] },
   { id: "users", label: "Пользователи", href: "/users", iconKey: "users", roles: ["owner"] },
+  // Пошаговые инструкции с экранами — для каждой роли свои (см. src/lib/guides).
+  { id: "guides", label: "Руководства", href: "/guides", iconKey: "guides", roles: ["owner", "manager", "florist"] },
 ]
 
 export const NAV_GROUPS: NavGroup[] = [
@@ -81,6 +84,7 @@ export const NAV_GROUPS: NavGroup[] = [
   { id: "work", label: "Работа", ids: ["sales", "orders", "order-drafts", "ready-orders", "history-cash"] },
   { id: "stock", label: "Склад", ids: ["stock", "stock-report", "stock-acts", "stock-lots", "stock-inventory", "suppliers", "history"] },
   { id: "admin", label: "Администрирование", ids: ["shifts", "settings", "users"] },
+  { id: "help", label: "Помощь", ids: ["guides"] },
 ]
 
 export const NAV_BY_ID: Record<NavSectionId, NavItem> = NAV.reduce(
@@ -100,7 +104,7 @@ export const NAV_BY_HREF: Record<string, NavItem> = NAV.reduce(
 )
 
 // Доступ к конкретному разделу. Воспроизводит ОБЪЕДИНЕНИЕ текущих правил:
-// owner — всё; manager — все его разделы из NAV; florist — "orders" и "order-drafts",
+// owner — всё; manager — все его разделы из NAV; florist — "orders", "order-drafts" и "guides",
 // плюс "sales" при любой открытой смене (canAccessCash).
 export function canAccessSection(
   section: NavSectionId,
@@ -112,7 +116,7 @@ export function canAccessSection(
   }
 
   if (role === "florist") {
-    if (section === "orders" || section === "order-drafts") {
+    if (section === "orders" || section === "order-drafts" || section === "guides") {
       return true
     }
 

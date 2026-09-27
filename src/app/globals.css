@@ -176,3 +176,38 @@
     display: none;
   }
 }
+
+/* Руководства: подсветка места на скриншоте — рамка, затемнение остального экрана и мягкий пульс. */
+.guide-spotlight {
+  outline: 2px solid var(--brand-strong);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 9999px rgb(15 23 42 / 0.28);
+}
+
+.guide-spotlight::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border-radius: 15px;
+  border: 2px solid var(--brand);
+  opacity: 0;
+  animation: guide-pulse 2.4s ease-out infinite;
+}
+
+@keyframes guide-pulse {
+  0% {
+    opacity: 0.75;
+    transform: scale(0.97);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.05);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guide-spotlight::after {
+    animation: none;
+  }
+}
