@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import Link from "next/link"
 import { BanknoteIcon, ChevronDownIcon, ReceiptTextIcon } from "lucide-react"
 import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
@@ -34,9 +35,12 @@ export function ShiftChip({
   className,
 }: ShiftChipProps) {
   const isOpen = Boolean(openShift)
+  // Поповер закрываем сами перед открытием окна смены: иначе он остаётся поверх окна и
+  // закрывает поле с наличными.
+  const [popoverOpen, setPopoverOpen] = useState(false)
 
   return (
-    <Popover>
+    <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
       <PopoverTrigger
         render={
           <button
@@ -114,7 +118,10 @@ export function ShiftChip({
                 variant={isOpen ? "ghost" : "default"}
                 size="sm"
                 className="flex-1"
-                onClick={onShiftAction}
+                onClick={() => {
+                  setPopoverOpen(false)
+                  onShiftAction()
+                }}
               >
                 <BanknoteIcon data-icon="inline-start" />
                 {isOpen ? "Закрыть смену" : "Открыть смену"}
