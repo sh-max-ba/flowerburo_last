@@ -28,7 +28,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { markChatAnsweredAction, markQuickReplyUsedAction, sendBouquetToChatAction, sendChatMessageAction } from "@/app/actions"
-import type { BouquetTemplate, ChatSummary, QuickReply, WazzupMessage } from "@/lib/db"
+import type { BouquetTemplate, ChatSummary, QuickReply, UserRole, WazzupMessage } from "@/lib/db"
 import { chatUploadTypes, maxChatUploadSize } from "@/lib/chat-uploads"
 import { parseDbInstant } from "@/lib/datetime"
 import { wazzupMessageTypeLabel } from "@/lib/labels"
@@ -129,7 +129,7 @@ export function ChatWindow({
   onActivity,
 }: {
   chat: ChatSummary
-  currentUser: { id: number; name: string }
+  currentUser: { id: number; name: string; role: UserRole }
   users: Array<{ id: number; name: string }>
   bouquets: BouquetTemplate[]
   // Быстрые ответы живут на экране: окно диалога пересоздаётся при смене чата, а правки должны остаться.
@@ -732,6 +732,7 @@ export function ChatWindow({
         contentUri: message.contentUri,
         status: message.status,
         authorName: message.authorName,
+        authorRole: message.authorRole,
         quotedText: message.quotedText,
         transcript: message.transcript,
         isEdited: message.isEdited,
@@ -751,6 +752,7 @@ export function ChatWindow({
         contentUri: "",
         status: "sending",
         authorName: currentUser.name,
+        authorRole: currentUser.role,
         quotedText: "",
         transcript: "",
         isEdited: false,
@@ -762,7 +764,7 @@ export function ChatWindow({
         pending: true,
       })),
     ],
-    [messages, pending, currentUser.name]
+    [messages, pending, currentUser.name, currentUser.role]
   )
 
   const waitingSince = liveChat.unansweredCount > 0 ? formatWaiting(liveChat.lastInboundAt) : ""

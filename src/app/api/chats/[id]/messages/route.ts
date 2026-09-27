@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { getCurrentUser } from "@/lib/auth"
+import { canAccessSection } from "@/lib/nav"
 import { getChatFeed, getChatFeedProbe } from "@/lib/chats"
 
 export const dynamic = "force-dynamic"
@@ -7,10 +8,10 @@ export const dynamic = "force-dynamic"
 const noStoreHeaders = { "Cache-Control": "no-store" }
 
 // Лента диалога. Без probe — сообщения + карточка диалога + revision; с ?probe=1 — только revision
-// (поллинг каждые ~3с, полную ленту тянем при смене). Только owner+manager.
+// (поллинг каждые ~3с, полную ленту тянем при смене). Доступ — как к разделу «Чаты».
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser()
-  if (!user || user.role === "florist") {
+  if (!user || !canAccessSection("chats", user.role, false)) {
     return NextResponse.json({ status: "error", message: "Недостаточно прав." }, { status: 401, headers: noStoreHeaders })
   }
 

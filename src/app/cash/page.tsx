@@ -34,7 +34,7 @@ export default async function Page() {
       header="page"
       layout="fill"
     >
-      <CashPage data={data} canRefund={user.role === "owner" || user.role === "manager"} />
+      <CashPage data={data} />
     </CrmShell>
   )
 }

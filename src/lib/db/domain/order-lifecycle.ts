@@ -937,10 +937,10 @@ export function completePickupOrder(orderId: number, formData: FormData, current
       .prepare(
         `UPDATE orders
          SET status = 'Выдан', completed_at = CURRENT_TIMESTAMP, completed_shift_id = ?,
-          updated_by_user_id = ?, updated_at = CURRENT_TIMESTAMP
+          completed_by_user_id = ?, updated_by_user_id = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`
       )
-      .run(shift.id, currentUser.id, orderId)
+      .run(shift.id, currentUser.id, currentUser.id, orderId)
     addMovement(client, {
       userId: currentUser.id,
       type: "order_status",
@@ -1016,10 +1016,10 @@ export function handOrderToCourier(orderId: number, formData: FormData, currentU
         `UPDATE orders
          SET status = 'Передан курьеру', handed_to_courier_at = CURRENT_TIMESTAMP,
           completed_at = CURRENT_TIMESTAMP, completed_shift_id = ?, courier_name = ?,
-          updated_by_user_id = ?, updated_at = CURRENT_TIMESTAMP
+          completed_by_user_id = ?, updated_by_user_id = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`
       )
-      .run(shift.id, clean(formData.get("courierName")), currentUser.id, orderId)
+      .run(shift.id, clean(formData.get("courierName")), currentUser.id, currentUser.id, orderId)
     addMovement(client, {
       userId: currentUser.id,
       type: "order_status",

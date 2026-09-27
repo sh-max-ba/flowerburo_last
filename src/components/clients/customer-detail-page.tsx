@@ -17,6 +17,8 @@ import type { Customer, Deal } from "@/lib/crm"
 import type { Order, Sale } from "@/lib/db"
 import { getPaymentMethodLabel, sourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
+import { FloristMark } from "@/components/florist-mark"
+import { useViewer } from "@/components/viewer-context"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -38,6 +40,7 @@ import {
   telLink,
 } from "@/components/clients/customers-page"
 import { formatDeadline } from "@/lib/datetime"
+import { canAccessSection } from "@/lib/nav"
 
 type ActionResult = Awaited<ReturnType<typeof updateCustomerAction>>
 
@@ -56,11 +59,14 @@ export function CustomerDetailPage({
   deals,
   orders,
   sales,
+  hasChat = false,
 }: {
   customer: Customer
   deals: Deal[]
   orders: Order[]
   sales: Sale[]
+  // У клиента уже есть диалог в «Чатах» (без телефона ссылку «Открыть чат» показываем только тогда).
+  hasChat?: boolean
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
@@ -69,12 +75,9 @@ export function CustomerDetailPage({
   const telHref = telLink(customer.phone)
   const igHref = instagramLink(customer.instagram)
 
-  // The Wazzup chat lives on a deal (the app opens chats per deal). Link to the most
-  // recent deal that has a chat / phone so "Открыть чат" lands on a usable conversation.
-  const chatDeal = useMemo(() => {
-    const withChat = deals.filter((deal) => deal.wazzupChatId)
-    return withChat[0] ?? deals[0] ?? null
-  }, [deals])
+  // Переписка — в «Чатах»: /chats?customer= открывает диалог клиента, а если его ещё нет и есть
+  // телефон — заводит WhatsApp-диалог.
+  const chatHref = hasChat || customer.phone ? `/chats?customer=${customer.id}` : null
 
   const stats = useMemo(() => {
     const dealPaid = deals.reduce((sum, deal) => sum + (deal.paid || 0), 0)
@@ -148,6 +151,7 @@ export function CustomerDetailPage({
                 <Badge variant="secondary">Скидка {customer.defaultDiscountPercent}%</Badge>
               ) : null}
               <Badge variant="outline">{sourceLabel(customer.source)}</Badge>
+              <FloristMark role={customer.createdByRole} name={customer.createdByName} action="Добавил" />
             </div>
           </div>
         </CardHeader>
@@ -173,9 +177,9 @@ export function CustomerDetailPage({
 
           {/* Contact actions */}
           <div className="flex flex-wrap gap-2">
-            {chatDeal ? (
+            {chatHref ? (
               <Link
-                href={`/deals/${chatDeal.id}`}
+                href={chatHref}
                 className={cn(buttonVariants({ variant: "default", size: "sm" }))}
               >
                 <MessageCircleIcon data-icon="inline-start" />
@@ -265,7 +269,14 @@ export function CustomerDetailPage({
   )
 }
 
+// Сделки открываются только тем, кому доступен раздел «Сделки» (флористу — нет).
+function useCanOpenDeals() {
+  const viewer = useViewer()
+  return viewer ? canAccessSection("deals", viewer.role, false) : true
+}
+
 function DealsTable({ deals }: { deals: Deal[] }) {
+  const canOpenDeals = useCanOpenDeals()
   const [showAll, setShowAll] = useState(false)
   const rows = showAll ? deals : deals.slice(0, HISTORY_CAP)
 
@@ -310,10 +321,12 @@ function DealsTable({ deals }: { deals: Deal[] }) {
               </TableCell>
               <TableCell>{dateTime(deal.createdAt)}</TableCell>
               <TableCell className="text-right">
-                <Button size="sm" variant="outline" render={<Link href={`/deals/${deal.id}`} />}>
-                  <ExternalLinkIcon data-icon="inline-start" />
-                  Открыть
-                </Button>
+                {canOpenDeals ? (
+                  <Button size="sm" variant="outline" render={<Link href={`/deals/${deal.id}`} />}>
+                    <ExternalLinkIcon data-icon="inline-start" />
+                    Открыть
+                  </Button>
+                ) : null}
               </TableCell>
             </TableRow>
           ))}
@@ -331,6 +344,7 @@ function DealsTable({ deals }: { deals: Deal[] }) {
 }
 
 function OrdersTable({ orders }: { orders: Order[] }) {
+  const canOpenDeals = useCanOpenDeals()
   const [showAll, setShowAll] = useState(false)
   const rows = showAll ? orders : orders.slice(0, HISTORY_CAP)
 
@@ -373,10 +387,12 @@ function OrdersTable({ orders }: { orders: Order[] }) {
               </TableCell>
               <TableCell>{order.dueAt ? formatDeadline(order.dueAt) : "—"}</TableCell>
               <TableCell>
-                {order.dealId ? (
+                {order.dealId && canOpenDeals ? (
                   <Button size="sm" variant="outline" render={<Link href={`/deals/${order.dealId}`} />}>
                     Сделка #{order.dealId}
                   </Button>
+                ) : order.dealId ? (
+                  `Сделка #${order.dealId}`
                 ) : (
                   "—"
                 )}

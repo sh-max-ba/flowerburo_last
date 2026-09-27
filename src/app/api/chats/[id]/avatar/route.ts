@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@/lib/auth"
+import { canAccessSection } from "@/lib/nav"
 import { getChatAvatarUri } from "@/lib/db"
 import { fetchRemoteMedia, MediaFetchError } from "@/lib/media-fetch"
 
@@ -9,7 +10,7 @@ export const runtime = "nodejs"
 // клиент, а протухший URL даёт 404 и запасную «буквенную» аватарку). Кэш приватный, сутки.
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser()
-  if (!user || user.role === "florist") {
+  if (!user || !canAccessSection("chats", user.role, false)) {
     return new Response("Forbidden", { status: 403 })
   }
 

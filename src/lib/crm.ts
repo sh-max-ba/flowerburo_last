@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3"
-import { initDb, listUsers, loadOrderImagesByOrder, loadOrderItemsByOrder, type CurrentUser, type CustomerOption, type Order, type Product, type Sale } from "@/lib/db"
+import { initDb, listUsers, loadOrderImagesByOrder, loadOrderItemsByOrder, type CurrentUser, type CustomerOption, type Order, type Product, type Sale, type UserRole } from "@/lib/db"
 import { linkChatCustomer, renameChatsOfCustomer } from "@/lib/db/queries/chats"
-import { mapOrderRow, numberFromRow } from "@/lib/db-row"
+import { mapOrderRow, numberFromRow, userRoleFromRow } from "@/lib/db-row"
 import { parseForm } from "@/lib/forms/parse"
 import { CustomerCreateSchema, CustomerUpdateSchema } from "@/lib/forms/schemas"
 import {
@@ -29,6 +29,10 @@ export type Customer = {
   comment: string
   createdAt: string
   updatedAt: string
+  // Кто добавил клиента в FlowerBuro (null — пришёл из WhatsApp/Instagram или добавлен до отметок).
+  createdByUserId: number | null
+  createdByName: string | null
+  createdByRole: UserRole | null
   dealsCount?: number
   ordersCount?: number
   salesCount?: number
@@ -199,14 +203,19 @@ export function listCustomers(options: { search?: string } = {}) {
 }
 
 export function getCustomer(customerId: number) {
-  const row = db().prepare("SELECT * FROM customers WHERE id = ?").get(customerId) as
-    | Record<string, unknown>
-    | undefined
+  const row = db()
+    .prepare(
+      `SELECT customers.*,
+        (SELECT name FROM users WHERE users.id = customers.created_by_user_id) AS created_by_name,
+        (SELECT role FROM users WHERE users.id = customers.created_by_user_id) AS created_by_role
+       FROM customers WHERE id = ?`
+    )
+    .get(customerId) as Record<string, unknown> | undefined
 
   return row ? mapCustomer(row) : null
 }
 
-export function createCustomer(formData: FormData) {
+export function createCustomer(formData: FormData, createdByUserId: number | null = null) {
   const input = parseForm(CustomerCreateSchema, formData)
   return insertCustomer({
     name: input.name,
@@ -215,18 +224,28 @@ export function createCustomer(formData: FormData) {
     source: input.source,
     defaultDiscountPercent: clampPercent(input.defaultDiscountPercent),
     comment: input.comment,
+    createdByUserId,
   })
 }
 
-export function updateCustomer(formData: FormData) {
+export function updateCustomer(formData: FormData, currentUser: Pick<CurrentUser, "id" | "name">) {
   const input = parseForm(CustomerUpdateSchema, formData)
   const id = input.customerId
   const name = input.name
+  const defaultDiscountPercent = clampPercent(input.defaultDiscountPercent)
 
   const client = db()
   const update = client.transaction(() => {
-    const existing = client.prepare("SELECT name, phone FROM customers WHERE id = ?").get(id) as
-      | { name: string | null; phone: string | null }
+    const existing = client
+      .prepare("SELECT name, phone, instagram, default_discount_percent, comment FROM customers WHERE id = ?")
+      .get(id) as
+      | {
+          name: string | null
+          phone: string | null
+          instagram: string | null
+          default_discount_percent: number | null
+          comment: string | null
+        }
       | undefined
     if (!existing) {
       throw new Error("Клиент не найден.")
@@ -250,9 +269,31 @@ export function updateCustomer(formData: FormData) {
         normalizedPhone: normalizePhone(phone),
         instagram: input.instagram,
         source: input.source,
-        defaultDiscountPercent: clampPercent(input.defaultDiscountPercent),
+        defaultDiscountPercent,
         comment: input.comment,
       })
+
+    // Правки полной формы — в ту же историю, что и точечные из чата: кто, какое поле, было → стало.
+    const changes: Array<[CustomerEditableField, string, string]> = [
+      ["name", clean(existing.name), name],
+      ["phone", clean(existing.phone), phone],
+      ["instagram", clean(existing.instagram), input.instagram],
+      [
+        "defaultDiscountPercent",
+        String(clampPercent(toNumber(existing.default_discount_percent))),
+        String(defaultDiscountPercent),
+      ],
+      ["comment", clean(existing.comment), input.comment],
+    ]
+    const logChange = client.prepare(
+      `INSERT INTO customer_changes (customer_id, user_id, user_name, field, old_value, new_value)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    for (const [field, oldValue, newValue] of changes) {
+      if (oldValue !== newValue) {
+        logChange.run(id, currentUser.id, currentUser.name, field, oldValue, newValue)
+      }
+    }
 
     if (customerChanged) {
       client
@@ -277,6 +318,7 @@ export type CustomerChange = {
   id: number
   userId: number | null
   userName: string
+  userRole: UserRole | null
   field: CustomerEditableField
   oldValue: string
   newValue: string
@@ -296,7 +338,8 @@ const customerFieldColumns: Record<CustomerEditableField, string> = {
 export function listCustomerChanges(customerId: number, limit = 50): CustomerChange[] {
   const rows = db()
     .prepare(
-      `SELECT id, user_id, user_name, field, old_value, new_value, created_at
+      `SELECT id, user_id, user_name, field, old_value, new_value, created_at,
+        (SELECT role FROM users WHERE users.id = customer_changes.user_id) AS user_role
        FROM customer_changes
        WHERE customer_id = ?
        ORDER BY created_at DESC, id DESC
@@ -308,6 +351,7 @@ export function listCustomerChanges(customerId: number, limit = 50): CustomerCha
     id: toNumber(row.id),
     userId: row.user_id == null ? null : toNumber(row.user_id),
     userName: String(row.user_name ?? ""),
+    userRole: userRoleFromRow(row.user_role),
     field: String(row.field ?? "") as CustomerEditableField,
     oldValue: String(row.old_value ?? ""),
     newValue: String(row.new_value ?? ""),
@@ -405,7 +449,7 @@ export function createCustomerFromChat(chat: {
   name: string
   phone: string
   username: string
-}): number {
+}, createdByUserId: number | null = null): number {
   const name = clean(chat.name) || clean(chat.phone) || clean(chat.chatId)
   const client = db()
   const customerId = client.transaction(() => {
@@ -414,6 +458,7 @@ export function createCustomerFromChat(chat: {
       phone: chat.phone,
       instagram: chat.chatType === "instagram" ? chat.username || chat.chatId : "",
       source: chat.chatType,
+      createdByUserId,
     })
     client
       .prepare(
@@ -501,6 +546,11 @@ export function listCustomerOrders(customerId: number): Order[] {
     .prepare(
       `SELECT id, number, customer_id as customerId, deal_id as dealId,
         created_by_user_id as createdByUserId, updated_by_user_id as updatedByUserId,
+        (SELECT name FROM users WHERE users.id = orders.created_by_user_id) as createdByName,
+        (SELECT role FROM users WHERE users.id = orders.created_by_user_id) as createdByRole,
+        completed_by_user_id as completedByUserId,
+        (SELECT name FROM users WHERE users.id = orders.completed_by_user_id) as completedByName,
+        (SELECT role FROM users WHERE users.id = orders.completed_by_user_id) as completedByRole,
         customer, phone, COALESCE(recipient_phone, '') as recipientPhone,
         COALESCE(source, '') as source, COALESCE(delivery_type, 'pickup') as deliveryType,
         COALESCE(address, '') as address, due_at as dueAt, status,
@@ -540,6 +590,11 @@ export function getOrderById(orderId: number): Order | null {
     .prepare(
       `SELECT id, number, customer_id as customerId, deal_id as dealId,
         created_by_user_id as createdByUserId, updated_by_user_id as updatedByUserId,
+        (SELECT name FROM users WHERE users.id = orders.created_by_user_id) as createdByName,
+        (SELECT role FROM users WHERE users.id = orders.created_by_user_id) as createdByRole,
+        completed_by_user_id as completedByUserId,
+        (SELECT name FROM users WHERE users.id = orders.completed_by_user_id) as completedByName,
+        (SELECT role FROM users WHERE users.id = orders.completed_by_user_id) as completedByRole,
         customer, phone, COALESCE(recipient_phone, '') as recipientPhone,
         COALESCE(source, '') as source, COALESCE(delivery_type, 'pickup') as deliveryType,
         COALESCE(address, '') as address, due_at as dueAt, status,
@@ -572,6 +627,11 @@ export function listDealOrders(dealId: number): Order[] {
     .prepare(
       `SELECT id, number, customer_id as customerId, deal_id as dealId,
         created_by_user_id as createdByUserId, updated_by_user_id as updatedByUserId,
+        (SELECT name FROM users WHERE users.id = orders.created_by_user_id) as createdByName,
+        (SELECT role FROM users WHERE users.id = orders.created_by_user_id) as createdByRole,
+        completed_by_user_id as completedByUserId,
+        (SELECT name FROM users WHERE users.id = orders.completed_by_user_id) as completedByName,
+        (SELECT role FROM users WHERE users.id = orders.completed_by_user_id) as completedByRole,
         customer, phone, COALESCE(recipient_phone, '') as recipientPhone,
         COALESCE(source, '') as source, COALESCE(delivery_type, 'pickup') as deliveryType,
         COALESCE(address, '') as address, due_at as dueAt, status,
@@ -1131,6 +1191,7 @@ function insertCustomer(input: {
   source?: string
   defaultDiscountPercent?: number
   comment?: string
+  createdByUserId?: number | null
 }) {
   const name = clean(input.name)
   if (!name) {
@@ -1152,9 +1213,9 @@ function insertCustomer(input: {
   const result = db()
     .prepare(
       `INSERT INTO customers (
-        name, phone, normalized_phone, instagram, source, default_discount_percent, comment, updated_at
+        name, phone, normalized_phone, instagram, source, default_discount_percent, comment, created_by_user_id, updated_at
       ) VALUES (
-        @name, @phone, @normalizedPhone, @instagram, @source, @defaultDiscountPercent, @comment, CURRENT_TIMESTAMP
+        @name, @phone, @normalizedPhone, @instagram, @source, @defaultDiscountPercent, @comment, @createdByUserId, CURRENT_TIMESTAMP
       )`
     )
     .run({
@@ -1165,6 +1226,7 @@ function insertCustomer(input: {
       source: clean(input.source),
       defaultDiscountPercent: clampPercent(input.defaultDiscountPercent ?? 0),
       comment: clean(input.comment),
+      createdByUserId: input.createdByUserId ?? null,
     })
 
   return Number(result.lastInsertRowid)
@@ -1430,6 +1492,9 @@ function mapCustomer(row: Record<string, unknown>): Customer {
     comment: String(row.comment ?? ""),
     createdAt: String(row.created_at ?? ""),
     updatedAt: String(row.updated_at ?? ""),
+    createdByUserId: row.created_by_user_id == null ? null : toNumber(row.created_by_user_id),
+    createdByName: row.created_by_name == null ? null : String(row.created_by_name),
+    createdByRole: userRoleFromRow(row.created_by_role),
     dealsCount: row.deals_count === undefined ? undefined : toNumber(row.deals_count),
     ordersCount: row.orders_count === undefined ? undefined : toNumber(row.orders_count),
     salesCount: row.sales_count === undefined ? undefined : toNumber(row.sales_count),

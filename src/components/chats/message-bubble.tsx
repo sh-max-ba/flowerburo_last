@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { formatTime, messagePreview } from "./chat-shared"
+import { FloristMark } from "@/components/florist-mark"
 
 // Пузырь сообщения единого окна чатов: входящие слева (белые), наши справа (голубые). Цитата,
 // пометки «переслано»/«изменено»/«удалено», вложения (фото → лайтбокс, видео, документ, голосовое
@@ -50,6 +51,7 @@ export type BubbleMessage = Pick<
   | "contentUri"
   | "status"
   | "authorName"
+  | "authorRole"
   | "quotedText"
   | "transcript"
   | "isEdited"
@@ -161,8 +163,16 @@ export function MessageBubble({
         </div>
       ) : null}
       {showAuthor ? (
-        <div className={cn("mb-0.5 text-xs font-semibold", outbound ? "text-brand-strong" : "text-emerald-700", inset, tight && "pt-1")}>
+        <div
+          className={cn(
+            "mb-0.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold",
+            outbound ? "text-brand-strong" : "text-emerald-700",
+            inset,
+            tight && "pt-1"
+          )}
+        >
           {message.authorName}
+          {outbound ? <FloristMark role={message.authorRole} name={message.authorName} action="Написал" compact /> : null}
         </div>
       ) : null}
       {message.quotedText ? (

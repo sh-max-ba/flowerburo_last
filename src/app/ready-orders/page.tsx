@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic"
 
 export default async function Page() {
   const user = await requireUser()
-  // Готовые заказы: выдача / передача курьеру / закрытие. Доступ: owner + manager.
+  // Готовые заказы: выдача / передача курьеру / закрытие. Доступ: вся команда; выдача требует
+  // кассового доступа (флористу — открытая смена), выданное флористом помечается.
   const canAccessCash = await canUseCash(user)
   if (!canAccessSection("ready-orders", user.role, canAccessCash)) {
     return <AccessDenied homeHref={getDefaultPathForRole(user.role)} />

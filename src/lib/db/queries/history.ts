@@ -1,4 +1,4 @@
-import { rowToMovement } from "@/lib/db-row"
+import { rowToMovement, userRoleFromRow } from "@/lib/db-row"
 import type { MovementRow } from "@/lib/db-row"
 import { SHOP_UTC_OFFSET_SQL } from "@/lib/datetime"
 import type { CashLedgerEntry, CashLedgerLineItem, HistoryReportData, Movement } from "../types"
@@ -357,7 +357,7 @@ export function getCashLedger(limit = 1000): CashLedgerEntry[] {
         orders.status as orderStatus, orders.paid as orderPaid,
         orders.courier_payout as orderCourierPayout,
         cash_transactions.sale_id as saleId, cash_transactions.deal_id as dealId,
-        cash_transactions.user_id as userId, COALESCE(users.name, '') as userName,
+        cash_transactions.user_id as userId, COALESCE(users.name, '') as userName, users.role as userRole,
         COALESCE(NULLIF(orders.customer, ''), NULLIF(sales.customer_name, ''), '') as customerName,
         cash_transactions.type, cash_transactions.payment_method as paymentMethod,
         cash_transactions.amount,
@@ -443,6 +443,7 @@ export function getCashLedger(limit = 1000): CashLedgerEntry[] {
 
   return rawEntries.map((entry) => ({
     ...entry,
+    userRole: userRoleFromRow(entry.userRole),
     reversed: Boolean(entry.reversed),
     isReversal: Boolean(entry.isReversal),
     discountAmount: Number(entry.discountAmount) || 0,

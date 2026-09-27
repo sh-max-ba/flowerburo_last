@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import crypto from "node:crypto"
 import { getCurrentUser } from "@/lib/auth"
+import { canAccessSection } from "@/lib/nav"
 import { chatUploadTypes, maxChatUploadSize } from "@/lib/chat-uploads"
 
 export const runtime = "nodejs"
@@ -14,7 +15,7 @@ const uploadsDir = path.join(process.cwd(), "public", "uploads", "chat")
 // тип сообщения по MIME. Лимит 10 MB — лимит контента Wazzup (MESSAGES_CONTENT_SIZE_EXCEEDED).
 export async function POST(request: Request) {
   const user = await getCurrentUser()
-  if (!user || (user.role !== "owner" && user.role !== "manager")) {
+  if (!user || !canAccessSection("chats", user.role, false)) {
     return Response.json({ ok: false, message: "Недостаточно прав." }, { status: 403 })
   }
 

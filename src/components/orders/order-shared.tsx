@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/select"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
+import { useViewer } from "@/components/viewer-context"
 
 export type OrderSortMode = "default" | "due" | "new"
 export type OrderViewMode = "list" | "calendar"
@@ -867,9 +868,11 @@ export function groupOrdersByDueDay(orders: Order[], now: Date = new Date()): Or
     .map((key) => ({ key, label: labels[key], orders: buckets[key] }))
 }
 
-// P1: ненавязчивая ссылка на сделку-источник, чтобы быстро уточнить детали.
+// P1: ненавязчивая ссылка на сделку-источник, чтобы быстро уточнить детали. Флористу не
+// показываем: канбан сделок заменили «Чаты», а переписка клиента открывается ссылкой «Открыть чат».
 export function OrderDealLink({ dealId, className }: { dealId: number | null; className?: string }) {
-  if (!dealId) {
+  const viewer = useViewer()
+  if (!dealId || viewer?.role === "florist") {
     return null
   }
 

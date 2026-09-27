@@ -123,7 +123,7 @@ const CART_STORAGE_KEY = "fb-cash-cart"
 // вынесено в модалку («Создать заказ»), показатели смены и кассовые операции —
 // в боковую панель «Касса за смену» (кнопка в верхней зоне). Открытие/закрытие смены
 // живут в CrmShell (shiftContext + ShiftSheet).
-export function CashPage({ data, canRefund = false }: { data: DashboardData; canRefund?: boolean }) {
+export function CashPage({ data }: { data: DashboardData }) {
   const router = useRouter()
   const [cashOperation, setCashOperation] = useState<CashOperation | null>(null)
   // Окно заказа открывается кнопкой на кассе и ссылкой /cash?order=new («+ Новый заказ»
@@ -231,7 +231,7 @@ export function CashPage({ data, canRefund = false }: { data: DashboardData; can
         }
         actions={
           <>
-            {canRefund && <RefundSearchSheet hasOpenShift={Boolean(openShift)} trigger="header" />}
+            <RefundSearchSheet hasOpenShift={Boolean(openShift)} trigger="header" />
             <HeaderAction icon={WalletIcon} label="Касса за смену" onClick={() => setShiftDetailsOpen(true)} />
           </>
         }

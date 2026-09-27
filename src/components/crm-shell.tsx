@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useTransition } from "react"
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react"
 import type React from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
@@ -26,6 +26,7 @@ import { MobileChromeProvider, MobileTabBadge, MobileTabBar, useTextInputFocused
 import { ShiftChip } from "@/components/shift-chip"
 import { SoundToggle } from "@/components/notifications/sound-toggle"
 import { ShiftSheet } from "@/components/shifts/shift-sheet"
+import { ShiftActionProvider, ViewerProvider } from "@/components/viewer-context"
 import { Button } from "@/components/ui/button"
 import { SegmentedTabs } from "@/components/ui/segmented-tabs"
 import {
@@ -109,6 +110,8 @@ export function CrmShell({
   const pageTitle = getPageTitle(pathname) || title
   const detail = getDetailParent({ active, subnav, pathname })
   const rowActions = buildRowActions(user.role, canAccessCash)
+  const viewer = useMemo(() => ({ id: user.id, name: user.name, role: user.role }), [user.id, user.name, user.role])
+  const openShiftSheet = useCallback(() => setShiftSheet(true), [])
 
   function submitShiftForm(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -278,13 +281,18 @@ export function CrmShell({
               )}
             >
               {autoHeader}
-              {children}
+              <ViewerProvider value={viewer}>
+                <ShiftActionProvider value={shiftContext?.canManageShift ? openShiftSheet : null}>
+                  {children}
+                </ShiftActionProvider>
+              </ViewerProvider>
             </div>
           </ScreenChromeProvider>
         </MobileChromeProvider>
         {/* Телефон (< md): стеклянный док разделов вместо гамбургера; «Ещё» открывает полное меню. */}
         <MobileTabBar
           items={visibleItems}
+          role={user.role}
           active={sidebarActive}
           hidden={!dockVisible}
           badges={{

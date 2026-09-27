@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/auth"
+import { canAccessSection } from "@/lib/nav"
 import { getCustomer, getCustomerStats, listCustomerChanges, listCustomerOrders } from "@/lib/crm"
 import { getChatById } from "@/lib/db"
 
@@ -10,7 +11,7 @@ const noStoreHeaders = { "Cache-Control": "no-store" }
 // Контекст диалога для правой панели: карточка клиента, сводка, история правок и заказы.
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser()
-  if (!user || user.role === "florist") {
+  if (!user || !canAccessSection("chats", user.role, false)) {
     return NextResponse.json({ status: "error", message: "Недостаточно прав." }, { status: 401, headers: noStoreHeaders })
   }
 

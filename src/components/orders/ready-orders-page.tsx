@@ -59,6 +59,7 @@ import {
   sortReadyOrders,
 } from "@/components/orders/order-shared"
 import { OrderImageStrip } from "@/components/orders/order-images"
+import { FloristMark } from "@/components/florist-mark"
 import { OrderDetailsDialog } from "@/components/orders/order-details-dialog"
 
 type OpenShift = DashboardData["stats"]["openShift"]
@@ -353,6 +354,12 @@ function ReadyOrderCard({
             ) : (
               <Badge className="bg-amber-100 text-amber-900 hover:bg-amber-100">Курьер не оплачен</Badge>
             ))}
+          <FloristMark role={order.createdByRole} name={order.createdByName} action="Оформил" />
+          <FloristMark
+            role={order.completedByRole}
+            name={order.completedByName}
+            action={order.status === "Передан курьеру" ? "Передал курьеру" : "Выдал"}
+          />
         </div>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-3">

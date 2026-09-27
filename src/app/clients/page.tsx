@@ -4,6 +4,7 @@ import { CustomersPage } from "@/components/clients/customers-page"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { listCustomers } from "@/lib/crm"
+import { canAccessSection } from "@/lib/nav"
 
 export const dynamic = "force-dynamic"
 
@@ -13,7 +14,7 @@ export default async function ClientsPage({
   searchParams: Promise<{ search?: string }>
 }) {
   const user = await requireUser()
-  if (user.role === "florist") {
+  if (!canAccessSection("clients", user.role, false)) {
     return <AccessDenied homeHref={getDefaultPathForRole(user.role)} />
   }
 

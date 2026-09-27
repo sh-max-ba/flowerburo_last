@@ -3,8 +3,12 @@
 import fs from "node:fs"
 import path from "node:path"
 
+import type { UserRole } from "../../src/lib/db/types"
 import { GUIDES } from "../../src/lib/guides"
+import { canViewGuide, guideOfShotFile } from "../../src/lib/guides/access"
 import { SHOTS } from "../../src/lib/guides/shots"
+
+const ROLES: UserRole[] = ["owner", "manager", "florist"]
 
 const problems: string[] = []
 const used = new Set<string>()
@@ -35,9 +39,12 @@ for (const guide of Object.values(GUIDES)) {
       if (!fs.existsSync(path.join("content", "guides", "shots", `${step.shot.id}.webp`))) {
         problems.push(`${where}: нет файла content/guides/shots/${step.shot.id}.webp`)
       }
-      const guideOfShot = step.shot.id.split("-")[0]
-      if (guideOfShot !== guide.id && !(guide.id === "manager" && guideOfShot === "florist") && guide.id !== "admin") {
-        problems.push(`${where}: кадр ${step.shot.id} не виден роли этого руководства`)
+      // Кадр отдаётся только ролям, которым видно его руководство (api/guides/shots): каждый, кто
+      // читает этот шаг, должен иметь доступ и к кадру.
+      const guideOfShot = guideOfShotFile(`${step.shot.id}.webp`)
+      const blind = ROLES.filter((role) => canViewGuide(role, guide.id) && (!guideOfShot || !canViewGuide(role, guideOfShot)))
+      if (blind.length) {
+        problems.push(`${where}: кадр ${step.shot.id} не виден роли ${blind.join(", ")}`)
       }
       const crops = Array.isArray(step.shot.crop) ? step.shot.crop : [step.shot.crop]
       for (const name of [step.shot.focus, ...crops, ...(step.shot.marks ?? [])]) {

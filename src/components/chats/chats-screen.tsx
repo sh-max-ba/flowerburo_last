@@ -13,7 +13,7 @@ import {
   markChatAnsweredAction,
   setChatArchivedAction,
 } from "@/app/actions"
-import type { BouquetTemplate, ChatCounts, ChatSummary, ChatTab, CustomerOption, OrderImage, Product, QuickReply } from "@/lib/db"
+import type { BouquetTemplate, ChatCounts, ChatSummary, ChatTab, CustomerOption, OrderImage, Product, QuickReply, UserRole } from "@/lib/db"
 import { cn } from "@/lib/utils"
 import { OrderDialog } from "@/components/orders/new-order-dialog"
 import type { ProductLineItem } from "@/components/products/product-line-items"
@@ -77,7 +77,7 @@ export function ChatsScreen({
   initialTab = "all",
   openNew = false,
 }: {
-  currentUser: { id: number; name: string }
+  currentUser: { id: number; name: string; role: UserRole }
   users: Array<{ id: number; name: string }>
   bouquets: BouquetTemplate[]
   initialQuickReplies: QuickReply[]

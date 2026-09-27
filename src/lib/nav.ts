@@ -46,22 +46,22 @@ export type NavGroup = {
 // Единый источник навигации. roles — консервативное ОБЪЕДИНЕНИЕ текущих прав
 // (backoffice.tsx roleSectionIds + florist/cash override, crm-shell navItems,
 // backoffice-route canAccessSection). НЕ расширять и НЕ сужать без отдельной задачи.
-// florist получает "orders" и "order-drafts" (черновики доступны ему полностью — см. роли
-// draft-экшенов в actions.ts); доступ к "sales" (Касса) — особый случай, разрешён при ЛЮБОЙ
-// открытой смене (canAccessCash = canUseCash) — см. getNavForRole.
+// florist работает со столом заказов и черновиками, чатами, клиентами и готовыми заказами
+// (TEAM_ROLES в actions.ts; его заказы, клиенты и сообщения помечаются «флорист»). Доступ к "sales"
+// (Касса) — особый случай, разрешён при ЛЮБОЙ открытой смене (canAccessCash = canUseCash).
 export const NAV: NavItem[] = [
   { id: "dashboard", label: "Дашборд", href: "/dashboard", iconKey: "dashboard", roles: ["owner"] },
   { id: "analytics", label: "Аналитика", href: "/analytics", iconKey: "analytics", roles: ["owner"] },
-  { id: "chats", label: "Чаты", href: "/chats", iconKey: "chats", roles: ["owner", "manager"] },
+  { id: "chats", label: "Чаты", href: "/chats", iconKey: "chats", roles: ["owner", "manager", "florist"] },
   // Канбан сделок выведен из сайдбара: рабочий список менеджера — «Чаты» (заказ создаётся из
   // диалога). Маршрут /deals остаётся доступным по прямой ссылке (старые ссылки из заказов).
   { id: "deals", label: "Сделки", href: "/deals", iconKey: "deals", roles: ["owner", "manager"], sidebar: false },
-  { id: "clients", label: "Клиенты", href: "/clients", iconKey: "clients", roles: ["owner", "manager"] },
+  { id: "clients", label: "Клиенты", href: "/clients", iconKey: "clients", roles: ["owner", "manager", "florist"] },
   { id: "bouquets", label: "Букеты", href: "/bouquets", iconKey: "bouquets", roles: ["owner", "manager"] },
   { id: "sales", label: "Касса", href: "/cash", iconKey: "cash", roles: ["owner", "manager"] },
   { id: "orders", label: "Стол заказов", href: "/orders", iconKey: "orders", roles: ["owner", "manager", "florist"] },
   { id: "order-drafts", label: "Черновики", href: "/orders/drafts", iconKey: "order-drafts", roles: ["owner", "manager", "florist"], sidebar: false },
-  { id: "ready-orders", label: "Готовые заказы", href: "/ready-orders", iconKey: "ready-orders", roles: ["owner", "manager"] },
+  { id: "ready-orders", label: "Готовые заказы", href: "/ready-orders", iconKey: "ready-orders", roles: ["owner", "manager", "florist"] },
   // Раздел «Склад»: в сайдбаре виден одним пунктом «Склад», остальное — вкладки STOCK_SUBNAV.
   { id: "stock", label: "Склад", href: "/stock", iconKey: "stock", roles: ["owner"] },
   { id: "stock-report", label: "Остатки", href: "/stock/report", iconKey: "stock-report", roles: ["owner"], sidebar: false },
@@ -103,9 +103,8 @@ export const NAV_BY_HREF: Record<string, NavItem> = NAV.reduce(
   {} as Record<string, NavItem>
 )
 
-// Доступ к конкретному разделу. Воспроизводит ОБЪЕДИНЕНИЕ текущих правил:
-// owner — всё; manager — все его разделы из NAV; florist — "orders", "order-drafts" и "guides",
-// плюс "sales" при любой открытой смене (canAccessCash).
+// Доступ к конкретному разделу: owner — всё; manager и florist — свои разделы из NAV; florist
+// дополнительно получает "sales" при любой открытой смене (canAccessCash).
 export function canAccessSection(
   section: NavSectionId,
   role: UserRole,
@@ -115,20 +114,16 @@ export function canAccessSection(
     return true
   }
 
-  if (role === "florist") {
-    if (section === "orders" || section === "order-drafts" || section === "guides") {
-      return true
-    }
-
-    return section === "sales" && canAccessCash
+  if (role === "florist" && section === "sales") {
+    return canAccessCash
   }
 
   return NAV_BY_ID[section]?.roles.includes(role) ?? false
 }
 
-// Видимые в сайдбаре разделы для роли. florist при открытой ночной смене
-// получает дополнительно "Касса" (sales), иначе — только "orders". Разделы с
-// sidebar:false в сайдбар не попадают (они — вкладки внутри родительского раздела).
+// Видимые в сайдбаре разделы для роли. florist при открытой смене получает дополнительно
+// "Касса" (sales). Разделы с sidebar:false в сайдбар не попадают (они — вкладки внутри
+// родительского раздела).
 export function getNavForRole(
   role: UserRole,
   { canAccessCash }: { canAccessCash: boolean }

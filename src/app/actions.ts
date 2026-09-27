@@ -201,6 +201,12 @@ async function requireActionRole(roles: UserRole[]) {
   return user
 }
 
+// Вся команда: флористу открыты чаты, клиенты, оформление заказа и возврат. Его заказы, клиенты
+// и сообщения помечаются «флорист» (автор хранится в created_by_user_id / author_user_id), а
+// сторнировать он может только свои кассовые операции (assertFloristEditsOwn). Сделки, склад и
+// настройки остаются за owner/manager.
+const TEAM_ROLES: UserRole[] = ["owner", "manager", "florist"]
+
 async function runAction(
   action: () => ActionPayload | Promise<ActionPayload>,
   message: string
@@ -693,17 +699,17 @@ export async function linkDealToWazzupByCustomerAction(dealId: number) {
 }
 
 export async function createCustomerAction(formData: FormData) {
-  return runRoleAction(["owner", "manager"], () => {
-    const customerId = createCustomer(formData)
+  return runRoleAction(TEAM_ROLES, (user) => {
+    const customerId = createCustomer(formData, user.id)
     revalidateCrm(customerId, null)
   }, "Клиент создан.")
 }
 
 export async function createCashCustomerAction(formData: FormData): Promise<DataActionResult<CustomerOption>> {
   return runDataAction<CustomerOption>(
-    ["owner", "manager"],
-    () => {
-      const customerId = createCustomer(formData)
+    TEAM_ROLES,
+    (user) => {
+      const customerId = createCustomer(formData, user.id)
       const customer = getCustomer(customerId)
       if (!customer) {
         throw new Error("Клиент создан, но не найден.")
@@ -726,9 +732,9 @@ export async function createCashCustomerAction(formData: FormData): Promise<Data
 }
 
 export async function updateCustomerAction(formData: FormData) {
-  return runRoleAction(["owner", "manager"], () => {
+  return runRoleAction(TEAM_ROLES, (user) => {
     const customerId = Number(String(formData.get("customerId") ?? ""))
-    updateCustomer(formData)
+    updateCustomer(formData, user)
     revalidateCrm(customerId, null)
   }, "Клиент сохранен.")
 }
@@ -1111,7 +1117,7 @@ export async function reverseCashTransactionAction(formData: FormData) {
 
 export async function createOrderAction(formData: FormData) {
   return runRoleAction(
-    ["owner", "manager"],
+    TEAM_ROLES,
     (user) => {
       const { prepaid } = createOrder(formData, user)
       return [
@@ -1125,8 +1131,7 @@ export async function createOrderAction(formData: FormData) {
 
 // Черновики заказов — все роли, включая флориста: он их и видит, и правит, и отправляет в работу.
 // Предоплата черновика при отправке в работу становится отложенной предоплатой заказа (в кассу
-// проводится при выдаче, в смену выдачи), а удаление черновика необратимо — в отличие от
-// createOrderAction (обычный заказ), который остаётся за owner/manager.
+// проводится при выдаче, в смену выдачи), а удаление черновика необратимо.
 export async function createOrderDraftAction(formData: FormData) {
   return runRoleAction(
     ["owner", "manager", "florist"],
@@ -1182,14 +1187,15 @@ export async function handOrderToCourierAction(orderId: number, formData: FormDa
   return runCashAction((user) => handOrderToCourier(orderId, formData, user), "Заказ передан курьеру")
 }
 
-// Единый поиск для возврата (owner/manager). Только чтение: и заказы, и прямые продажи в одном
-// ответе, чтобы менеджер не думал «продажа это или заказ». Возврат заказа идёт через
-// cancelOrderAction, возврат продажи — через reverseCashTransactionAction (по cashTransactionId).
+// Единый поиск для возврата. Только чтение: и заказы, и прямые продажи в одном ответе, чтобы
+// менеджер не думал «продажа это или заказ». Возврат заказа идёт через cancelOrderAction, возврат
+// продажи — через reverseCashTransactionAction (по cashTransactionId); оба требуют кассового
+// доступа, а флорист сторнирует только свои продажи.
 export async function findRefundablesAction(
   query: string
 ): Promise<DataActionResult<{ orders: RefundableOrder[]; sales: RefundableSale[] }>> {
   return runDataAction(
-    ["owner", "manager"],
+    TEAM_ROLES,
     () => ({ orders: findRefundableOrders(query), sales: findRefundableSales(query) }),
     "Готово"
   )
@@ -1249,7 +1255,8 @@ export async function setUserActiveAction(userId: number, isActive: boolean) {
 
 
 // ---------------------------------------------------------------------------------------------
-// Единое окно чатов (/chats). Все мутации — owner/manager; отправка идёт через Wazzup на сервере.
+// Единое окно чатов (/chats). Все мутации — вся команда (сообщения флориста помечаются в ленте);
+// отправка идёт через Wazzup на сервере.
 
 function revalidateChats() {
   revalidatePath("/chats")
@@ -1257,7 +1264,7 @@ function revalidateChats() {
 
 export async function sendChatMessageAction(chatId: number, options: SendChatMessageOptions): Promise<ActionResult> {
   try {
-    const user = await requireActionRole(["owner", "manager"])
+    const user = await requireActionRole(TEAM_ROLES)
     await sendChatMessage(chatId, user, options)
     revalidateChats()
     return { ok: true, message: "Сообщение отправлено" }
@@ -1268,7 +1275,7 @@ export async function sendChatMessageAction(chatId: number, options: SendChatMes
 
 export async function sendBouquetToChatAction(chatId: number, bouquetId: number): Promise<ActionResult> {
   try {
-    const user = await requireActionRole(["owner", "manager"])
+    const user = await requireActionRole(TEAM_ROLES)
     await sendBouquetToChat(chatId, bouquetId, user)
     revalidateChats()
     return { ok: true, message: "Букет отправлен в чат" }
@@ -1279,7 +1286,7 @@ export async function sendBouquetToChatAction(chatId: number, bouquetId: number)
 
 export async function forwardChatMessageAction(messageRowId: number, targetChatId: number): Promise<ActionResult> {
   try {
-    const user = await requireActionRole(["owner", "manager"])
+    const user = await requireActionRole(TEAM_ROLES)
     await forwardChatMessage(messageRowId, targetChatId, user)
     revalidateChats()
     return { ok: true, message: "Сообщение переслано" }
@@ -1289,7 +1296,7 @@ export async function forwardChatMessageAction(messageRowId: number, targetChatI
 }
 
 export async function assignChatAction(chatId: number, userId: number | null): Promise<ActionResult> {
-  return runRoleAction(["owner", "manager"], () => {
+  return runRoleAction(TEAM_ROLES, () => {
     const target = userId === null ? null : listUsers().find((user) => user.id === userId && user.isActive)
     if (userId !== null && !target) {
       throw new Error("Сотрудник не найден.")
@@ -1299,14 +1306,14 @@ export async function assignChatAction(chatId: number, userId: number | null): P
   }, userId === null ? "Ответственный снят." : "Ответственный назначен.")
 }
 
-// Быстрые ответы: общий список команды, правят owner и manager. Мутации возвращают свежий список —
-// композер сразу показывает изменения без перезагрузки страницы.
+// Быстрые ответы: общий список команды, правят все, кто работает в чатах. Мутации возвращают свежий
+// список — композер сразу показывает изменения без перезагрузки страницы.
 export async function saveQuickReplyAction(
   id: number | null,
   input: QuickReplyInput
 ): Promise<DataActionResult<{ id: number; replies: QuickReply[] }>> {
   return runDataAction(
-    ["owner", "manager"],
+    TEAM_ROLES,
     (user) => {
       let savedId = id ?? 0
       if (id) {
@@ -1323,7 +1330,7 @@ export async function saveQuickReplyAction(
 
 export async function deleteQuickReplyAction(id: number): Promise<DataActionResult<{ replies: QuickReply[] }>> {
   return runDataAction(
-    ["owner", "manager"],
+    TEAM_ROLES,
     () => {
       deleteQuickReply(id)
       return { replies: listQuickReplies() }
@@ -1335,7 +1342,7 @@ export async function deleteQuickReplyAction(id: number): Promise<DataActionResu
 
 export async function markQuickReplyUsedAction(id: number): Promise<void> {
   try {
-    await requireActionRole(["owner", "manager"])
+    await requireActionRole(TEAM_ROLES)
     markQuickReplyUsed(id)
   } catch {
     // счётчик — только для сортировки, ошибка не должна мешать ответу клиенту
@@ -1343,14 +1350,14 @@ export async function markQuickReplyUsedAction(id: number): Promise<void> {
 }
 
 export async function markChatAnsweredAction(chatId: number): Promise<ActionResult> {
-  return runRoleAction(["owner", "manager"], () => {
+  return runRoleAction(TEAM_ROLES, () => {
     markChatAnswered(chatId)
     revalidateChats()
   }, "Диалог отмечен отвеченным.")
 }
 
 export async function setChatArchivedAction(chatId: number, archived: boolean): Promise<ActionResult> {
-  return runRoleAction(["owner", "manager"], () => {
+  return runRoleAction(TEAM_ROLES, () => {
     setChatArchived(chatId, archived)
     revalidateChats()
   }, archived ? "Диалог в архиве — его сообщения больше не высвечиваются." : "Диалог возвращён из архива.")
@@ -1362,7 +1369,7 @@ export async function updateCustomerFieldAction(
   value: string
 ): Promise<DataActionResult<{ value: string; changed: boolean }>> {
   return runDataAction(
-    ["owner", "manager"],
+    TEAM_ROLES,
     (user) => {
       const result = updateCustomerField(customerId, field, value, user)
       revalidateCrm(customerId, null)
@@ -1376,8 +1383,8 @@ export async function updateCustomerFieldAction(
 
 export async function createCustomerFromChatAction(chatId: number): Promise<DataActionResult<{ customerId: number }>> {
   return runDataAction(
-    ["owner", "manager"],
-    () => {
+    TEAM_ROLES,
+    (user) => {
       const chat = getChatById(chatId)
       if (!chat) {
         throw new Error("Диалог не найден.")
@@ -1385,7 +1392,7 @@ export async function createCustomerFromChatAction(chatId: number): Promise<Data
       if (chat.customerId) {
         return { customerId: chat.customerId }
       }
-      const customerId = createCustomerFromChat(chat)
+      const customerId = createCustomerFromChat(chat, user.id)
       revalidateCrm(customerId, null)
       revalidateChats()
       return { customerId }
@@ -1401,14 +1408,14 @@ export async function openWhatsappChatAction(input: {
   customerId?: number | null
 }): Promise<DataActionResult<{ chatId: number; created: boolean }>> {
   return runDataAction(
-    ["owner", "manager"],
-    () => {
+    TEAM_ROLES,
+    (user) => {
       const result = findOrCreateWhatsappChat(input)
       // Диалог, заведённый вручную, сразу получает карточку клиента (имя + телефон из формы),
       // чтобы заказ из него создавался без лишнего шага.
       const chat = getChatById(result.id)
       if (chat && !chat.customerId) {
-        const customerId = createCustomerFromChat(chat)
+        const customerId = createCustomerFromChat(chat, user.id)
         revalidateCrm(customerId, null)
       }
       revalidateChats()
@@ -1426,7 +1433,7 @@ export async function attachChatMediaToOrderAction(
   kind: "photo" | "receipt"
 ): Promise<DataActionResult<{ image: OrderImage }>> {
   return runDataAction(
-    ["owner", "manager"],
+    TEAM_ROLES,
     async (user) => ({ image: await attachChatMediaToOrder(messageRowId, kind, user) }),
     kind === "receipt" ? "Чек добавлен к новому заказу." : "Фото добавлено к новому заказу.",
     "Не удалось прикрепить фото."
@@ -1435,7 +1442,7 @@ export async function attachChatMediaToOrderAction(
 
 export async function sendOrderToChatAction(chatId: number, orderId: number): Promise<ActionResult> {
   try {
-    const user = await requireActionRole(["owner", "manager"])
+    const user = await requireActionRole(TEAM_ROLES)
     await sendOrderSummaryToChat(chatId, orderId, user)
     revalidateChats()
     return { ok: true, message: "Состав заказа отправлен в чат" }

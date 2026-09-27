@@ -1397,3 +1397,11 @@ export function migrateQuickReplies(client: Database.Database) {
 export function migrateChatArchive(client: Database.Database) {
   ensureColumn("chats", "archived_at", "ALTER TABLE chats ADD COLUMN archived_at TEXT", client)
 }
+
+// Кто сделал действие — чтобы помечать действия флористов: кто выдал заказ (клиенту или курьеру),
+// кто добавил клиента, кто отправил сообщение из FlowerBuro. Автор заказа уже есть (created_by_user_id).
+export function migrateActorMarks(client: Database.Database) {
+  ensureColumn("orders", "completed_by_user_id", "ALTER TABLE orders ADD COLUMN completed_by_user_id INTEGER", client)
+  ensureColumn("customers", "created_by_user_id", "ALTER TABLE customers ADD COLUMN created_by_user_id INTEGER", client)
+  ensureColumn("wazzup_messages", "author_user_id", "ALTER TABLE wazzup_messages ADD COLUMN author_user_id INTEGER", client)
+}

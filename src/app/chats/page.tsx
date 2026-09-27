@@ -3,6 +3,7 @@ import { ChatsScreen } from "@/components/chats/chats-screen"
 import { CrmShell } from "@/components/crm-shell"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
+import { canAccessSection } from "@/lib/nav"
 import { getCustomer, listCustomerOptions, listProducts } from "@/lib/crm"
 import {
   findOrCreateWhatsappChat,
@@ -19,7 +20,8 @@ import {
 
 export const dynamic = "force-dynamic"
 
-// Единое окно чатов (WhatsApp / Instagram через Wazzup). Только owner + manager.
+// Единое окно чатов (WhatsApp / Instagram через Wazzup). Вся команда: сообщения флориста
+// помечаются в ленте, флориста можно назначить ответственным.
 // ?chat=<id> — открытый диалог, ?customer=<id> — диалог клиента (ссылка из заказа/карточки;
 // если переписки ещё нет, а телефон есть — создаём пустой WhatsApp-диалог), ?new=1 — окно «Новый чат».
 export default async function ChatsPage({
@@ -28,7 +30,7 @@ export default async function ChatsPage({
   searchParams: Promise<{ chat?: string; customer?: string; new?: string; tab?: string }>
 }) {
   const user = await requireUser()
-  if (user.role === "florist") {
+  if (!canAccessSection("chats", user.role, false)) {
     return <AccessDenied homeHref={getDefaultPathForRole(user.role)} />
   }
 
@@ -41,7 +43,7 @@ export default async function ChatsPage({
   }
   const tab: ChatTab = params.tab === "waiting" || params.tab === "mine" || params.tab === "new" ? params.tab : "all"
   const users = listUsers()
-    .filter((item) => item.isActive && item.role !== "florist")
+    .filter((item) => item.isActive)
     .map((item) => ({ id: item.id, name: item.name }))
 
   return (
@@ -55,7 +57,7 @@ export default async function ChatsPage({
       layout="fill"
     >
       <ChatsScreen
-        currentUser={{ id: user.id, name: user.name }}
+        currentUser={{ id: user.id, name: user.name, role: user.role }}
         users={users}
         bouquets={listBouquetTemplates({ activeOnly: true })}
         initialQuickReplies={listQuickReplies()}

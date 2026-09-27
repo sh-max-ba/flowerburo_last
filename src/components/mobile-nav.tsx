@@ -6,6 +6,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { MenuIcon } from "lucide-react"
 
+import type { UserRole } from "@/lib/db"
 import type { NavItem, NavSectionId } from "@/lib/nav"
 import { NAV_ICONS } from "@/lib/nav-icons"
 import { cn } from "@/lib/utils"
@@ -16,8 +17,10 @@ import { useSidebar } from "@/components/ui/sidebar"
 // пятая вкладка показывает его и подсвечена — видно, где ты.
 
 // Порядок важности разделов на телефоне: первые четыре доступных роли попадают на панель.
-// owner → Дашборд, Чаты, Касса, Заказы; manager → Чаты, Касса, Заказы, Готовые; florist → Заказы (+Касса).
+// owner → Дашборд, Чаты, Касса, Заказы; manager → Чаты, Касса, Заказы, Готовые; florist — от стола
+// заказов (его главный экран): Заказы, Касса (при открытой смене), Готовые, Чаты.
 const MOBILE_PRIORITY: NavSectionId[] = ["dashboard", "chats", "sales", "orders", "ready-orders", "clients"]
+const FLORIST_MOBILE_PRIORITY: NavSectionId[] = ["orders", "sales", "ready-orders", "chats", "clients"]
 const MOBILE_SLOTS = 4
 
 const SHORT_LABELS: Partial<Record<NavSectionId, string>> = {
@@ -26,8 +29,9 @@ const SHORT_LABELS: Partial<Record<NavSectionId, string>> = {
   "history-cash": "История",
 }
 
-export function getMobileTabs(items: NavItem[]) {
-  return MOBILE_PRIORITY.map((id) => items.find((item) => item.id === id)).filter((item): item is NavItem => Boolean(item)).slice(0, MOBILE_SLOTS)
+export function getMobileTabs(items: NavItem[], role: UserRole) {
+  const priority = role === "florist" ? FLORIST_MOBILE_PRIORITY : MOBILE_PRIORITY
+  return priority.map((id) => items.find((item) => item.id === id)).filter((item): item is NavItem => Boolean(item)).slice(0, MOBILE_SLOTS)
 }
 
 type MobileChrome = {
@@ -98,6 +102,7 @@ const DRAG_THRESHOLD_PX = 8
 
 type MobileTabBarProps = {
   items: NavItem[]
+  role: UserRole
   active: NavSectionId
   hidden?: boolean
   badges?: Partial<Record<NavSectionId, React.ReactNode>>
@@ -116,7 +121,7 @@ type DockEntry = {
 
 // Док-панель на телефоне: плавающая стеклянная капсула. Палец, ведомый по доку, увеличивает
 // иконку под собой и (слабее) соседей; отпускание над иконкой открывает раздел.
-export function MobileTabBar({ items, active, hidden = false, badges }: MobileTabBarProps) {
+export function MobileTabBar({ items, role, active, hidden = false, badges }: MobileTabBarProps) {
   const router = useRouter()
   const { setOpenMobile, openMobile } = useSidebar()
   const dockRef = useRef<HTMLDivElement | null>(null)
@@ -126,7 +131,7 @@ export function MobileTabBar({ items, active, hidden = false, badges }: MobileTa
   // «Лупа»: позиция пальца/мыши по X внутри дока и замеренные центры иконок (null — выключена).
   const [lens, setLens] = useState<Lens | null>(null)
 
-  const tabs = getMobileTabs(items)
+  const tabs = getMobileTabs(items, role)
   const activeInTabs = tabs.some((item) => item.id === active)
   const activeItem = items.find((item) => item.id === active)
   // «Ещё» становится текущим разделом, если он не на панели (Склад, Клиенты, Настройки…).

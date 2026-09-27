@@ -10,6 +10,7 @@ import { cn, formatMoney } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { OrderImageLightbox } from "@/components/orders/order-images"
+import { FloristMark } from "@/components/florist-mark"
 import { OrderComposition, OrderStatusBadge, OrderUrgencyBadge, dateTime, dateTimeLong } from "@/components/orders/order-shared"
 
 // Карточка заказа для просмотра: фото и чеки (галерея с лайтбоксом), кто/когда/куда, состав,
@@ -71,6 +72,16 @@ function OrderDetailsBody({
               {order.dueAt ? `Срок: ${dateTimeLong(order.dueAt)}` : "Без срока"} · создан {dateTime(order.createdAt)}
               {order.source ? ` · ${sourceLabel(order.source)}` : ""}
             </DialogDescription>
+            {order.createdByRole === "florist" || order.completedByRole === "florist" ? (
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                <FloristMark role={order.createdByRole} name={order.createdByName} action="Оформил" />
+                <FloristMark
+                  role={order.completedByRole}
+                  name={order.completedByName}
+                  action={order.status === "Передан курьеру" ? "Передал курьеру" : "Выдал"}
+                />
+              </div>
+            ) : null}
           </div>
           {canEdit && onEdit ? (
             <Button type="button" size="sm" variant="ghost" className="bg-muted/60" onClick={() => onEdit(order)}>

@@ -192,7 +192,7 @@ async function main() {
     customerForm.set("name", "Новый телефон")
     customerForm.set("phone", "996706069090")
     customerForm.set("source", "manual")
-    updateCustomer(customerForm)
+    updateCustomer(customerForm, user)
 
     const updatedDealRow = db.prepare("SELECT customer_name, customer_phone FROM deals WHERE id = ?").get(staleDealId) as Row
     assert(updatedDealRow.customer_name === "Новый телефон", "Deal customer name snapshot was not updated")

@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import crypto from "node:crypto"
 import { getCurrentUser } from "@/lib/auth"
+import { canAccessSection } from "@/lib/nav"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -23,7 +24,7 @@ const allowedTypes = new Map<string, string>([
 // уходит в Wazzup как contentUri (абсолютизируется через NEXT_PUBLIC_APP_URL при отправке).
 export async function POST(request: Request) {
   const user = await getCurrentUser()
-  if (!user || (user.role !== "owner" && user.role !== "manager")) {
+  if (!user || !canAccessSection("chats", user.role, false)) {
     return Response.json({ ok: false, message: "Недостаточно прав." }, { status: 403 })
   }
 
