@@ -132,6 +132,8 @@ const run = db.transaction(() => {
     ).run(name, phone, phone.replace(/\D/g, ""), phone.replace(/\D/g, ""), customer.id)
   }
   db.prepare("DELETE FROM customer_changes").run()
+  // Важные даты клиентов (заметки — имена родных, предпочтения): демо-даты расставляет съёмка.
+  if (has("customer_dates", "id")) db.prepare("DELETE FROM customer_dates").run()
 
   // --- Заказы ---
   const isInternalLabel = (value) => /\d/.test(value ?? "") || /витрин/i.test(value ?? "")

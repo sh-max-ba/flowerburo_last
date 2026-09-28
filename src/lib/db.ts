@@ -188,6 +188,13 @@ export {
   quickReplyTitleMax,
 } from "./db/queries/quick-replies"
 export type { QuickReply, QuickReplyInput } from "./db/queries/quick-replies"
+export {
+  listCustomerDates,
+  listUpcomingCustomerDates,
+  saveCustomerDate,
+  deleteCustomerDate,
+} from "./db/queries/customer-dates"
+export type { CustomerDateInput } from "./db/queries/customer-dates"
 export type {
   WazzupChatIdentity,
   OutboundWazzupMessageInput,

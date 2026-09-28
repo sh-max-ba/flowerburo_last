@@ -104,6 +104,7 @@ export type GuideIconKey =
   | "quick"
   | "order-new"
   | "client"
+  | "dates"
   | "bouquet"
   | "issue"
   | "history"

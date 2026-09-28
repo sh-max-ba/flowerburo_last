@@ -319,13 +319,16 @@ export type CustomerChange = {
   userId: number | null
   userName: string
   userRole: UserRole | null
-  field: CustomerEditableField
+  field: CustomerChangeField
   oldValue: string
   newValue: string
   createdAt: string
 }
 
 export type CustomerEditableField = "name" | "phone" | "defaultDiscountPercent" | "comment" | "instagram"
+
+// В историю пишутся и важные даты (добавлена/изменена/удалена) — одной строкой «повод · дата».
+export type CustomerChangeField = CustomerEditableField | "importantDate"
 
 const customerFieldColumns: Record<CustomerEditableField, string> = {
   name: "name",
@@ -352,7 +355,7 @@ export function listCustomerChanges(customerId: number, limit = 50): CustomerCha
     userId: row.user_id == null ? null : toNumber(row.user_id),
     userName: String(row.user_name ?? ""),
     userRole: userRoleFromRow(row.user_role),
-    field: String(row.field ?? "") as CustomerEditableField,
+    field: String(row.field ?? "") as CustomerChangeField,
     oldValue: String(row.old_value ?? ""),
     newValue: String(row.new_value ?? ""),
     createdAt: String(row.created_at ?? ""),

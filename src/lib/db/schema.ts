@@ -1405,3 +1405,25 @@ export function migrateActorMarks(client: Database.Database) {
   ensureColumn("customers", "created_by_user_id", "ALTER TABLE customers ADD COLUMN created_by_user_id INTEGER", client)
   ensureColumn("wazzup_messages", "author_user_id", "ALTER TABLE wazzup_messages ADD COLUMN author_user_id INTEGER", client)
 }
+
+// v32: важные даты клиента — день рождения, годовщина, ДР близких. Повторяются каждый год: храним
+// день и месяц, год — по желанию (чтобы видеть «исполнится 30»). Ближайшие даты считаются в коде
+// в поясе магазина (дашборд, «Клиенты → Даты», карточка клиента и панель «Контакт» в чатах).
+export function migrateCustomerDates(client: Database.Database) {
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS customer_dates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      day INTEGER NOT NULL,
+      year INTEGER,
+      note TEXT NOT NULL DEFAULT '',
+      created_by_user_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_dates_customer ON customer_dates(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_dates_month_day ON customer_dates(month, day);
+  `)
+}

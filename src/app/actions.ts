@@ -114,8 +114,11 @@ import {
   updateQuickReply,
   deleteQuickReply,
   markQuickReplyUsed,
+  saveCustomerDate,
+  deleteCustomerDate,
   type QuickReply,
   type QuickReplyInput,
+  type CustomerDateInput,
   type StockDocumentType,
   type UserRole,
   type CurrentUser,
@@ -737,6 +740,28 @@ export async function updateCustomerAction(formData: FormData) {
     updateCustomer(formData, user)
     revalidateCrm(customerId, null)
   }, "Клиент сохранен.")
+}
+
+// Важные даты клиента: добавить/изменить/удалить. Видны в карточке клиента, в панели «Контакт»
+// чата, на дашборде и во вкладке «Клиенты → Даты» — обновляем все эти экраны.
+export async function saveCustomerDateAction(dateId: number | null, input: CustomerDateInput) {
+  return runRoleAction(TEAM_ROLES, (user) => {
+    saveCustomerDate(dateId, input, user)
+    revalidateCustomerDates(input.customerId)
+  }, dateId ? "Дата сохранена." : "Дата добавлена.")
+}
+
+export async function deleteCustomerDateAction(dateId: number) {
+  return runRoleAction(TEAM_ROLES, (user) => {
+    const customerId = deleteCustomerDate(dateId, user)
+    revalidateCustomerDates(customerId)
+  }, "Дата удалена.")
+}
+
+function revalidateCustomerDates(customerId: number) {
+  revalidateCrm(customerId, null)
+  revalidatePath("/dashboard")
+  revalidateChats()
 }
 
 export async function createDealAction(formData: FormData) {

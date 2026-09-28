@@ -103,3 +103,46 @@ async function inboundImage({ chatId, name, minutesAgo }) {
   })
   if (!response.ok) throw new Error(`webhook image ${response.status}`)
 }
+
+// Важные даты демо-клиентов — от сегодняшнего дня магазина, чтобы «сегодня», «завтра» и «через N дней»
+// были в кадре. Клиентка сюжета получает свои даты через интерфейс (съёмка окна «Новая важная дата»).
+export function seedDates(db) {
+  if (db.prepare("SELECT count(*) AS n FROM customer_dates").get().n) return
+  const plan = [
+    { offset: 0, title: "Годовщина свадьбы", year: 2016, note: "Муж заказывает каждый год — 25 красных роз" },
+    { offset: 1, title: "ДР жены", year: 1992, note: "Жена Алия, любит пионы" },
+    { offset: 3, title: "День рождения", year: 1988, note: "" },
+    { offset: 6, title: "ДР мамы", year: null, note: "Мама — Галина, хризантемы" },
+    { offset: 12, title: "День рождения", year: 1995, note: "Любит тюльпаны" },
+    { offset: 19, title: "Годовщина свадьбы", year: 2021, note: "" },
+    { offset: 27, title: "День рождения", year: null, note: "" },
+  ]
+  // Сначала клиенты из демо-переписки (у них есть чат — в строке будет «Написать в чат»), потом с заказами.
+  const customers = db
+    .prepare(
+      `SELECT c.id FROM customers c
+       WHERE COALESCE(c.phone, '') <> '' AND c.name <> ?
+       ORDER BY EXISTS (SELECT 1 FROM chats WHERE chats.customer_id = c.id) DESC,
+         (SELECT count(*) FROM orders o WHERE o.customer_id = c.id) DESC, c.id
+       LIMIT ?`
+    )
+    .all(STORY.client.name, plan.length)
+  const insert = db.prepare(
+    "INSERT INTO customer_dates (customer_id, title, month, day, year, note) VALUES (?, ?, ?, ?, ?, ?)"
+  )
+  plan.forEach((item, index) => {
+    const customer = customers[index]
+    if (!customer) return
+    const { month, day } = shopDayFromToday(item.offset)
+    insert.run(customer.id, item.title, month, day, item.year, item.note)
+  })
+}
+
+// День и месяц через `offset` дней от сегодняшнего дня магазина (Бишкек).
+export function shopDayFromToday(offset) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bishkek", year: "numeric", month: "2-digit", day: "2-digit" })
+    .formatToParts(new Date())
+  const get = (type) => Number(parts.find((part) => part.type === type)?.value)
+  const date = new Date(Date.UTC(get("year"), get("month") - 1, get("day") + offset))
+  return { month: date.getUTCMonth() + 1, day: date.getUTCDate() }
+}

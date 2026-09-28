@@ -14,10 +14,12 @@ import {
 import { toast } from "sonner"
 import { updateCustomerAction } from "@/app/actions"
 import type { Customer, Deal } from "@/lib/crm"
+import type { CustomerDate } from "@/lib/customer-dates"
 import type { Order, Sale } from "@/lib/db"
 import { getPaymentMethodLabel, sourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { FloristMark } from "@/components/florist-mark"
+import { CustomerDatesSection } from "@/components/customers/customer-dates"
 import { useViewer } from "@/components/viewer-context"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -59,12 +61,15 @@ export function CustomerDetailPage({
   deals,
   orders,
   sales,
+  dates,
   hasChat = false,
 }: {
   customer: Customer
   deals: Deal[]
   orders: Order[]
   sales: Sale[]
+  // Дни рождения, годовщины — ближайшая первой.
+  dates: CustomerDate[]
   // У клиента уже есть диалог в «Чатах» (без телефона ссылку «Открыть чат» показываем только тогда).
   hasChat?: boolean
 }) {
@@ -204,6 +209,8 @@ export function CustomerDetailPage({
               </a>
             ) : null}
           </div>
+
+          <CustomerDatesSection customerId={customer.id} dates={dates} onChanged={() => router.refresh()} />
 
           <div className="grid gap-3 rounded-xl bg-muted/30 p-3 text-sm">
             {customer.instagram ? (

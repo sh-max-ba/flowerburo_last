@@ -2,13 +2,13 @@ import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/auth"
 import { canAccessSection } from "@/lib/nav"
 import { getCustomer, getCustomerStats, listCustomerChanges, listCustomerOrders } from "@/lib/crm"
-import { getChatById } from "@/lib/db"
+import { getChatById, listCustomerDates } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
 
 const noStoreHeaders = { "Cache-Control": "no-store" }
 
-// Контекст диалога для правой панели: карточка клиента, сводка, история правок и заказы.
+// Контекст диалога для правой панели: карточка клиента, важные даты, сводка, история правок и заказы.
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser()
   if (!user || !canAccessSection("chats", user.role, false)) {
@@ -29,6 +29,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       chat,
       customer,
       stats: customer ? getCustomerStats(customer.id) : null,
+      dates: customer ? listCustomerDates(customer.id) : [],
       changes: customer ? listCustomerChanges(customer.id) : [],
       orders: customer ? listCustomerOrders(customer.id) : [],
     },

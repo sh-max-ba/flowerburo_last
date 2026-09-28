@@ -6,7 +6,7 @@ import path from "node:path"
 import { chromium } from "playwright"
 
 import { BASE, capture, dismissToasts, go, login, newRoleContext, settle } from "./lib.mjs"
-import { ASSETS_DIR, openDb, prepareAssets, seedChats, seedQuickReplies, STORY } from "./setup.mjs"
+import { ASSETS_DIR, openDb, prepareAssets, seedChats, seedDates, seedQuickReplies, shopDayFromToday, STORY } from "./setup.mjs"
 
 const LOGINS = { admin: "admin", manager: "asel", florist: "zhibek" }
 
@@ -69,7 +69,9 @@ function popover(page) {
 }
 
 function dialog(page, name) {
-  return name ? page.getByRole("dialog", { name }) : page.locator('[role="dialog"]').last()
+  // Без имени — последнее окно приложения; скрытое окно ошибок dev-сервера Next (data-nextjs-dialog)
+  // не считаем, иначе при любом предупреждении съёмка ждала бы его.
+  return name ? page.getByRole("dialog", { name }) : page.locator('[role="dialog"]:not([data-nextjs-dialog])').last()
 }
 
 function toast(page, text) {
@@ -747,7 +749,73 @@ async function phaseManagerWork() {
   await page.getByRole("link").filter({ hasText: STORY.client.name }).first().click()
   await page.waitForURL(/\/clients\/\d+/)
   await settle(page, 800)
+  const clientUrl = page.url()
+
+  // Важные даты: демо-даты других клиентов + день рождения клиентки сюжета через окно в карточке.
+  const db = openDb()
+  seedDates(db)
+  db.close()
+  const dates = page.locator('[data-slot="customer-dates"]')
+  const birthday = shopDayFromToday(4)
+  const anniversary = shopDayFromToday(47)
+  const monthName = (month) => ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"][month - 1]
+  async function addDate({ title, day, month, year, note }, shotId) {
+    await dates.getByRole("button", { name: "Добавить" }).click()
+    const box = dialog(page, "Новая важная дата")
+    await box.waitFor()
+    const preset = box.getByRole("button", { name: title, exact: true })
+    if (await preset.isVisible().catch(() => false)) await preset.click()
+    else await box.locator("#customer-date-title").fill(title)
+    await chooseSelect(page, box.locator("#customer-date-month"), monthName(month))
+    await chooseSelect(page, box.locator("#customer-date-day"), String(day))
+    if (year) await box.locator("#customer-date-year").fill(String(year))
+    if (note) await box.locator("#customer-date-note").fill(note)
+    if (shotId) {
+      await capture(page, shotId, {
+        dialog: box,
+        title: [box.locator("#customer-date-title"), box.locator('[data-slot="customer-date-presets"]')],
+        when: box.locator('[data-slot="customer-date-when"]'),
+        note: box.locator("#customer-date-note"),
+      })
+    }
+    await box.getByRole("button", { name: "Добавить", exact: true }).click()
+    await waitToast(page, "Дата добавлена")
+    await dismissToasts(page)
+    await settle(page, 600)
+  }
+  await addDate({ title: "День рождения", ...birthday, year: 1994, note: "Любит пионы и нежные тона" }, "manager-date-dialog")
+  await addDate({ title: "Годовщина свадьбы", ...anniversary, year: 2019, note: "Муж — Тимур, заказывает сюрприз" })
+
   await capture(page, "manager-client", { body: page.locator("main, [data-slot='screen-body']").first(), tiles: page.getByText("Всего оплачено").first().locator("xpath=ancestor::*[3]") })
+  // Карточка с блоком дат выше окна планшета — снимаем в высоком окне.
+  await tall(page, () =>
+    capture(page, "manager-dates-card", {
+      card: page.locator('[data-slot="card"]').filter({ has: dates }).first(),
+      dates,
+      add: dates.getByRole("button", { name: "Добавить" }),
+    }), 1000)
+
+  // «Клиенты → Даты»: кого поздравить.
+  await go(page, "/clients?view=dates")
+  await settle(page, 800)
+  await capture(page, "manager-dates-list", {
+    body: page.locator('[data-slot="screen-body"]').first(),
+    tabs: page.getByRole("tablist", { name: "Раздел клиентов" }),
+    filter: page.getByRole("button", { name: /^Период/ }),
+    chat: page.getByRole("link", { name: "Написать в чат" }).first(),
+  })
+
+  // Тот же блок в панели «Контакт» чата.
+  const customerId = clientUrl.match(/\/clients\/(\d+)/)[1]
+  await go(page, `/chats?customer=${customerId}`)
+  await settle(page, 1200)
+  const contactToggle = page.getByRole("button", { name: "Контакт", exact: true }).first()
+  if ((await contactToggle.getAttribute("aria-pressed")) !== "true") await contactToggle.click()
+  const contact = page.getByRole("dialog", { name: "Контакт" }).or(page.locator('aside[aria-label="Контакт"]')).first()
+  await contact.waitFor()
+  await settle(page, 1200)
+  await capture(page, "manager-chat-dates", { panel: contact, dates: contact.locator('[data-slot="customer-dates"]') })
+  await closeOverlays(page)
 }
 
 async function phaseFloristClose() {
@@ -809,8 +877,8 @@ async function phaseAdmin() {
   const shift = db.prepare("SELECT id FROM shifts WHERE status='closed' ORDER BY id DESC LIMIT 1").get()
   db.close()
 
-  // Дашборд — высокое окно, чтобы поместились все карточки, включая «Заказы».
-  await page.setViewportSize({ width: 1280, height: 1950 })
+  // Дашборд — высокое окно, чтобы поместились все карточки, включая «Ближайшие даты» и «Заказы».
+  await page.setViewportSize({ width: 1280, height: 2350 })
   await go(page, "/dashboard")
   await settle(page, 1200)
   const statCard = (text) => page.locator('div[class*="group/stat"]').filter({ hasText: text }).last()
@@ -823,6 +891,7 @@ async function phaseAdmin() {
     stock: statCard("Открыть склад"),
     payments: statCard("Разбивка по оплатам"),
     orders: statCard("Ждут ответа"),
+    dates: statCard("Ближайшие даты"),
   })
   await page.setViewportSize({ width: 1280, height: 800 })
 
