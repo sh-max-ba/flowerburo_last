@@ -6,7 +6,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-act": {
     "width": 1280,
     "height": 800,
-    "v": "83bda164",
+    "v": "dcf50343",
     "targets": {
       "top": [
         0.2,
@@ -25,7 +25,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-acts": {
     "width": 1280,
     "height": 800,
-    "v": "a6cbd392",
+    "v": "012039a5",
     "targets": {
       "table": [
         0.2125,
@@ -44,7 +44,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-analytics": {
     "width": 1280,
     "height": 800,
-    "v": "43a82cae",
+    "v": "8fa48c4b",
     "targets": {
       "header": [
         0.2125,
@@ -55,7 +55,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
       "period": [
         0.2578,
         0.0413,
-        0.1744,
+        0.1745,
         0.05
       ],
       "tabs": [
@@ -81,7 +81,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-dashboard": {
     "width": 1280,
     "height": 2350,
-    "v": "c9dbd383",
+    "v": "c21be92e",
     "targets": {
       "top": [
         0.2125,
@@ -129,7 +129,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
         0.2125,
         0.7336,
         0.775,
-        0.0968
+        0.1062
       ],
       "dates": [
         0.2125,
@@ -142,7 +142,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-inventory": {
     "width": 1280,
     "height": 800,
-    "v": "6483ac2d",
+    "v": "8d974a8e",
     "targets": {
       "top": [
         0.2125,
@@ -167,7 +167,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-inventory-new": {
     "width": 1280,
     "height": 800,
-    "v": "83fe4fc4",
+    "v": "26b7b697",
     "targets": {
       "dialog": [
         0.3,
@@ -180,7 +180,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-inventory-post": {
     "width": 1280,
     "height": 800,
-    "v": "907a95dc",
+    "v": "5559570d",
     "targets": {
       "post": [
         0.4688,
@@ -199,7 +199,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-operations": {
     "width": 1280,
     "height": 800,
-    "v": "9feb7cd1",
+    "v": "341f8bc8",
     "targets": {
       "body": [
         0.2125,
@@ -218,7 +218,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-product-card": {
     "width": 1280,
     "height": 800,
-    "v": "f2cef19e",
+    "v": "4bef3e05",
     "targets": {
       "body": [
         0.2125,
@@ -237,7 +237,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-product-sheet": {
     "width": 1280,
     "height": 1200,
-    "v": "b9a8b2f2",
+    "v": "5de84a2b",
     "targets": {
       "sheet": [
         0.55,
@@ -306,7 +306,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-shift": {
     "width": 1280,
     "height": 800,
-    "v": "00e86864",
+    "v": "a3bf64f0",
     "targets": {
       "top": [
         0.2125,
@@ -337,7 +337,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-shifts": {
     "width": 1280,
     "height": 800,
-    "v": "2a3d7cb2",
+    "v": "44d6b58f",
     "targets": {
       "table": [
         0.2125,
@@ -356,7 +356,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-stock": {
     "width": 1280,
     "height": 800,
-    "v": "3011f03c",
+    "v": "53a28dd5",
     "targets": {
       "header": [
         0.2125,
@@ -393,7 +393,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-stock-in": {
     "width": 1280,
     "height": 1100,
-    "v": "3283c7d8",
+    "v": "27c5680f",
     "targets": {
       "sheet": [
         0.0625,
@@ -448,7 +448,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-stock-out": {
     "width": 1280,
     "height": 900,
-    "v": "d9c959f2",
+    "v": "05ee33fd",
     "targets": {
       "sheet": [
         0.0625,
@@ -497,7 +497,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-supplier": {
     "width": 1280,
     "height": 800,
-    "v": "c21166fa",
+    "v": "ce1257d1",
     "targets": {
       "header": [
         0.2125,
@@ -528,7 +528,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "admin-supplier-pay": {
     "width": 1280,
     "height": 800,
-    "v": "a5cd988f",
+    "v": "2128457d",
     "targets": {
       "dialog": [
         0.3,
@@ -603,7 +603,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-calendar": {
     "width": 1280,
     "height": 1000,
-    "v": "9273a666",
+    "v": "df4e0391",
     "targets": {
       "board": [
         0.2125,
@@ -627,14 +627,14 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
         0.225,
         0.17,
         0.75,
-        0.65
+        0.28
       ]
     }
   },
   "florist-cancel": {
     "width": 1280,
     "height": 800,
-    "v": "cf1ee509",
+    "v": "97382d8f",
     "targets": {
       "dialog": [
         0.35,
@@ -653,13 +653,13 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-cash": {
     "width": 1280,
     "height": 800,
-    "v": "8b3722f3",
+    "v": "833c0760",
     "targets": {
       "cart": [
         0.2125,
         0.1275,
         0.4844,
-        0.7375
+        0.775
       ],
       "payment": [
         0.7063,
@@ -669,7 +669,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
       ],
       "extras": [
         0.7188,
-        0.4306,
+        0.5756,
         0.2562,
         0.04
       ],
@@ -690,18 +690,18 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-cash-search": {
     "width": 1280,
     "height": 800,
-    "v": "53669f4a",
+    "v": "ac9d8f00",
     "targets": {
       "search": [
         0.2953,
         0.0375,
-        0.6438,
+        0.6094,
         0.0575
       ],
       "results": [
         0.2984,
         0.1075,
-        0.6375,
+        0.6031,
         0.295
       ]
     }
@@ -709,7 +709,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-close-confirm": {
     "width": 1280,
     "height": 800,
-    "v": "e25931d0",
+    "v": "d5169cc3",
     "targets": {
       "dialog": [
         0.35,
@@ -728,7 +728,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-close-dialog": {
     "width": 1280,
     "height": 800,
-    "v": "df93ab6b",
+    "v": "4bd493f1",
     "targets": {
       "dialog": [
         0.2,
@@ -753,7 +753,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-draft": {
     "width": 1280,
     "height": 1360,
-    "v": "a8ef7e00",
+    "v": "ec6d70ca",
     "targets": {
       "dialog": [
         0,
@@ -784,7 +784,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-draft-delivery": {
     "width": 1280,
     "height": 1360,
-    "v": "81e6d5e1",
+    "v": "0aaa7f50",
     "targets": {
       "dialog": [
         0,
@@ -803,7 +803,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-edit": {
     "width": 1280,
     "height": 800,
-    "v": "6275ad2e",
+    "v": "5d027fae",
     "targets": {
       "sheet": [
         0.25,
@@ -828,7 +828,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-in-work": {
     "width": 1280,
     "height": 1500,
-    "v": "ad0db45e",
+    "v": "690d083f",
     "targets": {
       "board": [
         0.2125,
@@ -840,7 +840,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
         0.2125,
         0.1213,
         0.3828,
-        0.4907
+        0.5093
       ],
       "status": [
         0.5169,
@@ -850,7 +850,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
       ],
       "ready": [
         0.225,
-        0.5693,
+        0.588,
         0.1151,
         0.032
       ]
@@ -878,7 +878,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-order-details": {
     "width": 1280,
     "height": 800,
-    "v": "d8d5fdfd",
+    "v": "fe177c09",
     "targets": {
       "dialog": [
         0.2,
@@ -891,7 +891,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-orders": {
     "width": 1280,
     "height": 1500,
-    "v": "cecf9507",
+    "v": "0f12f6bb",
     "targets": {
       "header": [
         0.2125,
@@ -908,25 +908,25 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
       "search": [
         0.3141,
         0.0193,
-        0.2165,
+        0.2205,
         0.032
       ],
       "view": [
-        0.5681,
+        0.5721,
         0.022,
         0.0625,
         0.0267
       ],
       "tabs": [
-        0.7488,
+        0.7528,
         0.0207,
-        0.2285,
+        0.2245,
         0.0293
       ],
       "statusTabs": [
         0.2125,
         0.068,
-        0.2273,
+        0.2268,
         0.0267
       ],
       "board": [
@@ -939,17 +939,17 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
         0.2125,
         0.1213,
         0.3828,
-        0.5307
+        0.5493
       ],
       "work": [
         0.225,
-        0.5693,
+        0.588,
         0.1151,
         0.032
       ],
       "edit": [
         0.474,
-        0.5693,
+        0.588,
         0.1089,
         0.032
       ]
@@ -958,7 +958,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-phone": {
     "width": 390,
     "height": 844,
-    "v": "cd4758fe",
+    "v": "2b091445",
     "targets": {
       "dock": [
         0.0308,
@@ -977,7 +977,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-ready-confirm": {
     "width": 1280,
     "height": 800,
-    "v": "8f938f8a",
+    "v": "be824035",
     "targets": {
       "dialog": [
         0.35,
@@ -996,7 +996,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-ready-done": {
     "width": 1280,
     "height": 800,
-    "v": "f8c01984",
+    "v": "54c79078",
     "targets": {
       "board": [
         0.2125,
@@ -1015,7 +1015,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-shift-closed": {
     "width": 1280,
     "height": 800,
-    "v": "2d9eab6e",
+    "v": "79ad5a39",
     "targets": {
       "chip": [
         0.2266,
@@ -1040,7 +1040,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-shift-dialog": {
     "width": 1280,
     "height": 800,
-    "v": "3bed27fa",
+    "v": "0d844128",
     "targets": {
       "dialog": [
         0.2,
@@ -1065,7 +1065,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "florist-shift-open": {
     "width": 1280,
     "height": 800,
-    "v": "fd047474",
+    "v": "d5a7a7ae",
     "targets": {
       "chip": [
         0.2266,
@@ -1077,11 +1077,11 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
         0.2266,
         0.0963,
         0.225,
-        0.3375
+        0.3125
       ],
       "close": [
         0.2391,
-        0.3787,
+        0.3538,
         0.2,
         0.04
       ]
@@ -1090,7 +1090,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-bouquet-sheet": {
     "width": 1280,
     "height": 1200,
-    "v": "e2900ecc",
+    "v": "ad025d37",
     "targets": {
       "sheet": [
         0.55,
@@ -1115,7 +1115,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-bouquets": {
     "width": 1280,
     "height": 800,
-    "v": "00720250",
+    "v": "00e013d4",
     "targets": {
       "header": [
         0.2125,
@@ -1159,7 +1159,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-cash-sheet": {
     "width": 1280,
     "height": 800,
-    "v": "a5ec4aa8",
+    "v": "abbfa7d2",
     "targets": {
       "sheet": [
         0.55,
@@ -1183,8 +1183,8 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   },
   "manager-chat-dates": {
     "width": 1280,
-    "height": 800,
-    "v": "a52af233",
+    "height": 1360,
+    "v": "41bf43e7",
     "targets": {
       "panel": [
         0.65,
@@ -1194,16 +1194,22 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
       ],
       "dates": [
         0.6602,
-        0.5081,
+        0.2989,
         0.3305,
-        0.2675
+        0.2162
+      ],
+      "recipients": [
+        0.6602,
+        0.5268,
+        0.3305,
+        0.1735
       ]
     }
   },
   "manager-chat-menu": {
     "width": 1280,
     "height": 800,
-    "v": "c8202d07",
+    "v": "9f2c2ef3",
     "targets": {
       "list": [
         0.2125,
@@ -1228,7 +1234,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-chat-orders": {
     "width": 1280,
     "height": 800,
-    "v": "def51646",
+    "v": "2a6c8e98",
     "targets": {
       "panel": [
         0.65,
@@ -1253,7 +1259,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-chat-orders-done": {
     "width": 1280,
     "height": 800,
-    "v": "d1715dd5",
+    "v": "8a85733d",
     "targets": {
       "panel": [
         0.65,
@@ -1265,7 +1271,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
         0.6602,
         0.0225,
         0.3305,
-        0.21
+        0.205
       ],
       "send": [
         0.9531,
@@ -1278,7 +1284,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-chats": {
     "width": 1280,
     "height": 800,
-    "v": "ad4713f7",
+    "v": "46bdbbac",
     "targets": {
       "header": [
         0.2125,
@@ -1345,7 +1351,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-client": {
     "width": 1280,
     "height": 800,
-    "v": "227392a7",
+    "v": "43ff4b49",
     "targets": {
       "body": [
         0.2,
@@ -1357,14 +1363,14 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
         0.2125,
         0.1875,
         0.3281,
-        0.7375
+        0.8125
       ]
     }
   },
   "manager-clients": {
     "width": 1280,
     "height": 800,
-    "v": "cbe6d42b",
+    "v": "84610b0e",
     "targets": {
       "body": [
         0.2125,
@@ -1383,7 +1389,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-close": {
     "width": 1280,
     "height": 1500,
-    "v": "1ae3207b",
+    "v": "5b98dfa8",
     "targets": {
       "dialog": [
         0.2,
@@ -1414,7 +1420,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-courier": {
     "width": 1280,
     "height": 800,
-    "v": "b55bdc8d",
+    "v": "3df727e9",
     "targets": {
       "sheet": [
         0.55,
@@ -1432,64 +1438,70 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   },
   "manager-date-dialog": {
     "width": 1280,
-    "height": 800,
-    "v": "d4bbb16d",
+    "height": 1000,
+    "v": "98c3e318",
     "targets": {
       "dialog": [
         0.325,
-        0.112,
+        0.148,
         0.35,
-        0.7759
+        0.704
       ],
       "title": [
         0.3406,
-        0.2986,
+        0.2973,
         0.3187,
-        0.1625
+        0.13
+      ],
+      "recipient": [
+        0.3406,
+        0.4745,
+        0.3187,
+        0.036
       ],
       "when": [
         0.3406,
-        0.4861,
+        0.5305,
         0.3187,
-        0.0891
+        0.0712
       ],
       "note": [
         0.3406,
-        0.7067,
+        0.707,
         0.3187,
-        0.055
+        0.044
       ]
     }
   },
   "manager-dates-card": {
     "width": 1280,
-    "height": 1000,
-    "v": "ba4968ac",
+    "height": 1400,
+    "v": "9127dbef",
     "targets": {
       "card": [
         0.2125,
-        0.072,
+        0.0514,
         0.3281,
-        0.684
+        0.6743
       ],
       "dates": [
         0.2281,
-        0.382,
+        0.2729,
         0.2969,
-        0.222
+        0.1586
       ],
       "add": [
         0.4559,
-        0.382,
+        0.2729,
         0.0753,
-        0.04
+        0.0286
       ]
     }
   },
   "manager-dates-list": {
     "width": 1280,
     "height": 800,
-    "v": "bcbab5e9",
+    "v": "4d0cb039",
     "targets": {
       "body": [
         0.2125,
@@ -1520,7 +1532,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-drafts": {
     "width": 1280,
     "height": 800,
-    "v": "28752f92",
+    "v": "76b6af57",
     "targets": {
       "board": [
         0.2125,
@@ -1551,7 +1563,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-history": {
     "width": 1280,
     "height": 800,
-    "v": "1ab6e8a5",
+    "v": "07c61931",
     "targets": {
       "body": [
         0.2125,
@@ -1570,7 +1582,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-history-open": {
     "width": 1680,
     "height": 900,
-    "v": "c537009c",
+    "v": "e47b9823",
     "targets": {
       "row": [
         0.1643,
@@ -1579,9 +1591,9 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
         0.1667
       ],
       "action": [
-        0.9698,
+        0.9636,
         0.5017,
-        0.0302,
+        0.0364,
         0.0356
       ]
     }
@@ -1589,7 +1601,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-message-menu": {
     "width": 1280,
     "height": 800,
-    "v": "2fb25b2f",
+    "v": "11bad5e4",
     "targets": {
       "conversation": [
         0.4633,
@@ -1614,7 +1626,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-offer": {
     "width": 1280,
     "height": 800,
-    "v": "1274cf03",
+    "v": "6002788a",
     "targets": {
       "dialog": [
         0.3,
@@ -1639,7 +1651,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-order": {
     "width": 1280,
     "height": 1360,
-    "v": "9101fc55",
+    "v": "400ecf1a",
     "targets": {
       "dialog": [
         0,
@@ -1664,7 +1676,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-order-delivery": {
     "width": 1280,
     "height": 1360,
-    "v": "4f3973c6",
+    "v": "a448ae8f",
     "targets": {
       "dialog": [
         0,
@@ -1683,7 +1695,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-order-payment": {
     "width": 1280,
     "height": 1360,
-    "v": "405cb435",
+    "v": "e7a59eb4",
     "targets": {
       "dialog": [
         0,
@@ -1705,10 +1717,60 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
       ]
     }
   },
+  "manager-order-recipient": {
+    "width": 1280,
+    "height": 1360,
+    "v": "bc01eef1",
+    "targets": {
+      "dialog": [
+        0,
+        0.1235,
+        1,
+        0.7529
+      ],
+      "stage": [
+        0.5238,
+        0.1779,
+        0.4762,
+        0.6463
+      ],
+      "recipient": [
+        0.5394,
+        0.3886,
+        0.4449,
+        0.146
+      ]
+    }
+  },
+  "manager-order-recipient-new": {
+    "width": 1280,
+    "height": 1360,
+    "v": "cb096686",
+    "targets": {
+      "dialog": [
+        0,
+        0.1235,
+        1,
+        0.7529
+      ],
+      "stage": [
+        0.5238,
+        0.1779,
+        0.4762,
+        0.6463
+      ],
+      "recipient": [
+        0.5394,
+        0.3886,
+        0.4449,
+        0.2542
+      ]
+    }
+  },
   "manager-quick": {
     "width": 1280,
     "height": 800,
-    "v": "6bf58567",
+    "v": "ef54d08a",
     "targets": {
       "conversation": [
         0.4633,
@@ -1733,7 +1795,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-quick-edit": {
     "width": 1280,
     "height": 800,
-    "v": "a5d3190d",
+    "v": "fb191312",
     "targets": {
       "dialog": [
         0.3,
@@ -1746,7 +1808,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-ready": {
     "width": 1280,
     "height": 1500,
-    "v": "b55056ca",
+    "v": "c03c3412",
     "targets": {
       "board": [
         0.2125,
@@ -1774,10 +1836,66 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
       ]
     }
   },
+  "manager-recipient-dialog": {
+    "width": 1280,
+    "height": 800,
+    "v": "c2b5b162",
+    "targets": {
+      "dialog": [
+        0.325,
+        0.1013,
+        0.35,
+        0.7975
+      ],
+      "name": [
+        0.3406,
+        0.2628,
+        0.3187,
+        0.1675
+      ],
+      "phone": [
+        0.3406,
+        0.4894,
+        0.3187,
+        0.055
+      ],
+      "address": [
+        0.3406,
+        0.6034,
+        0.3187,
+        0.055
+      ]
+    }
+  },
+  "manager-recipients-card": {
+    "width": 1280,
+    "height": 1400,
+    "v": "9127dbef",
+    "targets": {
+      "card": [
+        0.2125,
+        0.0514,
+        0.3281,
+        0.6743
+      ],
+      "recipients": [
+        0.2281,
+        0.4429,
+        0.2969,
+        0.1743
+      ],
+      "add": [
+        0.4559,
+        0.4429,
+        0.0753,
+        0.0286
+      ]
+    }
+  },
   "manager-refund": {
     "width": 1280,
     "height": 800,
-    "v": "95a9e198",
+    "v": "d7840d80",
     "targets": {
       "sheet": [
         0.55,
@@ -1796,7 +1914,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-refund-confirm": {
     "width": 1280,
     "height": 800,
-    "v": "6dc2c33e",
+    "v": "48d0ca41",
     "targets": {
       "dialog": [
         0.35,
@@ -1815,7 +1933,7 @@ export const SHOTS: Record<string, ShotMeta & { v: string }> = {
   "manager-shift-dialog": {
     "width": 1280,
     "height": 800,
-    "v": "4bd2de07",
+    "v": "a9d29616",
     "targets": {
       "dialog": [
         0.2,
