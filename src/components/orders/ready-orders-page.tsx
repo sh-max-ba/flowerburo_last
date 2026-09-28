@@ -9,7 +9,7 @@ import {
   handOrderToCourierAction,
 } from "@/app/actions"
 import type { DashboardData, Order } from "@/lib/db"
-import { formatDeadline } from "@/lib/datetime"
+import { formatDeadline, shopTodayLocal } from "@/lib/datetime"
 import { deliveryTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -103,7 +103,7 @@ export function ReadyOrdersPage({
   const [sortMode, setSortMode] = useState<OrderSortMode>("default")
   const [viewMode, setViewMode] = useState<OrderViewMode>("list")
   const [statusFilter, setStatusFilter] = useState<ReadyStatusFilter>("pending")
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(shopTodayLocal()))
   const [handoverOrder, setHandoverOrder] = useState<Order | null>(null)
   const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
   const [pendingOrderId, setPendingOrderId] = useState<number | null>(null)
@@ -248,7 +248,7 @@ export function ReadyOrdersPage({
               orders={orders}
               weekStart={weekStart}
               showMoney
-              onToday={() => setWeekStart(startOfWeek(new Date()))}
+              onToday={() => setWeekStart(startOfWeek(shopTodayLocal()))}
               onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
               onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
               onOpenOrder={setViewingOrder}

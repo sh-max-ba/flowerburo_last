@@ -18,7 +18,7 @@ import {
 import type { OwnerDashboardData, OwnerDashboardRange } from "@/lib/db"
 import { formatDayMonth, formatYears, type UpcomingCustomerDate } from "@/lib/customer-dates"
 import { cn, formatMoney } from "@/lib/utils"
-import { formatInstant } from "@/lib/datetime"
+import { formatDeadline, formatInstant, wallClockToInstant } from "@/lib/datetime"
 import { getPaymentMethodLabel } from "@/lib/labels"
 import { Money, StatCard } from "./stat-card"
 import { RevenueChart } from "./revenue-chart"
@@ -638,19 +638,16 @@ function formatDue(value: string | null): { text: string; overdue: boolean } {
     return { text: "Без срока", overdue: false }
   }
 
-  const date = new Date(value.includes("T") ? value : value.replace(" ", "T"))
-  if (Number.isNaN(date.getTime())) {
+  // Срок — наивное время магазина: показываем ровно введённые часы, а просрочку считаем от
+  // настоящего момента (сервер в UTC иначе отмечал бы просрочку на 6 часов позже).
+  const due = wallClockToInstant(value)
+  if (!due) {
     return { text: "—", overdue: false }
   }
 
   return {
-    text: new Intl.DateTimeFormat("ru-RU", {
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(date),
-    overdue: date.getTime() < Date.now(),
+    text: formatDeadline(value),
+    overdue: due.getTime() < Date.now(),
   }
 }
 

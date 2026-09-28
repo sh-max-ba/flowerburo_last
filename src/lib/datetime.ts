@@ -77,6 +77,36 @@ export function parseWallClock(value: string | null | undefined): Date | null {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
+// Срок заказа (наивное время магазина, due_at) → настоящий момент времени. Для «Просрочено» и
+// «Через N ч»: сервер (UTC) и планшет (Бишкек) должны сравнивать с «сейчас» одно и то же, иначе
+// первый кадр со страницы сервера расходится с браузером на 6 часов (и React перерисовывает страницу).
+// Пояс магазина без перехода на летнее время — смещение постоянное.
+const SHOP_UTC_OFFSET_MS = 6 * 60 * 60 * 1000
+
+export function wallClockToInstant(value: string | null | undefined): Date | null {
+  const wall = parseWallClock(value)
+  return wall ? new Date(wall.getTime() - SHOP_UTC_OFFSET_MS) : null
+}
+
+// Календарный день магазина «YYYY-MM-DD» для момента времени (по умолчанию — сейчас).
+const shopDayKeyFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: SHOP_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+})
+
+export function shopDayKey(date: Date = new Date()): string {
+  return shopDayKeyFormatter.format(date)
+}
+
+// Сегодня в магазине — полночь этого дня в поясе устройства (для сеток календаря, которые
+// считают дни по локальным компонентам даты).
+export function shopTodayLocal(now: Date = new Date()): Date {
+  const [year, month, day] = shopDayKey(now).split("-").map(Number)
+  return new Date(year, month - 1, day)
+}
+
 type DisplayParts = { date?: boolean; time?: boolean; longMonth?: boolean }
 
 // Показ UTC-метки из БД в часовом поясе магазина.

@@ -41,7 +41,7 @@ import {
   pluralize,
   telLink,
 } from "@/components/clients/customers-page"
-import { formatDeadline } from "@/lib/datetime"
+import { formatDeadline, parseDbInstant } from "@/lib/datetime"
 import { canAccessSection } from "@/lib/nav"
 
 type ActionResult = Awaited<ReturnType<typeof updateCustomerAction>>
@@ -106,7 +106,9 @@ export function CustomerDetailPage({
       ...sales.map((sale) => sale.createdAt),
     ]
       .filter(Boolean)
-      .map((value) => new Date(value).getTime())
+      // Метки из БД — UTC без зоны: new Date(value) разобрал бы их в поясе сервера/устройства,
+      // и время съезжало на 6 часов (а сервер и планшет рисовали разное).
+      .map((value) => parseDbInstant(value)?.getTime() ?? Number.NaN)
       .filter((time) => !Number.isNaN(time))
       .sort((a, b) => b - a)[0]
 

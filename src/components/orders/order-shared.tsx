@@ -23,7 +23,7 @@ import {
 import type { Order, OrderItem, OrderStatus } from "@/lib/db"
 import { sourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
-import { formatDeadline, formatInstant } from "@/lib/datetime"
+import { formatDeadline, formatInstant, shopDayKey, wallClockToInstant } from "@/lib/datetime"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -120,7 +120,13 @@ function dateKey(date: Date) {
   return dateInputValue(startOfLocalDay(date))
 }
 
+// День срока — прямо из наивного due_at («2026-09-30T12:00» → «2026-09-30»), без разбора в поясе
+// устройства: иначе сервер (UTC) и планшет (Бишкек) раскладывали бы заказ по разным дням.
 function dateKeyFromValue(value: string) {
+  const naiveDay = /^(\d{4}-\d{2}-\d{2})/.exec(value.trim())
+  if (naiveDay) {
+    return naiveDay[1]
+  }
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
     return noDueDateKey
@@ -368,7 +374,7 @@ export function OrderCalendarView({
   onOpenOrder: (order: Order) => void
 }) {
   const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index))
-  const todayKey = dateKey(new Date())
+  const todayKey = shopDayKey()
   const { byDate, withoutDate } = groupOrdersByDay(orders)
   const weekCount = days.reduce((sum, day) => sum + (byDate.get(dateKey(day))?.length ?? 0), 0)
   const isCurrentWeek = days.some((day) => dateKey(day) === todayKey)
@@ -569,8 +575,9 @@ export function orderUrgency(order: Order, now: Date = new Date()): OrderUrgency
     return { level: "none", label: "", cardClass: "" }
   }
 
-  const dueAt = new Date(order.dueAt)
-  if (Number.isNaN(dueAt.getTime())) {
+  // Срок — время магазина: сравниваем как момент времени, «сегодня» — по календарю магазина.
+  const dueAt = wallClockToInstant(order.dueAt)
+  if (!dueAt) {
     return { level: "none", label: "", cardClass: "" }
   }
 
@@ -584,7 +591,7 @@ export function orderUrgency(order: Order, now: Date = new Date()): OrderUrgency
     }
   }
 
-  if (dateKey(dueAt) === dateKey(now)) {
+  if (dateKeyFromValue(order.dueAt) === shopDayKey(now)) {
     const hoursLeft = Math.max(1, Math.round(diffMs / (60 * 60 * 1000)))
     return {
       level: "today",
@@ -832,20 +839,20 @@ export type OrderDueGroup = { key: "overdue" | "today" | "tomorrow" | "later" | 
 // Секции списка по сроку: просрочено / сегодня / завтра / позже / без срока. Внутри секции
 // порядок — как пришёл (страница уже отсортировала). Пустые секции не возвращаются.
 export function groupOrdersByDueDay(orders: Order[], now: Date = new Date()): OrderDueGroup[] {
-  const todayKey = dateKey(now)
-  const tomorrowKey = dateKey(addDays(now, 1))
+  const todayKey = shopDayKey(now)
+  const tomorrowKey = shopDayKey(new Date(now.getTime() + 24 * 60 * 60 * 1000))
   const buckets: Record<OrderDueGroup["key"], Order[]> = { overdue: [], today: [], tomorrow: [], later: [], none: [] }
   for (const order of orders) {
     if (!order.dueAt) {
       buckets.none.push(order)
       continue
     }
-    const due = new Date(order.dueAt)
-    if (Number.isNaN(due.getTime())) {
+    const due = wallClockToInstant(order.dueAt)
+    if (!due) {
       buckets.none.push(order)
       continue
     }
-    const key = dateKey(due)
+    const key = dateKeyFromValue(order.dueAt)
     if (due.getTime() < now.getTime()) {
       buckets.overdue.push(order)
     } else if (key === todayKey) {

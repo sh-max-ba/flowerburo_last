@@ -10,6 +10,7 @@ import {
   startOrderWorkAction,
 } from "@/app/actions"
 import type { BouquetTemplate, Order, OrderStatus, Product } from "@/lib/db"
+import { shopTodayLocal } from "@/lib/datetime"
 import { deliveryTypeLabel } from "@/lib/labels"
 import { formatMoney } from "@/lib/utils"
 import { Alert, AlertTitle } from "@/components/ui/alert"
@@ -97,7 +98,7 @@ export function OrdersPage({
   const [sortMode, setSortMode] = useState<OrderSortMode>("default")
   const [viewMode, setViewMode] = useState<OrderViewMode>("list")
   const [statusFilter, setStatusFilter] = useState<WorkStatusFilter>("all")
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(shopTodayLocal()))
   const [pendingOrderId, setPendingOrderId] = useState<number | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
   const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
@@ -251,7 +252,7 @@ export function OrdersPage({
               orders={orders}
               weekStart={weekStart}
               showMoney={false}
-              onToday={() => setWeekStart(startOfWeek(new Date()))}
+              onToday={() => setWeekStart(startOfWeek(shopTodayLocal()))}
               onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
               onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
               onOpenOrder={setViewingOrder}
