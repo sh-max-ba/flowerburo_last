@@ -4,8 +4,11 @@ import type React from "react"
 import { createContext, useContext, useRef, useState } from "react"
 import {
   AlertCircleIcon,
+  AtSignIcon,
+  CameraIcon,
   CheckCheckIcon,
   CheckIcon,
+  ClapperboardIcon,
   ClockIcon,
   CopyIcon,
   DownloadIcon,
@@ -16,6 +19,7 @@ import {
   ImageOffIcon,
   ImagePlusIcon,
   Loader2Icon,
+  MicIcon,
   PauseIcon,
   PlayIcon,
   ReceiptTextIcon,
@@ -25,12 +29,13 @@ import {
   ZapIcon,
 } from "lucide-react"
 import { toast } from "sonner"
-import type { WazzupMessage } from "@/lib/db"
+import type { WazzupMessage, WazzupQuotedMessage } from "@/lib/db"
+import { parseSpecialMessage, specialMessagePreview, type SpecialMessage } from "@/lib/chat-message-kinds"
 import { wazzupMessageTypeLabel } from "@/lib/labels"
 import { cn } from "@/lib/utils"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { formatTime, messagePreview } from "./chat-shared"
+import { formatTime } from "./chat-shared"
 import { FloristMark } from "@/components/florist-mark"
 
 // Пузырь сообщения единого окна чатов: входящие слева (белые), наши справа (голубые). Цитата,
@@ -40,6 +45,8 @@ import { FloristMark } from "@/components/florist-mark"
 // группу (groupStart/groupEnd): имя автора — над первым, «хвостик» — у последнего. Действия —
 // контекстное меню (правая кнопка / долгое нажатие) и «ответить»/«⋯» при наведении со стороны
 // центра ленты (для входящих — справа от пузыря, для наших — слева).
+// Цитата показывает оригинал (имя, текст, миниатюра фото/видео) и по нажатию прокручивает к нему;
+// служебные тексты Instagram (ответ на историю, отметка в истории, рилс) — отдельными блоками.
 
 export type BubbleMessage = Pick<
   WazzupMessage,
@@ -53,6 +60,7 @@ export type BubbleMessage = Pick<
   | "authorName"
   | "authorRole"
   | "quotedText"
+  | "quoted"
   | "transcript"
   | "isEdited"
   | "isDeleted"
@@ -80,18 +88,28 @@ export type MessageAction =
 
 export function MessageBubble({
   message,
+  contactName,
   onAction,
-  onOpenImage,
+  onOpenMedia,
+  onJumpToQuote,
   onAddToCart,
   addBusy,
+  highlighted = false,
   groupStart = true,
   groupEnd = true,
 }: {
   message: BubbleMessage
+  // Имя клиента — подпись цитаты его сообщения.
+  contactName: string
   onAction: (action: MessageAction, message: BubbleMessage) => void
-  onOpenImage: (message: BubbleMessage) => void
+  // Фото или видео на весь экран (фото из ленты, история из ответа на неё).
+  onOpenMedia: (message: BubbleMessage) => void
+  // Нажатие на цитату — прокрутить к оригиналу (Wazzup messageId).
+  onJumpToQuote?: (messageId: string) => void
   onAddToCart?: (bouquetId: number) => void
   addBusy?: number | null
+  // Короткая подсветка после перехода по цитате.
+  highlighted?: boolean
   groupStart?: boolean
   groupEnd?: boolean
 }) {
@@ -99,17 +117,22 @@ export function MessageBubble({
   const hasMedia = Boolean(message.contentUri) && message.id > 0
   const canTranscribe = message.messageType === "audio" && hasMedia && !message.transcript
   const canAct = !message.pending && message.id > 0
-  // Фото/видео заполняют пузырь почти до края — у него узкие поля, а подписи получают свои.
-  const tight = hasMedia && (message.messageType === "image" || message.messageType === "video")
+  const special = parseSpecialMessage(message.text)
+  const storyReply = special?.kind === "storyReply" && hasMedia
+  // Фото/видео заполняют пузырь почти до края — у него узкие поля, а подписи получают свои. История,
+  // на которую ответили, — миниатюра в обычном пузыре.
+  const tight = hasMedia && !storyReply && (message.messageType === "image" || message.messageType === "video")
   const inset = tight ? "px-1.5" : ""
-  const showAuthor = groupStart && Boolean(message.authorName)
-  const showText = !message.isDeleted && Boolean(message.text)
+  const authorLabel = displayAuthorName(message.authorName)
+  const showAuthor = groupStart && Boolean(authorLabel)
+  const bodyText = special ? special.body : message.text
+  const showText = !message.isDeleted && Boolean(bodyText)
 
   const items = (
     <>
       <MenuItemRow icon={ReplyIcon} label="Ответить" onSelect={() => onAction("reply", message)} />
       <MenuItemRow icon={ForwardIcon} label="Переслать" onSelect={() => onAction("forward", message)} />
-      {message.text ? <MenuItemRow icon={CopyIcon} label="Копировать текст" onSelect={() => onAction("copy", message)} /> : null}
+      {bodyText ? <MenuItemRow icon={CopyIcon} label="Копировать текст" onSelect={() => onAction("copy", message)} /> : null}
       {message.text && !message.isDeleted ? (
         <MenuItemRow icon={ZapIcon} label="Сохранить как быстрый ответ" onSelect={() => onAction("saveQuickReply", message)} />
       ) : null}
@@ -149,11 +172,12 @@ export function MessageBubble({
   const bubble = (
     <div
       className={cn(
-        "group/bubble relative w-fit max-w-full rounded-2xl text-[15px] leading-snug shadow-xs",
+        "group/bubble relative w-fit max-w-full rounded-2xl text-[15px] leading-snug shadow-xs transition-shadow duration-300",
         tight ? "p-1.5" : "px-3.5 py-2",
         outbound ? "bg-blue-100 text-foreground" : "bg-white text-foreground",
         groupEnd && (outbound ? "rounded-br-md" : "rounded-bl-md"),
-        message.status === "error" && "ring-1 ring-destructive/40"
+        message.status === "error" && "ring-1 ring-destructive/40",
+        highlighted && "ring-2 ring-brand/70 ring-offset-2 ring-offset-zinc-100"
       )}
     >
       {message.forwarded ? (
@@ -171,31 +195,36 @@ export function MessageBubble({
             tight && "pt-1"
           )}
         >
-          {message.authorName}
+          {authorLabel}
           {outbound ? <FloristMark role={message.authorRole} name={message.authorName} action="Написал" compact /> : null}
         </div>
       ) : null}
-      {message.quotedText ? (
-        <div
-          className={cn(
-            "mb-1.5 rounded-md border-l-2 px-2.5 py-1.5 text-[13px] leading-snug",
-            outbound ? "border-brand-strong bg-white/60 text-blue-950/70" : "border-brand bg-zinc-100 text-muted-foreground",
-            tight && "mx-1.5 mt-1"
-          )}
-        >
-          {/* Цитата вложения приходит как «[image]» — показываем подпись типа, как в списке диалогов. */}
-          <span className="line-clamp-2">{messagePreview(message.quotedText, "") || message.quotedText}</span>
-        </div>
+      {message.quoted ? (
+        <QuoteCard
+          quote={message.quoted}
+          contactName={contactName}
+          tone={outbound ? "outbound" : "inbound"}
+          onClick={onJumpToQuote && message.quoted.id > 0 ? () => onJumpToQuote(message.quoted!.messageId) : undefined}
+          className={cn("mb-1.5", tight && "mt-0.5")}
+        />
       ) : null}
       {message.isDeleted ? (
         <div className={cn("text-muted-foreground italic", inset)}>Сообщение удалено</div>
       ) : (
         <>
-          <MessageMedia message={message} onOpenImage={onOpenImage} />
+          {special && special.kind !== "share" ? (
+            <SpecialHeader special={special} outbound={outbound} className={cn(inset, tight && "pt-1")} />
+          ) : null}
+          {storyReply ? (
+            <StoryThumb message={message} onOpen={() => onOpenMedia(message)} className="mb-1.5 w-[5.5rem]" />
+          ) : (
+            <MessageMedia message={message} onOpenImage={onOpenMedia} />
+          )}
+          {special?.kind === "share" ? <ShareCard special={special} outbound={outbound} /> : null}
           {message.messageType === "audio" && hasMedia ? <VoiceTranscript messageId={message.id} initial={message.transcript} /> : null}
           {showText ? (
             <div className={cn("whitespace-pre-wrap break-words", tight && "px-1.5 pt-1 pb-0.5")}>
-              {linkify(message.text)}
+              {linkify(bodyText)}
               <span className="float-right mt-[7px] ml-2.5">{meta}</span>
             </div>
           ) : null}
@@ -303,6 +332,252 @@ function MenuItemRow({ icon: Icon, label, onSelect }: { icon: React.ComponentTyp
 function MenuSeparatorRow() {
   const kind = useContext(MenuKindContext)
   return kind === "dropdown" ? <DropdownMenuSeparator /> : <ContextMenuSeparator />
+}
+
+// Wazzup подписывает сообщения, отправленные из приложения на телефоне магазина, как «Phone».
+export function displayAuthorName(name: string) {
+  return name.trim().toLowerCase() === "phone" ? "С телефона" : name
+}
+
+export type QuoteView = WazzupQuotedMessage
+
+// Цитата из сообщения ленты — для панели «Ответ» над полем ввода.
+export function quoteFromMessage(message: BubbleMessage): QuoteView {
+  return {
+    id: message.id,
+    messageId: message.messageId,
+    direction: message.direction,
+    messageType: message.messageType,
+    text: message.text,
+    hasMedia: Boolean(message.contentUri) && message.id > 0,
+    authorName: message.authorName,
+    isDeleted: message.isDeleted,
+    fileName: message.fileName,
+  }
+}
+
+// Снимок текста цитаты, который уходит на сервер вместе с ответом (quotedText).
+export function quoteSnapshotText(quote: QuoteView) {
+  return specialMessagePreview(quote.text) || quote.text || wazzupMessageTypeLabel(quote.messageType)
+}
+
+function quoteAuthor(quote: QuoteView, contactName: string) {
+  if (quote.direction === "inbound") {
+    return quote.authorName || contactName || "Клиент"
+  }
+  if (quote.direction === "outbound") {
+    return "Вы"
+  }
+  return "Ответ на сообщение"
+}
+
+const quoteTypeIcons: Record<string, React.ComponentType<{ className?: string }>> = {
+  image: CameraIcon,
+  video: ClapperboardIcon,
+  audio: MicIcon,
+  document: FileTextIcon,
+}
+
+// Текст цитаты; иконка типа — только когда нет миниатюры (голосовое, документ, протухшее медиа).
+function quoteBody(quote: QuoteView, withThumb: boolean): { text: string; icon: React.ComponentType<{ className?: string }> | null; muted: boolean } {
+  if (quote.isDeleted) {
+    return { text: "Сообщение удалено", icon: null, muted: true }
+  }
+  // У ответа на историю миниатюра и так показывает историю — в тексте оставляем слова клиента.
+  const special = parseSpecialMessage(quote.text)
+  const raw = special?.kind === "storyReply" ? special.body || "Ответ на историю" : specialMessagePreview(quote.text) || quote.text
+  const text = raw.replace(/\s+/g, " ").trim()
+  const icon = withThumb ? null : (quoteTypeIcons[quote.messageType] ?? null)
+  if (text) {
+    return { text, icon: quote.messageType === "text" ? null : icon, muted: false }
+  }
+  if (quote.messageType === "audio") {
+    return { text: "Голосовое сообщение", icon, muted: false }
+  }
+  if (quote.messageType === "document") {
+    return { text: quote.fileName || "Документ", icon, muted: false }
+  }
+  if (quote.messageType === "text") {
+    return { text: "Сообщение", icon: null, muted: true }
+  }
+  return { text: wazzupMessageTypeLabel(quote.messageType), icon, muted: false }
+}
+
+// Цитата: полоска цвета автора (клиент — зелёная, мы — фирменная), имя, до двух строк текста и
+// миниатюра фото/видео справа. В пузыре не раздвигает его шире текста ответа ([contain:inline-size]),
+// но и не бывает уже min-w-56 — иначе короткое «Да» превращало цитату в обрубок.
+export function QuoteCard({
+  quote,
+  contactName,
+  tone,
+  onClick,
+  className,
+}: {
+  quote: QuoteView
+  contactName: string
+  tone: "inbound" | "outbound" | "composer"
+  onClick?: () => void
+  className?: string
+}) {
+  const fromClient = quote.direction === "inbound"
+  const showThumb = quote.id > 0 && quote.hasMedia && !quote.isDeleted && (quote.messageType === "image" || quote.messageType === "video")
+  const body = quoteBody(quote, showThumb)
+  const content = (
+    <>
+      <span
+        aria-hidden
+        className={cn("w-[3px] shrink-0", fromClient ? "bg-emerald-500" : quote.direction === "outbound" ? "bg-brand" : "bg-zinc-400")}
+      />
+      <span className="min-w-0 flex-1 px-2.5 py-1.5">
+        <span
+          className={cn(
+            "block truncate text-[12.5px] leading-4 font-semibold",
+            fromClient ? "text-emerald-700" : quote.direction === "outbound" ? "text-brand-strong" : "text-muted-foreground"
+          )}
+        >
+          {quoteAuthor(quote, contactName)}
+        </span>
+        <span className={cn("mt-0.5 flex min-w-0 items-start gap-1 text-[13px] leading-[1.125rem]", body.muted ? "text-muted-foreground italic" : "text-foreground/70")}>
+          {body.icon ? <body.icon className="mt-0.5 size-3.5 shrink-0 opacity-70" /> : null}
+          <span className="line-clamp-2 min-w-0 break-words">{body.text}</span>
+        </span>
+      </span>
+      {showThumb ? <QuoteThumb id={quote.id} messageType={quote.messageType} /> : null}
+    </>
+  )
+  const frame = cn(
+    "flex w-full min-w-56 items-stretch overflow-hidden rounded-lg text-left [contain:inline-size]",
+    tone === "outbound" ? "bg-white/55" : tone === "inbound" ? "bg-zinc-100" : "bg-zinc-100/90",
+    className
+  )
+  if (!onClick) {
+    return <div className={frame}>{content}</div>
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Показать сообщение"
+      className={cn(
+        frame,
+        "cursor-pointer transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/35",
+        tone === "outbound" ? "hover:bg-white/85" : "hover:bg-zinc-200/70"
+      )}
+    >
+      {content}
+    </button>
+  )
+}
+
+function QuoteThumb({ id, messageType }: { id: number; messageType: string }) {
+  const [failed, setFailed] = useState(false)
+  const src = mediaUrl({ id })
+  return (
+    <span className="relative flex w-11 shrink-0 items-center justify-center self-stretch overflow-hidden bg-zinc-200 text-zinc-500">
+      {failed ? (
+        <ImageOffIcon className="size-4" aria-hidden />
+      ) : messageType === "video" ? (
+        <>
+          <video src={`${src}#t=0.1`} preload="metadata" muted playsInline className="absolute inset-0 size-full object-cover" onError={() => setFailed(true)} />
+          <PlayIcon className="relative size-3.5 fill-white text-white drop-shadow" aria-hidden />
+        </>
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" onError={() => setFailed(true)} />
+      )}
+    </span>
+  )
+}
+
+// Подпись над служебным сообщением Instagram: ответ на нашу историю / отметка в истории клиента.
+function SpecialHeader({ special, outbound, className }: { special: SpecialMessage; outbound: boolean; className?: string }) {
+  const story = special.kind === "storyReply"
+  const Icon = story ? ReplyIcon : AtSignIcon
+  const label = story
+    ? outbound
+      ? "Ответ на историю"
+      : "Ответ на вашу историю"
+    : outbound
+      ? "Отметка в истории"
+      : "Отметил(а) вас в своей истории"
+  return (
+    <div className={cn("mb-1 flex items-center gap-1 text-[12.5px] font-medium text-pink-600", className)}>
+      <Icon className="size-3.5 shrink-0" aria-hidden />
+      {label}
+    </div>
+  )
+}
+
+// Миниатюра истории (вертикальная 9:16), на которую ответил клиент; по нажатию — просмотр.
+function StoryThumb({ message, onOpen, className }: { message: BubbleMessage; onOpen: () => void; className?: string }) {
+  const [failed, setFailed] = useState(false)
+  const src = mediaUrl(message)
+  const video = message.messageType === "video"
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      disabled={failed}
+      aria-label="Открыть историю"
+      title="Открыть историю"
+      className={cn(
+        "group/story relative block aspect-[9/16] overflow-hidden rounded-xl bg-zinc-800 outline-none focus-visible:ring-3 focus-visible:ring-ring/35",
+        className
+      )}
+    >
+      {failed ? (
+        <span className="flex size-full flex-col items-center justify-center gap-1.5 p-2 text-center text-[11px] leading-tight text-white/70">
+          <ImageOffIcon className="size-4" aria-hidden />
+          История недоступна
+        </span>
+      ) : video ? (
+        <video src={`${src}#t=0.1`} preload="metadata" muted playsInline className="size-full object-cover" onError={() => setFailed(true)} />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="" loading="lazy" className="size-full object-cover" onError={() => setFailed(true)} />
+      )}
+      {!failed ? (
+        <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover/story:bg-black/15">
+          {video ? (
+            <span className="flex size-8 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm">
+              <PlayIcon className="size-4 translate-x-px fill-current" aria-hidden />
+            </span>
+          ) : null}
+        </span>
+      ) : null}
+    </button>
+  )
+}
+
+// Рилс/публикация, присланные ссылкой: карточка вместо «You got reel https://…».
+function ShareCard({ special, outbound }: { special: Extract<SpecialMessage, { kind: "share" }>; outbound: boolean }) {
+  let path = special.url
+  try {
+    const url = new URL(special.url)
+    path = `${url.hostname.replace(/^www\./, "")}${url.pathname}`.replace(/\/$/, "")
+  } catch {
+    // оставим как есть
+  }
+  return (
+    <a
+      href={special.url}
+      target="_blank"
+      rel="noreferrer"
+      className={cn(
+        "mb-1 flex min-w-56 items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors",
+        outbound ? "bg-white/55 hover:bg-white/85" : "bg-zinc-100 hover:bg-zinc-200/70"
+      )}
+    >
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-pink-100 text-pink-600">
+        <ClapperboardIcon className="size-4" aria-hidden />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium">{special.label}</span>
+        <span className="block truncate text-[11px] text-muted-foreground">{path}</span>
+      </span>
+      <ExternalLinkIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+    </a>
+  )
 }
 
 export function mediaUrl(message: Pick<BubbleMessage, "id">) {

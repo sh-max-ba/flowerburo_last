@@ -122,16 +122,21 @@ export function listWazzupChatMessages(
     limit,
   }
 
-  // Берём последние `limit` строк (DESC) и разворачиваем по возрастанию для отображения.
+  // Берём последние `limit` строк (DESC) и разворачиваем по возрастанию для отображения. К ответам
+  // подтягиваем оригинал цитаты (q_*): вебхук Wazzup знает о нём только messageId и тип.
   const rows = db()
     .prepare(
       `SELECT * FROM (
-        SELECT wazzup_messages.*,
-          (SELECT role FROM users WHERE users.id = wazzup_messages.author_user_id) AS author_role
-        FROM wazzup_messages
-        WHERE (@dealId IS NOT NULL AND deal_id = @dealId)
-           OR (@chatType <> '' AND @chatId <> '' AND chat_type = @chatType AND chat_id = @chatId)
-        ORDER BY COALESCE(date_time, created_at) DESC, id DESC
+        SELECT m.*,
+          (SELECT role FROM users WHERE users.id = m.author_user_id) AS author_role,
+          q.id AS q_id, q.direction AS q_direction, q.message_type AS q_message_type, q.text AS q_text,
+          q.content_uri AS q_content_uri, q.author_name AS q_author_name, q.is_deleted AS q_is_deleted,
+          q.file_name AS q_file_name
+        FROM wazzup_messages m
+        LEFT JOIN wazzup_messages q ON m.quoted_message_id <> '' AND q.message_id = m.quoted_message_id
+        WHERE (@dealId IS NOT NULL AND m.deal_id = @dealId)
+           OR (@chatType <> '' AND @chatId <> '' AND m.chat_type = @chatType AND m.chat_id = @chatId)
+        ORDER BY COALESCE(m.date_time, m.created_at) DESC, m.id DESC
         LIMIT @limit
       ) ORDER BY COALESCE(date_time, created_at) ASC, id ASC`
     )

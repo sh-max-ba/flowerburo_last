@@ -64,6 +64,7 @@ export type {
   WarehouseImportPreview,
   WazzupMessage,
   WazzupMessageDirection,
+  WazzupQuotedMessage,
 } from "./db/types"
 
 export {
