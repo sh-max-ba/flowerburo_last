@@ -171,7 +171,8 @@ export function getReadyOrdersActionCount() {
 
 // Единый список колонок заказа (используется основным запросом дашборда и списком черновиков).
 const ORDER_LIST_COLUMNS = `id, number, customer_id as customerId, deal_id as dealId, customer, phone,
-  COALESCE(recipient_phone, '') as recipientPhone, COALESCE(source, '') as source,
+  COALESCE(recipient_phone, '') as recipientPhone, COALESCE(recipient_name, '') as recipientName,
+        recipient_id as recipientId, COALESCE(source, '') as source,
   created_by_user_id as createdByUserId, updated_by_user_id as updatedByUserId,
   (SELECT name FROM users WHERE users.id = orders.created_by_user_id) as createdByName,
   (SELECT role FROM users WHERE users.id = orders.created_by_user_id) as createdByRole,

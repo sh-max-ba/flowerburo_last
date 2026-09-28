@@ -38,6 +38,7 @@ import {
   validateProductLineItems,
   type ProductLineItem,
 } from "@/components/products/product-line-items"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 // Состав заказа -> строки редактора. Сохраняем bouquetGroupId/цены, чтобы букеты остались
 // сгруппированными и считались как при создании.
@@ -94,6 +95,7 @@ export function OrderEditSheet({
   )
   const [address, setAddress] = useState(order.address ?? "")
   const [recipientPhone, setRecipientPhone] = useState(order.recipientPhone ?? "")
+  const [recipientName, setRecipientName] = useState(order.recipientName ?? "")
   const [note, setNote] = useState(order.note ?? "")
   const [images, setImages] = useState<OrderImage[]>(() => order.images ?? [])
   const [deliveryPrice, setDeliveryPrice] = useState(order.deliveryPrice ?? 0)
@@ -173,7 +175,7 @@ export function OrderEditSheet({
       >
         <SheetHeader className="border-b border-border/40">
           <SheetTitle>
-            {isDraft ? "Черновик" : "Редактировать заказ"} {order.number || `#${order.id}`}
+            {isDraft ? "Черновик" : "Редактировать заказ"} {orderNumberLabel(order)}
           </SheetTitle>
           <SheetDescription>
             {isDraft
@@ -267,17 +269,31 @@ export function OrderEditSheet({
                 <input type="hidden" name="address" value="" />
               )}
 
-              <Field>
-                <FieldLabel htmlFor="order-edit-recipient">Номер получателя</FieldLabel>
-                <Input
-                  id="order-edit-recipient"
-                  name="recipientPhone"
-                  inputMode="tel"
-                  value={recipientPhone}
-                  disabled={pending}
-                  onChange={(event) => setRecipientPhone(event.target.value)}
-                />
-              </Field>
+              {/* Получатель: имя и телефон. Выбор из списка получателей — в окне нового заказа. */}
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field>
+                  <FieldLabel htmlFor="order-edit-recipient-name">Имя получателя</FieldLabel>
+                  <Input
+                    id="order-edit-recipient-name"
+                    name="recipientName"
+                    value={recipientName}
+                    disabled={pending}
+                    placeholder="Если букет получает другой человек"
+                    onChange={(event) => setRecipientName(event.target.value)}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="order-edit-recipient">Телефон получателя</FieldLabel>
+                  <Input
+                    id="order-edit-recipient"
+                    name="recipientPhone"
+                    inputMode="tel"
+                    value={recipientPhone}
+                    disabled={pending}
+                    onChange={(event) => setRecipientPhone(event.target.value)}
+                  />
+                </Field>
+              </div>
 
               <Field>
                 <FieldLabel htmlFor="order-edit-note">Комментарий</FieldLabel>

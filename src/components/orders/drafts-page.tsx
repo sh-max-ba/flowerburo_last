@@ -28,6 +28,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { OrderImageStrip } from "@/components/orders/order-images"
 import { OrdersActivityRefresh, OrderStatusBadge } from "@/components/orders/order-shared"
 import { OrderEditSheet } from "@/components/orders/order-edit-sheet"
+import { orderHeading, orderNumberLabel, orderSearchTokens } from "@/lib/order-labels"
 
 type Result = Awaited<ReturnType<typeof finalizeOrderDraftAction>>
 
@@ -56,7 +57,7 @@ export function DraftsPage({
     () =>
       normalizedSearch
         ? drafts.filter((draft) =>
-            [draft.number, String(draft.id), draft.customer, draft.phone, draft.recipientPhone, draft.address, draft.note, ...draft.items.map((item) => item.name)]
+            [...orderSearchTokens(draft), String(draft.id), draft.customer, draft.phone, draft.recipientName, draft.recipientPhone, draft.address, draft.note, ...draft.items.map((item) => item.name)]
               .filter(Boolean)
               .join(" ")
               .toLowerCase()
@@ -171,7 +172,7 @@ function DraftOrderCard({
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="flex items-center gap-2">
-            <span className="font-semibold">{draft.number || `#${draft.id}`}</span>
+            <span className="font-semibold">{orderHeading(draft)}</span>
             <OrderStatusBadge status="Черновик" />
           </div>
           <p className="text-sm text-muted-foreground">{draft.customer || "Без имени"}</p>
@@ -261,7 +262,7 @@ function DraftOrderCard({
             <AlertDialogHeader>
               <AlertDialogTitle>Удалить черновик?</AlertDialogTitle>
               <AlertDialogDescription>
-                Черновик {draft.number || `#${draft.id}`} будет удалён без возможности восстановления.
+                Черновик {orderNumberLabel(draft)} будет удалён без возможности восстановления.
                 {hasPrepaid
                   ? ` Предоплата ${money(draft.prepaid)} в кассу не попадала — просто верните её клиенту.`
                   : ""}

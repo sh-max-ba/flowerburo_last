@@ -29,6 +29,7 @@ import { cn, formatMoney } from "@/lib/utils"
 import { useIsPhone } from "@/hooks/use-mobile"
 import { cashTransactionTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import type { CashLedgerEntry, CashTransactionType } from "@/lib/db"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 const TYPE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "sale", label: "Продажа" },
@@ -64,6 +65,7 @@ export function CashLedger({ entries, showStockHistoryLink = false }: { entries:
       }
       const haystack = [
         entry.orderNumber ?? "",
+        entry.orderId ? orderNumberLabel({ id: entry.orderId, number: entry.orderNumber }) : "",
         entry.orderId ? `#${entry.orderId}` : "",
         entry.saleId ? `#${entry.saleId}` : "",
         entry.customerName,
@@ -291,7 +293,7 @@ function renderEntryPanels(entry: CashLedgerEntry) {
 
 function renderLink(entry: CashLedgerEntry) {
   if (entry.orderId) {
-    const label = entry.orderNumber ? `Заказ ${entry.orderNumber}` : `Заказ #${entry.orderId}`
+    const label = `Заказ ${orderNumberLabel({ id: entry.orderId ?? 0, number: entry.orderNumber })}`
     return (
       <span>
         {label}
@@ -327,7 +329,7 @@ function OrderCancelPanel({ entry }: { entry: CashLedgerEntry }) {
   const [open, setOpen] = useState(false)
 
   const cancelled = entry.orderStatus === "Отменен" || entry.orderStatus === "canceled"
-  const orderLabel = entry.orderNumber ? `Заказ ${entry.orderNumber}` : `Заказ #${entry.orderId}`
+  const orderLabel = `Заказ ${orderNumberLabel({ id: entry.orderId ?? 0, number: entry.orderNumber })}`
   const willRefund = entry.orderPaid !== null && entry.orderPaid > 0
   const refundAmount = formatMoney(entry.orderPaid ?? 0)
   // Заказ уже передан курьеру с выплатой: возврат клиенту её не сторнирует — предупреждаем.

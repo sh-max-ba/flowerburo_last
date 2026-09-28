@@ -11,6 +11,7 @@ import {
   type CustomerDate,
   type UpcomingCustomerDate,
 } from "@/lib/customer-dates"
+import { recipientLabel } from "@/lib/recipients"
 import { db } from "../connection"
 import type { CurrentUser } from "../types"
 
@@ -24,11 +25,19 @@ export type CustomerDateInput = {
   day: number
   year: number | null
   note: string
+  // Чья дата — получатель этого клиента (null — сам клиент).
+  recipientId?: number | null
 }
+
+// Получатель даты — подзапросами: список дат короткий, а JOIN мешал бы общему SELECT *.
+const RECIPIENT_COLUMNS = `
+  (SELECT name FROM customer_recipients r WHERE r.id = customer_dates.recipient_id) AS recipient_name,
+  (SELECT relation FROM customer_recipients r WHERE r.id = customer_dates.recipient_id) AS recipient_relation`
 
 const SELECT_DATE = `SELECT customer_dates.*,
   (SELECT name FROM users WHERE users.id = customer_dates.created_by_user_id) AS created_by_name,
-  (SELECT role FROM users WHERE users.id = customer_dates.created_by_user_id) AS created_by_role
+  (SELECT role FROM users WHERE users.id = customer_dates.created_by_user_id) AS created_by_role,
+  ${RECIPIENT_COLUMNS}
   FROM customer_dates`
 
 function mapDate(row: Record<string, unknown>, today: CalendarDay): CustomerDate {
@@ -41,6 +50,9 @@ function mapDate(row: Record<string, unknown>, today: CalendarDay): CustomerDate
       day: numberFromRow(row.day),
       year: rowNumOrNull(row.year) || null,
       note: String(row.note ?? ""),
+      recipientId: row.recipient_name == null ? null : rowNumOrNull(row.recipient_id),
+      recipientName: String(row.recipient_name ?? ""),
+      recipientRelation: String(row.recipient_relation ?? ""),
       createdByUserId: rowNumOrNull(row.created_by_user_id),
       createdByName: row.created_by_name == null ? null : String(row.created_by_name),
       createdByRole: userRoleFromRow(row.created_by_role),
@@ -78,7 +90,8 @@ export function listUpcomingCustomerDates(
         COALESCE(customers.phone, '') AS customer_phone,
         EXISTS (SELECT 1 FROM chats WHERE chats.customer_id = customers.id) AS has_chat,
         (SELECT name FROM users WHERE users.id = customer_dates.created_by_user_id) AS created_by_name,
-        (SELECT role FROM users WHERE users.id = customer_dates.created_by_user_id) AS created_by_role
+        (SELECT role FROM users WHERE users.id = customer_dates.created_by_user_id) AS created_by_role,
+        ${RECIPIENT_COLUMNS}
        FROM customer_dates
        JOIN customers ON customers.id = customer_dates.customer_id`
     )
@@ -101,6 +114,7 @@ function normalizeInput(input: CustomerDateInput) {
   const month = Math.trunc(Number(input.month))
   const day = Math.trunc(Number(input.day))
   const year = input.year == null || !Number(input.year) ? null : Math.trunc(Number(input.year))
+  const recipientId = input.recipientId ? Math.trunc(Number(input.recipientId)) || null : null
 
   if (!Number.isInteger(input.customerId) || input.customerId <= 0) {
     throw new Error("Клиент не найден.")
@@ -127,7 +141,7 @@ function normalizeInput(input: CustomerDateInput) {
   if (year != null && day > daysInMonth(month, year)) {
     throw new Error(`В ${year} году нет ${day} февраля.`)
   }
-  return { customerId: input.customerId, title, note, month, day, year }
+  return { customerId: input.customerId, title, note, month, day, year, recipientId }
 }
 
 function logChange(
@@ -145,10 +159,35 @@ function logChange(
     .run(customerId, user.id, user.name, oldValue, newValue)
 }
 
-type StoredDate = { customer_id: number; title: string; month: number; day: number; year: number | null; note: string }
+type StoredDate = {
+  customer_id: number
+  title: string
+  month: number
+  day: number
+  year: number | null
+  note: string
+  recipient_id: number | null
+}
 
-function describeStored(row: StoredDate) {
-  return describeCustomerDate({ title: row.title, day: row.day, month: row.month, year: row.year || null, note: row.note })
+function recipientOf(client: Database.Database, recipientId: number | null | undefined) {
+  if (!recipientId) {
+    return null
+  }
+  return (client.prepare("SELECT customer_id, name, relation FROM customer_recipients WHERE id = ?").get(recipientId) ?? null) as
+    | { customer_id: number; name: string; relation: string }
+    | null
+}
+
+function describeStored(client: Database.Database, row: StoredDate) {
+  const recipient = recipientOf(client, row.recipient_id)
+  return describeCustomerDate({
+    title: row.title,
+    day: row.day,
+    month: row.month,
+    year: row.year || null,
+    note: row.note,
+    recipientLabel: recipient ? recipientLabel(recipient) : "",
+  })
 }
 
 // Новая дата (id не задан) или правка существующей. Правки пишутся в историю клиента.
@@ -164,6 +203,11 @@ export function saveCustomerDate(
     if (!customer) {
       throw new Error("Клиент не найден.")
     }
+    const recipient = recipientOf(client, value.recipientId)
+    if (value.recipientId && (!recipient || recipient.customer_id !== value.customerId)) {
+      throw new Error("Получатель не найден — обновите страницу.")
+    }
+    const described = describeCustomerDate({ ...value, recipientLabel: recipient ? recipientLabel(recipient) : "" })
 
     if (id) {
       const existing = client.prepare("SELECT * FROM customer_dates WHERE id = ?").get(id) as StoredDate | undefined
@@ -173,25 +217,25 @@ export function saveCustomerDate(
       client
         .prepare(
           `UPDATE customer_dates
-           SET title = @title, month = @month, day = @day, year = @year, note = @note, updated_at = CURRENT_TIMESTAMP
+           SET title = @title, month = @month, day = @day, year = @year, note = @note, recipient_id = @recipientId,
+            updated_at = CURRENT_TIMESTAMP
            WHERE id = @id`
         )
         .run({ ...value, id })
-      const before = describeStored(existing)
-      const after = describeCustomerDate(value)
-      if (before !== after) {
-        logChange(client, value.customerId, user, before, after)
+      const before = describeStored(client, existing)
+      if (before !== described) {
+        logChange(client, value.customerId, user, before, described)
       }
       return id
     }
 
     const result = client
       .prepare(
-        `INSERT INTO customer_dates (customer_id, title, month, day, year, note, created_by_user_id)
-         VALUES (@customerId, @title, @month, @day, @year, @note, @userId)`
+        `INSERT INTO customer_dates (customer_id, title, month, day, year, note, recipient_id, created_by_user_id)
+         VALUES (@customerId, @title, @month, @day, @year, @note, @recipientId, @userId)`
       )
       .run({ ...value, userId: user.id })
-    logChange(client, value.customerId, user, "", describeCustomerDate(value))
+    logChange(client, value.customerId, user, "", described)
     return Number(result.lastInsertRowid)
   })()
 }
@@ -207,8 +251,9 @@ export function deleteCustomerDate(
     if (!existing) {
       throw new Error("Дата уже удалена.")
     }
+    const before = describeStored(client, existing)
     client.prepare("DELETE FROM customer_dates WHERE id = ?").run(id)
-    logChange(client, existing.customer_id, user, describeStored(existing), "")
+    logChange(client, existing.customer_id, user, before, "")
     return existing.customer_id
   })()
 }

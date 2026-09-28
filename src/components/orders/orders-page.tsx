@@ -59,6 +59,7 @@ import { OrderImageStrip } from "@/components/orders/order-images"
 import { FloristMark } from "@/components/florist-mark"
 import { useShiftAction } from "@/components/viewer-context"
 import { cn } from "@/lib/utils"
+import { orderHeading } from "@/lib/order-labels"
 
 type Result = Awaited<ReturnType<typeof startOrderWorkAction>>
 
@@ -358,7 +359,7 @@ function WorkOrderCard({
           >
             <ExpandIcon className="size-3.5" />
             <span>
-              {order.number || `#${order.id}`}
+              <span className="font-medium text-foreground">{orderHeading(order)}</span>
               <span className="text-muted-foreground/70"> · создан {dateTime(order.createdAt)}</span>
             </span>
             <OrderPhotoMark images={order.images} />
@@ -380,7 +381,9 @@ function WorkOrderCard({
           <OrderSourceBadge source={order.source} />
           <FloristMark role={order.createdByRole} name={order.createdByName} action="Оформил" />
         </div>
-        {order.recipientPhone && <div>Получатель: {order.recipientPhone}</div>}
+        {order.recipientName || order.recipientPhone ? (
+          <div>Получатель: {[order.recipientName, order.recipientPhone].filter(Boolean).join(", ")}</div>
+        ) : null}
         {order.address && <div>{order.address}</div>}
         {order.note && <div className="text-muted-foreground">{order.note}</div>}
         <div className="flex flex-wrap items-center gap-x-3">
@@ -465,7 +468,7 @@ function ReadyConfirmButton({
         <AlertDialogHeader>
           <AlertDialogTitle>Отметить букет готовым?</AlertDialogTitle>
           <AlertDialogDescription>
-            Заказ {order.number || `#${order.id}`} перейдёт в статус «Готов», а склад спишется автоматически.
+            Заказ {orderHeading(order)} перейдёт в статус «Готов», а склад спишется автоматически.
             Отменить списание потом нельзя.
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -509,7 +512,7 @@ function CancelConfirmButton({
         <AlertDialogHeader>
           <AlertDialogTitle>Отменить заказ?</AlertDialogTitle>
           <AlertDialogDescription>
-            Заказ {order.number || `#${order.id}`} будет отменён, бронь и списание со склада откатятся.
+            Заказ {orderHeading(order)} будет отменён, бронь и списание со склада откатятся.
             Действие необратимо.
             {order.pendingPrepaid > 0.009
               ? ` Предоплата ${formatMoney(order.pendingPrepaid)} в кассу не попадала — просто верните её клиенту.`

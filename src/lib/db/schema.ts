@@ -1427,3 +1427,29 @@ export function migrateCustomerDates(client: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_customer_dates_month_day ON customer_dates(month, day);
   `)
 }
+
+// v33: получатели клиента — кому он дарит цветы (жена, мама, коллега): имя, кем приходится,
+// телефон, адрес. Выбираются в заказе одним нажатием, к ним привязываются важные даты
+// («ДР жены» → получатель Алия). В заказе — имя получателя рядом с его телефоном и ссылка на
+// получателя из списка (recipient_id), у даты — чья она (recipient_id; пусто — самого клиента).
+export function migrateRecipients(client: Database.Database) {
+  client.exec(`
+    CREATE TABLE IF NOT EXISTS customer_recipients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      relation TEXT NOT NULL DEFAULT '',
+      phone TEXT NOT NULL DEFAULT '',
+      address TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL DEFAULT '',
+      created_by_user_id INTEGER,
+      last_used_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_recipients_customer ON customer_recipients(customer_id);
+  `)
+  ensureColumn("orders", "recipient_name", "ALTER TABLE orders ADD COLUMN recipient_name TEXT", client)
+  ensureColumn("orders", "recipient_id", "ALTER TABLE orders ADD COLUMN recipient_id INTEGER", client)
+  ensureColumn("customer_dates", "recipient_id", "ALTER TABLE customer_dates ADD COLUMN recipient_id INTEGER", client)
+}

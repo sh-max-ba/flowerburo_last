@@ -63,6 +63,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 type SaveStatus = "saved" | "saving" | "error"
 type DealTab = "overview" | "composition" | "payment"
@@ -1444,7 +1445,7 @@ export function DealDetailPage({
                   <div className="min-w-0">
                     <div className="text-xs font-medium uppercase text-sky-900">Активный заказ</div>
                     <div className="font-semibold text-sky-950">
-                      {activeDealOrder.number || `Заказ #${activeDealOrder.id}`} · {activeDealOrder.status}
+                      Заказ {orderNumberLabel(activeDealOrder)} · {activeDealOrder.status}
                     </div>
                   </div>
                   <Button size="sm" variant="outline" render={<Link href={orderHref} />}>
@@ -1471,7 +1472,7 @@ export function DealDetailPage({
                     {latestDealOrder.status === "Отменен" ? "Заказ отменён" : "Последний заказ не активен"}
                   </div>
                   <div className="font-semibold text-zinc-950">
-                    {latestDealOrder.number || `Заказ #${latestDealOrder.id}`} · {latestDealOrder.status}
+                    Заказ {orderNumberLabel(latestDealOrder)} · {latestDealOrder.status}
                   </div>
                 </div>
               ) : (
@@ -1488,7 +1489,7 @@ export function DealDetailPage({
                         className="flex items-center justify-between gap-2 rounded-lg bg-muted/30 p-2"
                       >
                         <div className="min-w-0">
-                          <div className="truncate font-medium text-zinc-950">{order.number || `Заказ #${order.id}`}</div>
+                          <div className="truncate font-medium text-zinc-950">Заказ {orderNumberLabel(order)}</div>
                           <div className="truncate">
                             {order.dueAt ? formatDateTime(order.dueAt) : "Без срока"} · {formatMoney(order.total)}
                           </div>

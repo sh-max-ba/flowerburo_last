@@ -116,9 +116,12 @@ import {
   markQuickReplyUsed,
   saveCustomerDate,
   deleteCustomerDate,
+  saveCustomerRecipient,
+  deleteCustomerRecipient,
   type QuickReply,
   type QuickReplyInput,
   type CustomerDateInput,
+  type CustomerRecipientInput,
   type StockDocumentType,
   type UserRole,
   type CurrentUser,
@@ -756,6 +759,22 @@ export async function deleteCustomerDateAction(dateId: number) {
     const customerId = deleteCustomerDate(dateId, user)
     revalidateCustomerDates(customerId)
   }, "Дата удалена.")
+}
+
+// Получатели клиента: кому он дарит цветы. Видны в карточке клиента, в панели «Контакт» чата и в
+// окне заказа; к ним привязываются важные даты.
+export async function saveCustomerRecipientAction(recipientId: number | null, input: CustomerRecipientInput) {
+  return runRoleAction(TEAM_ROLES, (user) => {
+    saveCustomerRecipient(recipientId, input, user)
+    revalidateCustomerDates(input.customerId)
+  }, recipientId ? "Получатель сохранён." : "Получатель добавлен.")
+}
+
+export async function deleteCustomerRecipientAction(recipientId: number) {
+  return runRoleAction(TEAM_ROLES, (user) => {
+    const customerId = deleteCustomerRecipient(recipientId, user)
+    revalidateCustomerDates(customerId)
+  }, "Получатель удалён.")
 }
 
 function revalidateCustomerDates(customerId: number) {

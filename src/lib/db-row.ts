@@ -117,6 +117,8 @@ export function mapOrderRow(row: Row, items: OrderItem[] = [], images: OrderImag
     customer: String(row.customer ?? ""),
     phone: String(row.phone ?? ""),
     recipientPhone: String(row.recipientPhone ?? ""),
+    recipientName: String(row.recipientName ?? ""),
+    recipientId: row.recipientId == null ? null : numberFromRow(row.recipientId),
     source: String(row.source ?? ""),
     deliveryType: cleanRowString(row.deliveryType) || "pickup",
     address: String(row.address ?? ""),

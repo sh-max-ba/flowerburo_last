@@ -31,6 +31,7 @@ import {
   Undo2Icon,
   UserCheckIcon,
   UsersIcon,
+  UsersRoundIcon,
   ZapIcon,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
@@ -58,6 +59,7 @@ export const GUIDE_ICONS: Record<GuideIconKey, LucideIcon> = {
   "order-new": SquarePenIcon,
   client: UserCheckIcon,
   dates: CalendarHeartIcon,
+  recipients: UsersRoundIcon,
   bouquet: Flower2Icon,
   issue: TruckIcon,
   history: HistoryIcon,

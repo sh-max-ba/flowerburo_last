@@ -1,5 +1,6 @@
 import type { Order, OrderItem } from "@/lib/db"
 import { formatDeadline } from "@/lib/datetime"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 // Текст заказа для отправки клиенту в мессенджер. Разметка WhatsApp/Telegram: *жирный*,
 // _курсив_ (references/messages.md). Букеты группируются с составом под ними. Чистая функция —
@@ -20,13 +21,13 @@ function lineFor(item: OrderItem, indent = "") {
 
 export function formatOrderForChat(order: Order): string {
   const lines: string[] = []
-  lines.push(`*Заказ ${order.number || `#${order.id}`}*`)
+  lines.push(`*Заказ ${orderNumberLabel(order)}*`)
   if (order.dueAt) {
     lines.push(`Когда: ${formatDeadline(order.dueAt, { longMonth: true })}`)
   }
   lines.push(order.deliveryType === "delivery" ? `Доставка: ${order.address || "адрес уточним"}` : "Самовывоз из магазина")
-  if (order.recipientPhone) {
-    lines.push(`Получатель: ${order.recipientPhone}`)
+  if (order.recipientName || order.recipientPhone) {
+    lines.push(`Получатель: ${[order.recipientName, order.recipientPhone].filter(Boolean).join(", ")}`)
   }
 
   lines.push("")

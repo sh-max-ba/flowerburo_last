@@ -134,6 +134,9 @@ const run = db.transaction(() => {
   db.prepare("DELETE FROM customer_changes").run()
   // Важные даты клиентов (заметки — имена родных, предпочтения): демо-даты расставляет съёмка.
   if (has("customer_dates", "id")) db.prepare("DELETE FROM customer_dates").run()
+  // Получатели (имена, телефоны и адреса родных клиентов) — демо-получателей создаёт съёмка.
+  if (has("customer_recipients", "id")) db.prepare("DELETE FROM customer_recipients").run()
+  if (has("orders", "recipient_name")) db.prepare("UPDATE orders SET recipient_name = NULL, recipient_id = NULL").run()
 
   // --- Заказы ---
   const isInternalLabel = (value) => /\d/.test(value ?? "") || /витрин/i.test(value ?? "")

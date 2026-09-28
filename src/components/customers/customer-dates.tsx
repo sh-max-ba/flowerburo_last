@@ -2,7 +2,7 @@
 
 import type React from "react"
 import { useState, useTransition } from "react"
-import { CalendarHeartIcon, Loader2Icon, PencilIcon, PlusIcon } from "lucide-react"
+import { CalendarHeartIcon, ClipboardPlusIcon, Loader2Icon, PencilIcon, PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 import { deleteCustomerDateAction, saveCustomerDateAction } from "@/app/actions"
 import {
@@ -18,6 +18,7 @@ import {
   shopToday,
   type CustomerDate,
 } from "@/lib/customer-dates"
+import { recipientLabel, type CustomerRecipient } from "@/lib/recipients"
 import { cn } from "@/lib/utils"
 import { FloristMark } from "@/components/florist-mark"
 import { Button } from "@/components/ui/button"
@@ -34,17 +35,23 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 // Блок «Важные даты» — в карточке клиента (variant="card") и в панели «Контакт» чата
-// (variant="panel", узкая колонка). Нажатие на дату — правка, «Добавить» — новая дата.
+// (variant="panel", узкая колонка). Нажатие на дату — правка, «Добавить» — новая дата. Дата может
+// принадлежать получателю клиента («ДР жены» → Алия). onOrderForDate (в чате) — кнопка «Заказ к
+// дате»: откроет новый заказ с получателем и сроком этой даты.
 
 export function CustomerDatesSection({
   customerId,
   dates,
+  recipients = [],
   onChanged,
+  onOrderForDate,
   variant = "card",
 }: {
   customerId: number
   dates: CustomerDate[]
+  recipients?: CustomerRecipient[]
   onChanged: () => void | Promise<void>
+  onOrderForDate?: (date: CustomerDate) => void
   variant?: "card" | "panel"
 }) {
   const [editing, setEditing] = useState<CustomerDate | "new" | null>(null)
@@ -83,7 +90,12 @@ export function CustomerDatesSection({
         <ul className="flex flex-col gap-1.5">
           {dates.map((date) => (
             <li key={date.id}>
-              <CustomerDateRow date={date} variant={variant} onEdit={() => setEditing(date)} />
+              <CustomerDateRow
+                date={date}
+                variant={variant}
+                onEdit={() => setEditing(date)}
+                onOrder={onOrderForDate ? () => onOrderForDate(date) : undefined}
+              />
             </li>
           ))}
         </ul>
@@ -92,6 +104,7 @@ export function CustomerDatesSection({
       <CustomerDateDialog
         key={editing === "new" ? "new" : (editing?.id ?? "closed")}
         customerId={customerId}
+        recipients={recipients}
         date={editing === "new" ? null : editing}
         open={editing !== null}
         onOpenChange={(open) => !open && setEditing(null)}
@@ -108,24 +121,30 @@ function CustomerDateRow({
   date,
   variant,
   onEdit,
+  onOrder,
 }: {
   date: CustomerDate
   variant: "card" | "panel"
   onEdit: () => void
+  onOrder?: () => void
 }) {
-  return (
+  const row = (
     <button
       type="button"
       onClick={onEdit}
       title="Изменить дату"
       className={cn(
-        "group/date flex w-full items-start gap-3 rounded-xl text-left transition-colors hover:bg-muted/60",
+        "group/date flex w-full items-start gap-3 text-left transition-colors hover:bg-muted/60",
+        onOrder ? "rounded-t-xl" : "rounded-xl",
         variant === "panel" ? "bg-muted/40 px-2.5 py-2" : "bg-muted/30 px-3 py-2.5"
       )}
     >
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
           <span className="font-medium text-foreground">{date.title}</span>
+          {date.recipientName ? (
+            <span className="text-sm text-zinc-600">· {recipientLabel({ name: date.recipientName, relation: date.recipientRelation })}</span>
+          ) : null}
           <FloristMark role={date.createdByRole} name={date.createdByName} action="Добавил" compact />
         </span>
         <span className="mt-0.5 block text-sm text-muted-foreground tabular-nums">
@@ -142,6 +161,26 @@ function CustomerDateRow({
         />
       </span>
     </button>
+  )
+  if (!onOrder) {
+    return row
+  }
+  // В чате под датой — «Заказ к дате»: новый заказ с получателем и сроком этой даты.
+  return (
+    <div className="flex flex-col">
+      {row}
+      <button
+        type="button"
+        onClick={onOrder}
+        className={cn(
+          "flex h-9 items-center gap-1.5 rounded-b-xl px-2.5 text-left text-sm font-medium text-brand-strong transition-colors hover:bg-brand-subtle pointer-coarse:h-10",
+          variant === "panel" ? "bg-muted/40" : "bg-muted/30"
+        )}
+      >
+        <ClipboardPlusIcon className="size-4 shrink-0" aria-hidden />
+        Заказ к дате
+      </button>
+    </div>
   )
 }
 
@@ -166,12 +205,14 @@ export function DaysLeftPill({ daysLeft, className }: { daysLeft: number; classN
 
 export function CustomerDateDialog({
   customerId,
+  recipients = [],
   date,
   open,
   onOpenChange,
   onSaved,
 }: {
   customerId: number
+  recipients?: CustomerRecipient[]
   date: CustomerDate | null
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -182,6 +223,8 @@ export function CustomerDateDialog({
   const [month, setMonth] = useState(date ? String(date.month) : "")
   const [year, setYear] = useState(date?.year ? String(date.year) : "")
   const [note, setNote] = useState(date?.note ?? "")
+  // Чья дата: получатель клиента или сам клиент (null).
+  const [recipientId, setRecipientId] = useState<number | null>(date?.recipientId ?? null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [pending, startTransition] = useTransition()
 
@@ -216,6 +259,7 @@ export function CustomerDateDialog({
         month: Number(month),
         year: year.trim() ? Number(year) : null,
         note,
+        recipientId,
       })
       if (!result.ok) {
         toast.error(result.message)
@@ -282,6 +326,29 @@ export function CustomerDateDialog({
                 ))}
               </div>
             </Field>
+            {recipients.length ? (
+              <Field>
+                <FieldLabel>Для кого</FieldLabel>
+                <div className="flex flex-wrap gap-1.5" data-slot="customer-date-recipients">
+                  {[{ id: null as number | null, label: "Сам клиент" }, ...recipients.map((recipient) => ({ id: recipient.id as number | null, label: recipientLabel(recipient) }))].map(
+                    (option) => (
+                      <button
+                        key={option.id ?? "self"}
+                        type="button"
+                        onClick={() => setRecipientId(option.id)}
+                        aria-pressed={recipientId === option.id}
+                        className={cn(
+                          "inline-flex h-8 items-center rounded-full px-3 text-xs font-medium transition-colors pointer-coarse:h-9",
+                          recipientId === option.id ? "bg-brand-subtle text-brand-strong" : "bg-muted text-foreground hover:bg-zinc-200"
+                        )}
+                      >
+                        {option.label}
+                      </button>
+                    )
+                  )}
+                </div>
+              </Field>
+            ) : null}
             <div className="grid grid-cols-[5.5rem_minmax(0,1fr)_6.5rem] gap-2" data-slot="customer-date-when">
               <Field>
                 <FieldLabel htmlFor="customer-date-day">День</FieldLabel>

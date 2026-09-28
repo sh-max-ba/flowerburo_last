@@ -9,6 +9,7 @@ import { formatInstant } from "@/lib/datetime"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { LineComposition, type CompositionItem } from "@/components/cash/line-composition"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 // Чек смены: прямая продажа кассы или оплата по заказу (предоплата/доплата). Возвраты и
 // ручные внесения/изъятия сюда НЕ входят — они в полной ленте «Все операции».
@@ -63,7 +64,7 @@ function buildReceipts(detail: ShiftDetails | null): Receipt[] {
     receipts.push({
       key: `order-${order.transactionId}`,
       createdAt: order.createdAt,
-      reference: order.number || `Заказ #${order.orderId}`,
+      reference: `Заказ ${orderNumberLabel({ id: order.orderId, number: order.number })}`,
       kindLabel: cashTransactionTypeLabel(order.type),
       customer: order.customer,
       total: order.amount,

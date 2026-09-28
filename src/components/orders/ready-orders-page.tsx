@@ -61,6 +61,7 @@ import {
 import { OrderImageStrip } from "@/components/orders/order-images"
 import { FloristMark } from "@/components/florist-mark"
 import { OrderDetailsDialog } from "@/components/orders/order-details-dialog"
+import { orderHeading, orderNumberLabel } from "@/lib/order-labels"
 
 type OpenShift = DashboardData["stats"]["openShift"]
 type Result = Awaited<ReturnType<typeof completePickupOrderAction>>
@@ -311,7 +312,7 @@ function ReadyOrderCard({
   const refundTarget: RefundTarget = {
     kind: "order",
     id: order.id,
-    label: order.number || `#${order.id}`,
+    label: orderNumberLabel(order),
     customer: order.customer || "Клиент не указан",
     status: order.status,
     paid: order.paid,
@@ -329,7 +330,7 @@ function ReadyOrderCard({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <CardTitle className="truncate text-base">{order.customer || "Клиент не указан"}</CardTitle>
-            <CardDescription className="truncate">{order.number || `#${order.id}`}</CardDescription>
+            <CardDescription className="truncate">{orderHeading(order)}</CardDescription>
           </div>
           <OrderStatusBadge status={order.status} />
         </div>
@@ -369,8 +370,8 @@ function ReadyOrderCard({
           {order.deliveryType === "delivery" && <Info label="Адрес" value={order.address || "не указан"} />}
           <div className="grid grid-cols-2 gap-3">
             <Info label="Телефон" value={order.phone || "не указан"} />
-            {order.recipientPhone ? (
-              <Info label="Номер получателя" value={order.recipientPhone} />
+            {order.recipientName || order.recipientPhone ? (
+              <Info label="Получатель" value={[order.recipientName, order.recipientPhone].filter(Boolean).join(", ")} />
             ) : (
               <Info label="К сроку" value={order.dueAt ? formatDeadline(order.dueAt) : "-"} />
             )}

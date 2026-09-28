@@ -4,23 +4,21 @@ import type React from "react"
 import { useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import {
-  ExternalLinkIcon,
-  AtSignIcon,
-  MessageCircleIcon,
-  PencilIcon,
-  PhoneIcon,
-} from "lucide-react"
+import { AtSignIcon, MessageCircleIcon, PencilIcon, PhoneIcon } from "lucide-react"
 import { toast } from "sonner"
 import { updateCustomerAction } from "@/app/actions"
-import type { Customer, Deal } from "@/lib/crm"
+import type { Customer } from "@/lib/crm"
 import type { CustomerDate } from "@/lib/customer-dates"
 import type { Order, Sale } from "@/lib/db"
 import { getPaymentMethodLabel, sourceLabel } from "@/lib/labels"
+import { orderNumberLabel, orderTitle } from "@/lib/order-labels"
+import type { CustomerRecipient } from "@/lib/recipients"
 import { cn, formatMoney } from "@/lib/utils"
 import { FloristMark } from "@/components/florist-mark"
 import { CustomerDatesSection } from "@/components/customers/customer-dates"
-import { useViewer } from "@/components/viewer-context"
+import { CustomerRecipientsSection } from "@/components/customers/customer-recipients"
+import { OrderDetailsDialog } from "@/components/orders/order-details-dialog"
+import { OrderStatusBadge } from "@/components/orders/order-shared"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -42,34 +40,35 @@ import {
   telLink,
 } from "@/components/clients/customers-page"
 import { formatDeadline, parseDbInstant } from "@/lib/datetime"
-import { canAccessSection } from "@/lib/nav"
 
 type ActionResult = Awaited<ReturnType<typeof updateCustomerAction>>
 
 const HISTORY_CAP = 5
 
-// Mirrors activeDealOrderStatuses in @/lib/db/types (kept local to avoid pulling the
-// server-only db module — which imports node:path — into this client bundle).
+// Активные заказы (остаток к оплате ещё ждём). Черновик и отменённый — не долг.
 const ACTIVE_ORDER_STATUSES = ["Новый", "В работе", "Готов", "Передан курьеру", "new", "in_progress", "ready"]
+const NOT_COUNTED_STATUSES = ["Отменен", "Черновик"]
 
-const dealForms: [string, string, string] = ["сделка", "сделки", "сделок"]
 const orderForms: [string, string, string] = ["заказ", "заказа", "заказов"]
 const saleForms: [string, string, string] = ["продажа", "продажи", "продаж"]
 
+// Карточка клиента: слева — контакты, важные даты и получатели; справа — история заказов и
+// покупок на кассе. Сделки (старый канбан) здесь не показываем: работа идёт в «Чатах» и заказах.
 export function CustomerDetailPage({
   customer,
-  deals,
   orders,
   sales,
   dates,
+  recipients,
   hasChat = false,
 }: {
   customer: Customer
-  deals: Deal[]
   orders: Order[]
   sales: Sale[]
   // Дни рождения, годовщины — ближайшая первой.
   dates: CustomerDate[]
+  // Кому клиент дарит цветы — недавние первыми.
+  recipients: CustomerRecipient[]
   // У клиента уже есть диалог в «Чатах» (без телефона ссылку «Открыть чат» показываем только тогда).
   hasChat?: boolean
 }) {
@@ -85,26 +84,17 @@ export function CustomerDetailPage({
   const chatHref = hasChat || customer.phone ? `/chats?customer=${customer.id}` : null
 
   const stats = useMemo(() => {
-    const dealPaid = deals.reduce((sum, deal) => sum + (deal.paid || 0), 0)
-    const salesPaid = sales.reduce((sum, sale) => sum + (sale.total || 0), 0)
-    const totalPaid = dealPaid + salesPaid
+    // Оплачено: принятые оплаты заказов (без отменённых и черновиков) + продажи на кассе (без сторно).
+    const countedOrders = orders.filter((order) => !NOT_COUNTED_STATUSES.includes(order.status))
+    const ordersPaid = countedOrders.reduce((sum, order) => sum + (order.paid || 0), 0)
+    const liveSales = sales.filter((sale) => !sale.reversedAt)
+    const salesPaid = liveSales.reduce((sum, sale) => sum + (sale.total || 0), 0)
 
-    // Only genuinely live deals owe a balance (won = closed/paid, lost/cancelled = no money due).
-    const activeDeals = deals.filter((deal) => deal.status === "open")
-    const dealOutstanding = activeDeals.reduce(
-      (sum, deal) => sum + Math.max(0, (deal.total || 0) - (deal.paid || 0)),
-      0
-    )
-    const orderOutstanding = orders
+    const outstanding = orders
       .filter((order) => ACTIVE_ORDER_STATUSES.includes(order.status))
       .reduce((sum, order) => sum + Math.max(0, (order.total || 0) - (order.paid || 0)), 0)
-    const outstanding = dealOutstanding + orderOutstanding
 
-    const lastActivity = [
-      ...deals.map((deal) => deal.createdAt),
-      ...orders.map((order) => order.createdAt),
-      ...sales.map((sale) => sale.createdAt),
-    ]
+    const lastActivity = [...orders.map((order) => order.createdAt), ...sales.map((sale) => sale.createdAt)]
       .filter(Boolean)
       // Метки из БД — UTC без зоны: new Date(value) разобрал бы их в поясе сервера/устройства,
       // и время съезжало на 6 часов (а сервер и планшет рисовали разное).
@@ -112,10 +102,15 @@ export function CustomerDetailPage({
       .filter((time) => !Number.isNaN(time))
       .sort((a, b) => b - a)[0]
 
-    return { totalPaid, outstanding, lastActivity }
-  }, [deals, orders, sales])
+    return {
+      totalPaid: ordersPaid + salesPaid,
+      outstanding,
+      ordersCount: countedOrders.length,
+      salesCount: liveSales.length,
+      lastActivity,
+    }
+  }, [orders, sales])
 
-  const sortedDeals = useMemo(() => sortByCreated(deals), [deals])
   const sortedOrders = useMemo(() => sortByCreated(orders), [orders])
   const sortedSales = useMemo(() => sortByCreated(sales), [sales])
 
@@ -172,9 +167,9 @@ export function CustomerDetailPage({
               emphasis={stats.outstanding > 0}
             />
             <StatTile
-              label="Сделок / Заказов"
-              value={`${deals.length} / ${orders.length}`}
-              hint={`${sales.length} ${pluralWord(sales.length, saleForms)}`}
+              label="Заказов / Продаж"
+              value={`${stats.ordersCount} / ${stats.salesCount}`}
+              hint={recipients.length ? `получателей: ${recipients.length}` : undefined}
             />
             <StatTile
               label="Последняя активность"
@@ -212,7 +207,14 @@ export function CustomerDetailPage({
             ) : null}
           </div>
 
-          <CustomerDatesSection customerId={customer.id} dates={dates} onChanged={() => router.refresh()} />
+          <CustomerDatesSection
+            customerId={customer.id}
+            dates={dates}
+            recipients={recipients}
+            onChanged={() => router.refresh()}
+          />
+
+          <CustomerRecipientsSection customerId={customer.id} recipients={recipients} onChanged={() => router.refresh()} />
 
           <div className="grid gap-3 rounded-xl bg-muted/30 p-3 text-sm">
             {customer.instagram ? (
@@ -234,16 +236,12 @@ export function CustomerDetailPage({
             <CardTitle className="font-semibold text-zinc-950">История</CardTitle>
           </CardHeader>
           <CardContent>
-            <Tabs defaultValue="deals">
+            <Tabs defaultValue="orders">
               <TabsList variant="line" className="mb-4">
-                <TabsTrigger value="deals">Сделки {deals.length}</TabsTrigger>
                 <TabsTrigger value="orders">Заказы {orders.length}</TabsTrigger>
-                <TabsTrigger value="sales">Продажи {sales.length}</TabsTrigger>
+                <TabsTrigger value="sales">Покупки на кассе {sales.length}</TabsTrigger>
               </TabsList>
 
-              <TabsContent value="deals">
-                <DealsTable deals={sortedDeals} />
-              </TabsContent>
               <TabsContent value="orders">
                 <OrdersTable orders={sortedOrders} />
               </TabsContent>
@@ -278,91 +276,18 @@ export function CustomerDetailPage({
   )
 }
 
-// Сделки открываются только тем, кому доступен раздел «Сделки» (флористу — нет).
-function useCanOpenDeals() {
-  const viewer = useViewer()
-  return viewer ? canAccessSection("deals", viewer.role, false) : true
-}
-
-function DealsTable({ deals }: { deals: Deal[] }) {
-  const canOpenDeals = useCanOpenDeals()
-  const [showAll, setShowAll] = useState(false)
-  const rows = showAll ? deals : deals.slice(0, HISTORY_CAP)
-
-  if (!deals.length) {
-    return (
-      <Empty className="min-h-40">
-        <EmptyHeader>
-          <EmptyTitle>Сделок пока нет</EmptyTitle>
-          <EmptyDescription>Данные появятся после первой сделки клиента.</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    )
-  }
-
-  return (
-    <div className="overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Номер</TableHead>
-            <TableHead>Название</TableHead>
-            <TableHead>Этап</TableHead>
-            <TableHead className="text-right">Итог</TableHead>
-            <TableHead className="text-right">Оплачено</TableHead>
-            <TableHead className="text-right">Остаток</TableHead>
-            <TableHead>Создана</TableHead>
-            <TableHead />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((deal) => (
-            <TableRow key={deal.id}>
-              <TableCell className="font-medium">{deal.number}</TableCell>
-              <TableCell>{deal.title || deal.customerName}</TableCell>
-              <TableCell>
-                <Badge variant="outline">{deal.stageName || "—"}</Badge>
-              </TableCell>
-              <TableCell className="text-right font-semibold">{formatMoney(deal.total)}</TableCell>
-              <TableCell className="text-right">{formatMoney(deal.paid)}</TableCell>
-              <TableCell className="text-right font-semibold">
-                {formatMoney(Math.max(0, deal.total - deal.paid))}
-              </TableCell>
-              <TableCell>{dateTime(deal.createdAt)}</TableCell>
-              <TableCell className="text-right">
-                {canOpenDeals ? (
-                  <Button size="sm" variant="outline" render={<Link href={`/deals/${deal.id}`} />}>
-                    <ExternalLinkIcon data-icon="inline-start" />
-                    Открыть
-                  </Button>
-                ) : null}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-      <ShowAllToggle
-        showAll={showAll}
-        total={deals.length}
-        cap={HISTORY_CAP}
-        onToggle={() => setShowAll((value) => !value)}
-        forms={dealForms}
-      />
-    </div>
-  )
-}
-
+// Заказы клиента: «№583 · Нежность», получатель, срок и деньги. Нажатие — карточка заказа.
 function OrdersTable({ orders }: { orders: Order[] }) {
-  const canOpenDeals = useCanOpenDeals()
   const [showAll, setShowAll] = useState(false)
+  const [opened, setOpened] = useState<Order | null>(null)
   const rows = showAll ? orders : orders.slice(0, HISTORY_CAP)
 
   if (!orders.length) {
     return (
       <Empty className="min-h-40">
         <EmptyHeader>
-          <EmptyTitle>Связанных заказов нет</EmptyTitle>
-          <EmptyDescription>Данные появятся после первого заказа клиента.</EmptyDescription>
+          <EmptyTitle>Заказов пока нет</EmptyTitle>
+          <EmptyDescription>Заказы появятся здесь после первого заказа из чата или на кассе.</EmptyDescription>
         </EmptyHeader>
       </Empty>
     )
@@ -373,41 +298,41 @@ function OrdersTable({ orders }: { orders: Order[] }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Номер</TableHead>
+            <TableHead>Заказ</TableHead>
+            <TableHead>К сроку</TableHead>
             <TableHead>Статус</TableHead>
             <TableHead className="text-right">Сумма</TableHead>
-            <TableHead className="text-right">Оплачено</TableHead>
-            <TableHead className="text-right">Остаток</TableHead>
-            <TableHead>К сроку</TableHead>
-            <TableHead>Связь</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((order) => (
-            <TableRow key={order.id}>
-              <TableCell className="font-medium">{order.number}</TableCell>
-              <TableCell>
-                <Badge variant={order.status === "Отменен" ? "destructive" : "outline"}>{order.status}</Badge>
-              </TableCell>
-              <TableCell className="text-right font-semibold">{formatMoney(order.total)}</TableCell>
-              <TableCell className="text-right">{formatMoney(order.paid)}</TableCell>
-              <TableCell className="text-right font-semibold">
-                {formatMoney(Math.max(0, order.total - order.paid))}
-              </TableCell>
-              <TableCell>{order.dueAt ? formatDeadline(order.dueAt) : "—"}</TableCell>
-              <TableCell>
-                {order.dealId && canOpenDeals ? (
-                  <Button size="sm" variant="outline" render={<Link href={`/deals/${order.dealId}`} />}>
-                    Сделка #{order.dealId}
-                  </Button>
-                ) : order.dealId ? (
-                  `Сделка #${order.dealId}`
-                ) : (
-                  "—"
-                )}
-              </TableCell>
-            </TableRow>
-          ))}
+          {rows.map((order) => {
+            const balance = Math.max(0, order.total - order.paid)
+            const counted = !NOT_COUNTED_STATUSES.includes(order.status)
+            return (
+              <TableRow key={order.id} className="cursor-pointer" onClick={() => setOpened(order)}>
+                <TableCell className="max-w-64">
+                  <div className="truncate font-medium">
+                    {orderNumberLabel(order)} · {orderTitle(order)}
+                  </div>
+                  {order.recipientName || order.recipientPhone ? (
+                    <div className="truncate text-xs text-muted-foreground">
+                      Получатель: {[order.recipientName, order.recipientPhone].filter(Boolean).join(", ")}
+                    </div>
+                  ) : null}
+                </TableCell>
+                <TableCell className="whitespace-nowrap tabular-nums">{order.dueAt ? formatDeadline(order.dueAt) : "—"}</TableCell>
+                <TableCell>
+                  <OrderStatusBadge status={order.status} />
+                </TableCell>
+                <TableCell className="text-right whitespace-nowrap tabular-nums">
+                  <div className="font-semibold">{formatMoney(order.total)}</div>
+                  {counted && balance > 0.009 ? (
+                    <div className="text-xs font-medium text-destructive">остаток {formatMoney(balance)}</div>
+                  ) : null}
+                </TableCell>
+              </TableRow>
+            )
+          })}
         </TableBody>
       </Table>
       <ShowAllToggle
@@ -417,6 +342,7 @@ function OrdersTable({ orders }: { orders: Order[] }) {
         onToggle={() => setShowAll((value) => !value)}
         forms={orderForms}
       />
+      <OrderDetailsDialog order={opened} onOpenChange={(open) => !open && setOpened(null)} />
     </div>
   )
 }
@@ -429,8 +355,8 @@ function SalesTable({ sales }: { sales: Sale[] }) {
     return (
       <Empty className="min-h-40">
         <EmptyHeader>
-          <EmptyTitle>Продаж пока нет</EmptyTitle>
-          <EmptyDescription>Данные появятся после продажи на кассе.</EmptyDescription>
+          <EmptyTitle>Покупок на кассе пока нет</EmptyTitle>
+          <EmptyDescription>Данные появятся после продажи на кассе с выбранным клиентом.</EmptyDescription>
         </EmptyHeader>
       </Empty>
     )
@@ -450,7 +376,7 @@ function SalesTable({ sales }: { sales: Sale[] }) {
         </TableHeader>
         <TableBody>
           {rows.map((sale) => (
-            <TableRow key={sale.id}>
+            <TableRow key={sale.id} className={cn(sale.reversedAt && "text-muted-foreground line-through")}>
               <TableCell>{dateTime(sale.createdAt)}</TableCell>
               <TableCell className="text-right">{formatMoney(sale.totalBeforeDiscount)}</TableCell>
               <TableCell className="text-right">{formatMoney(sale.discountTotal)}</TableCell>
@@ -529,12 +455,8 @@ function InfoLine({ label, value }: { label: string; value: string }) {
 
 function sortByCreated<T extends { createdAt: string }>(rows: T[]) {
   return [...rows].sort((a, b) => {
-    const aTime = new Date(a.createdAt).getTime()
-    const bTime = new Date(b.createdAt).getTime()
-    return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime)
+    const aTime = parseDbInstant(a.createdAt)?.getTime() ?? 0
+    const bTime = parseDbInstant(b.createdAt)?.getTime() ?? 0
+    return bTime - aTime
   })
-}
-
-function pluralWord(count: number, forms: [string, string, string]) {
-  return pluralize(count, forms).replace(/^\d+\s/, "")
 }

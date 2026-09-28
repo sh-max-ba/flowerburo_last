@@ -1,6 +1,7 @@
 import { SHOP_UTC_OFFSET_SQL } from "@/lib/datetime"
 import { allocateOverheadShares } from "@/lib/stock-costing"
 import { db } from "../connection"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 // Отчёт по проданным позициям (для «Истории склада» → вкладка «Продажи» и Excel-выгрузки).
 //
@@ -111,7 +112,7 @@ function toReportLines(raw: RawLine[], source: "sale" | "order"): SalesReportLin
       result.push({
         source,
         sourceId: line.sourceId,
-        sourceLabel: source === "sale" ? `Чек #${line.sourceId}` : `Заказ №${line.orderNumber ?? line.sourceId}`,
+        sourceLabel: source === "sale" ? `Чек #${line.sourceId}` : `Заказ ${orderNumberLabel({ id: line.sourceId, number: line.orderNumber == null ? null : String(line.orderNumber) })}`,
         soldAt: line.soldAt,
         customer: line.customer,
         productCode: line.productCode,

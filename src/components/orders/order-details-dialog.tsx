@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { OrderImageLightbox } from "@/components/orders/order-images"
 import { FloristMark } from "@/components/florist-mark"
 import { OrderComposition, OrderStatusBadge, OrderUrgencyBadge, dateTime, dateTimeLong } from "@/components/orders/order-shared"
+import { orderHeading } from "@/lib/order-labels"
 
 // Карточка заказа для просмотра: фото и чеки (галерея с лайтбоксом), кто/когда/куда, состав,
 // комментарий, деньги. «Изменить» — если передан onEdit и заказ ещё редактируется.
@@ -64,7 +65,7 @@ function OrderDetailsBody({
         <div className="flex flex-wrap items-start justify-between gap-2 pr-8">
           <div className="min-w-0">
             <DialogTitle className="flex flex-wrap items-center gap-2">
-              <span>{order.number || `#${order.id}`}</span>
+              <span>{orderHeading(order)}</span>
               <OrderStatusBadge status={order.status} />
               <OrderUrgencyBadge order={order} />
             </DialogTitle>
@@ -106,7 +107,11 @@ function OrderDetailsBody({
                 {order.phone}
               </div>
             ) : null}
-            {order.recipientPhone ? <div className="text-sm text-muted-foreground">Получатель: {order.recipientPhone}</div> : null}
+            {order.recipientName || order.recipientPhone ? (
+              <div className="text-sm text-muted-foreground">
+                Получатель: {[order.recipientName, order.recipientPhone].filter(Boolean).join(", ")}
+              </div>
+            ) : null}
             {chatHref ? (
               <a href={chatHref} className="mt-1 inline-flex items-center gap-1 text-sm text-brand-strong hover:underline">
                 <MessageCircleIcon className="size-3.5" />

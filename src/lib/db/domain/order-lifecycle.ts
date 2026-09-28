@@ -26,6 +26,8 @@ import {
 } from "../queries/pending-prepayments"
 import { getAllowOversellOrders } from "../queries/app-settings"
 import { deleteOrderImagesForOrder, syncOrderImagesFromForm } from "../queries/order-images"
+import { applyOrderRecipient } from "../queries/customer-recipients"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 export function buildOrderItems(client: Database.Database, formData: FormData) {
   const productCodes = formData.getAll("itemProductCode").map((value) => clean(value))
@@ -206,6 +208,8 @@ export function createOrder(formData: FormData, currentUser: CurrentUser): { ord
 
     // Изображения-референсы: загружены заранее, здесь только привязываем к созданному заказу.
     syncOrderImagesFromForm(client, orderId, formData)
+    // Получатель: имя, выбор из списка клиента или «запомнить» нового.
+    applyOrderRecipient(client, orderId, formData, currentUser)
 
     // Части предоплаты запоминаем (способ + сумма + кто принял); кассовая проводка — при выдаче.
     for (const part of prepaidParts) {
@@ -222,7 +226,7 @@ export function createOrder(formData: FormData, currentUser: CurrentUser): { ord
       type: "order_create",
       total,
       note:
-        `Создан заказ ${number}: ${customer}` +
+        `Создан заказ ${orderNumberLabel({ id: orderId, number })}: ${customer}` +
         (prepaid > 0 ? ` (предоплата ${roundMoney(prepaid)} — в кассу при выдаче)` : ""),
     })
     return orderId
@@ -407,6 +411,7 @@ export function createOrderDraft(formData: FormData, currentUser: CurrentUser) {
     client.prepare("UPDATE orders SET number = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(number, orderId)
     writeDraftItems(client, orderId, items)
     syncOrderImagesFromForm(client, orderId, formData)
+    applyOrderRecipient(client, orderId, formData, currentUser)
     return orderId
   })
 
@@ -503,6 +508,7 @@ export function updateOrderDraft(orderId: number, formData: FormData, currentUse
     }
     writeDraftItems(client, orderId, items)
     syncOrderImagesFromForm(client, orderId, formData)
+    applyOrderRecipient(client, orderId, formData, currentUser)
     return orderId
   })
   return save()
@@ -657,7 +663,7 @@ export function finalizeOrderDraft(
       type: "order_status",
       total,
       note:
-        `Заказ ${number}: отправлен в работу` +
+        `Заказ ${orderNumberLabel({ id: orderId, number })}: отправлен в работу` +
         (prepaid > 0 ? ` (предоплата ${roundMoney(prepaid)} — в кассу при выдаче)` : ""),
     })
     return roundMoney(prepaid)
@@ -916,7 +922,7 @@ export function completePickupOrder(orderId: number, formData: FormData, current
     // выдачи, до доплаты, чтобы в ленте кассы предоплата шла раньше доплаты.
     result.postedPrepaid = postPendingPrepayments(client, {
       orderId,
-      orderNumber: String(order.number ?? `#${orderId}`),
+      orderNumber: orderNumberLabel({ id: orderId, number: order.number == null ? null : String(order.number) }),
       shiftId: shift.id,
       customerId: numberFromRow(order.customer_id) || null,
       dealId: numberFromRow(order.deal_id) || null,
@@ -971,7 +977,7 @@ export function handOrderToCourier(orderId: number, formData: FormData, currentU
     // Отложенная предоплата (принята при создании) проводится в кассу в смену передачи курьеру.
     result.postedPrepaid = postPendingPrepayments(client, {
       orderId,
-      orderNumber: String(order.number ?? `#${orderId}`),
+      orderNumber: orderNumberLabel({ id: orderId, number: order.number == null ? null : String(order.number) }),
       shiftId: shift.id,
       customerId: numberFromRow(order.customer_id) || null,
       dealId: numberFromRow(order.deal_id) || null,

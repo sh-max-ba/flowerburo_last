@@ -110,11 +110,18 @@ function latestStoryOrder() {
   }
 }
 
-// Карточка заказа на столе по номеру.
+// Номер заказа так, как он на экране: «№594» из ORD-20260929-0594 (см. src/lib/order-labels.ts).
+function shownNumber(number) {
+  const match = /^ORD-\d{8}-0*(\d+)$/.exec(String(number ?? ""))
+  return match ? `№${match[1]}` : String(number ?? "")
+}
+
+// Карточка заказа на столе по номеру (кнопка «№594 · Нежность · создан …»).
 function orderCard(page, number) {
+  number = shownNumber(number)
   return page
     .locator("div")
-    .filter({ has: page.getByRole("button", { name: new RegExp(number) }) })
+    .filter({ has: page.getByRole("button", { name: new RegExp(`${number} `) }) })
     .filter({ has: page.getByRole("button", { name: /В работу|Букет готов|Изменить/ }) })
     .last()
 }
@@ -380,6 +387,18 @@ async function phaseManagerChat() {
       stages: order.getByRole("tablist", { name: "Этапы заказа" }),
     })
   )
+  // Букет — маме клиентки: «Другой человек», запомнить у клиента (появится в «Получателях»).
+  await order.getByRole("button", { name: "Другой человек" }).click()
+  await order.locator("#order-recipient-name").fill("Гульнара")
+  await order.locator("#order-recipient-phone").fill("+996 700 123 456")
+  await order.getByRole("button", { name: "мама", exact: true }).click()
+  await tall(page, () =>
+    capture(page, "manager-order-recipient-new", {
+      dialog: order,
+      stage: order.getByRole("region", { name: "Данные заказа" }),
+      recipient: order.locator('[data-slot="order-recipient"]'),
+    })
+  )
   await order.getByRole("tab", { name: /Получение/ }).click()
   await order.getByRole("button", { name: "Завтра", exact: true }).click()
   await order.getByRole("button", { name: "12:00", exact: true }).click()
@@ -476,7 +495,7 @@ async function phaseFloristOrders() {
     }), 1500)
 
   // Подробности заказа.
-  await card.getByRole("button", { name: new RegExp(story.number) }).click()
+  await card.getByRole("button", { name: new RegExp(`${shownNumber(story.number)} `) }).click()
   const details = dialog(page)
   await details.waitFor()
   await settle(page, 800)
@@ -522,7 +541,7 @@ async function phaseFloristOrders() {
   await dismissToasts(page)
   await page.getByRole("tab", { name: /^Готовые/ }).click()
   await settle(page, 800)
-  const readyCard = page.locator("div").filter({ has: page.getByRole("button", { name: new RegExp(story.number) }) }).filter({ hasText: "Готов" }).last()
+  const readyCard = page.locator("div").filter({ has: page.getByRole("button", { name: new RegExp(`${shownNumber(story.number)} `) }) }).filter({ hasText: "Готов" }).last()
   await capture(page, "florist-ready-done", { board: page.locator('[data-slot="screen-body"]').first(), card: readyCard })
 
   // Отмена — только окно подтверждения.
@@ -759,7 +778,28 @@ async function phaseManagerWork() {
   const birthday = shopDayFromToday(4)
   const anniversary = shopDayFromToday(47)
   const monthName = (month) => ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"][month - 1]
-  async function addDate({ title, day, month, year, note }, shotId) {
+  // Получатели: мама (из заказа сюжета) уже в списке — добавим подругу через окно.
+  const recipientsBlock = page.locator('[data-slot="customer-recipients"]')
+  await recipientsBlock.getByRole("button", { name: "Добавить" }).click()
+  const recipientBox = dialog(page, "Новый получатель")
+  await recipientBox.waitFor()
+  await recipientBox.locator("#recipient-name").fill("Дана")
+  await recipientBox.getByRole("button", { name: "подруга", exact: true }).click()
+  await recipientBox.locator("#recipient-phone").fill("+996 555 200 150")
+  await recipientBox.locator("#recipient-address").fill("ул. Токтогула, 112, кв. 4")
+  await recipientBox.locator("#recipient-note").fill("Любит тюльпаны")
+  await capture(page, "manager-recipient-dialog", {
+    dialog: recipientBox,
+    name: [recipientBox.locator("#recipient-name"), recipientBox.locator('[data-slot="recipient-relations"]')],
+    phone: recipientBox.locator("#recipient-phone"),
+    address: recipientBox.locator("#recipient-address"),
+  })
+  await recipientBox.getByRole("button", { name: "Добавить", exact: true }).click()
+  await waitToast(page, "Получатель добавлен")
+  await dismissToasts(page)
+  await settle(page, 600)
+
+  async function addDate({ title, day, month, year, note, recipient }, shotId) {
     await dates.getByRole("button", { name: "Добавить" }).click()
     const box = dialog(page, "Новая важная дата")
     await box.waitFor()
@@ -770,30 +810,40 @@ async function phaseManagerWork() {
     await chooseSelect(page, box.locator("#customer-date-day"), String(day))
     if (year) await box.locator("#customer-date-year").fill(String(year))
     if (note) await box.locator("#customer-date-note").fill(note)
+    if (recipient) await box.getByRole("button", { name: recipient, exact: true }).click()
     if (shotId) {
-      await capture(page, shotId, {
-        dialog: box,
-        title: [box.locator("#customer-date-title"), box.locator('[data-slot="customer-date-presets"]')],
-        when: box.locator('[data-slot="customer-date-when"]'),
-        note: box.locator("#customer-date-note"),
-      })
+      await tall(page, () =>
+        capture(page, shotId, {
+          dialog: box,
+          title: [box.locator("#customer-date-title"), box.locator('[data-slot="customer-date-presets"]')],
+          recipient: box.locator('[data-slot="customer-date-recipients"]'),
+          when: box.locator('[data-slot="customer-date-when"]'),
+          note: box.locator("#customer-date-note"),
+        }), 1000)
     }
     await box.getByRole("button", { name: "Добавить", exact: true }).click()
     await waitToast(page, "Дата добавлена")
     await dismissToasts(page)
     await settle(page, 600)
   }
-  await addDate({ title: "День рождения", ...birthday, year: 1994, note: "Любит пионы и нежные тона" }, "manager-date-dialog")
+  await addDate({ title: "День рождения", ...birthday, year: 1965, note: "Любит хризантемы", recipient: "Гульнара, мама" }, "manager-date-dialog")
   await addDate({ title: "Годовщина свадьбы", ...anniversary, year: 2019, note: "Муж — Тимур, заказывает сюрприз" })
 
   await capture(page, "manager-client", { body: page.locator("main, [data-slot='screen-body']").first(), tiles: page.getByText("Всего оплачено").first().locator("xpath=ancestor::*[3]") })
-  // Карточка с блоком дат выше окна планшета — снимаем в высоком окне.
-  await tall(page, () =>
-    capture(page, "manager-dates-card", {
-      card: page.locator('[data-slot="card"]').filter({ has: dates }).first(),
+  // Карточка с датами и получателями выше окна планшета — снимаем в высоком окне.
+  await tall(page, async () => {
+    const card = page.locator('[data-slot="card"]').filter({ has: dates }).first()
+    await capture(page, "manager-dates-card", {
+      card,
       dates,
       add: dates.getByRole("button", { name: "Добавить" }),
-    }), 1000)
+    })
+    await capture(page, "manager-recipients-card", {
+      card,
+      recipients: recipientsBlock,
+      add: recipientsBlock.getByRole("button", { name: "Добавить" }),
+    })
+  }, 1400)
 
   // «Клиенты → Даты»: кого поздравить.
   await go(page, "/clients?view=dates")
@@ -813,8 +863,30 @@ async function phaseManagerWork() {
   if ((await contactToggle.getAttribute("aria-pressed")) !== "true") await contactToggle.click()
   const contact = page.getByRole("dialog", { name: "Контакт" }).or(page.locator('aside[aria-label="Контакт"]')).first()
   await contact.waitFor()
-  await settle(page, 1200)
-  await capture(page, "manager-chat-dates", { panel: contact, dates: contact.locator('[data-slot="customer-dates"]') })
+  // Панель высокая (поля, даты, получатели) — снимаем в высоком окне.
+  await tall(page, async () => {
+    await settle(page, 1200)
+    await capture(page, "manager-chat-dates", {
+      panel: contact,
+      dates: contact.locator('[data-slot="customer-dates"]'),
+      recipients: contact.locator('[data-slot="customer-recipients"]'),
+    })
+    // «Заказ к дате» у дня рождения мамы: заказ сразу на получателя и срок этой даты.
+    await contact
+      .locator('[data-slot="customer-dates"] li')
+      .filter({ hasText: "Гульнара" })
+      .getByRole("button", { name: "Заказ к дате" })
+      .click()
+    const order = dialog(page, "Новый заказ")
+    await order.waitFor()
+    await order.getByRole("button", { name: "Гульнара, мама" }).waitFor({ timeout: 30_000 })
+    await settle(page, 600)
+    await capture(page, "manager-order-recipient", {
+      dialog: order,
+      stage: order.getByRole("region", { name: "Данные заказа" }),
+      recipient: order.locator('[data-slot="order-recipient"]'),
+    })
+  }, 1360)
   await closeOverlays(page)
 }
 

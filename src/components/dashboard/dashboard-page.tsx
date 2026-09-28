@@ -17,6 +17,8 @@ import {
 } from "lucide-react"
 import type { OwnerDashboardData, OwnerDashboardRange } from "@/lib/db"
 import { formatDayMonth, formatYears, type UpcomingCustomerDate } from "@/lib/customer-dates"
+import { orderNumberLabel } from "@/lib/order-labels"
+import { recipientLabel } from "@/lib/recipients"
 import { cn, formatMoney } from "@/lib/utils"
 import { formatDeadline, formatInstant, wallClockToInstant } from "@/lib/datetime"
 import { getPaymentMethodLabel } from "@/lib/labels"
@@ -242,6 +244,7 @@ function UpcomingDateRow({ date }: { date: UpcomingCustomerDate }) {
   const chatHref = date.hasChat || date.customerPhone ? `/chats?customer=${date.customerId}` : null
   const details = [
     date.title,
+    date.recipientName ? recipientLabel({ name: date.recipientName, relation: date.recipientRelation }) : "",
     formatDayMonth(date.day, date.month),
     date.turns ? formatYears(date.turns) : "",
   ].filter(Boolean)
@@ -318,7 +321,7 @@ function OrdersTableCard({
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="text-left text-xs text-muted-foreground">
-                <th className="px-2 pb-2 font-medium">Номер</th>
+                <th className="px-2 pb-2 font-medium">Заказ</th>
                 <th className="px-2 pb-2 font-medium">Клиент</th>
                 <th className="px-2 pb-2 font-medium">Срок</th>
                 <th className="px-2 pb-2 font-medium">Статус</th>
@@ -353,8 +356,9 @@ function OrderRow({ order }: { order: OwnerDashboardData["work"]["orders"][numbe
 
   return (
     <tr className="border-t border-zinc-100 transition-colors hover:bg-zinc-50/70">
-      <td className="px-2 py-2.5 font-medium tabular-nums whitespace-nowrap text-zinc-900">
-        {order.number || `#${order.id}`}
+      <td className="px-2 py-2">
+        <span className="block font-medium tabular-nums whitespace-nowrap text-zinc-900">{orderNumberLabel(order)}</span>
+        <span className="block max-w-[200px] truncate text-xs text-muted-foreground">{order.title}</span>
       </td>
       <td className="px-2 py-2.5">
         <span className="block max-w-[260px] truncate text-zinc-700">
