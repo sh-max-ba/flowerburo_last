@@ -296,10 +296,10 @@ function MutedZero({ value, suffix = "" }: { value: number; suffix?: string }) {
   )
 }
 
-// «2 сделки · 0 заказов · 1 продажа» одной строкой: нули приглушены, без бейджей.
+// «3 заказа · 1 продажа» одной строкой: нули приглушены, без бейджей. Сделки (старый канбан)
+// не считаем — работа идёт в чатах и заказах.
 function ActivityCell({ customer }: { customer: Customer }) {
   const parts: Array<[number, PluralForms]> = [
-    [customer.dealsCount ?? 0, dealForms],
     [customer.ordersCount ?? 0, orderForms],
     [customer.salesCount ?? 0, saleForms],
   ]
@@ -499,7 +499,7 @@ export function CustomerFields({ customer }: { customer?: Customer }) {
 }
 
 function activityScore(customer: Customer) {
-  return (customer.dealsCount ?? 0) + (customer.ordersCount ?? 0) + (customer.salesCount ?? 0)
+  return (customer.ordersCount ?? 0) + (customer.salesCount ?? 0)
 }
 
 // --- Shared contact/format helpers (also re-used by the detail card) ---
@@ -525,7 +525,6 @@ export function instagramLink(instagram: string | null | undefined) {
 
 type PluralForms = [one: string, few: string, many: string]
 
-const dealForms: PluralForms = ["сделка", "сделки", "сделок"]
 const orderForms: PluralForms = ["заказ", "заказа", "заказов"]
 const saleForms: PluralForms = ["продажа", "продажи", "продаж"]
 

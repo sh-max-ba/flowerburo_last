@@ -13,6 +13,10 @@ export type CustomerDate = {
   day: number
   year: number | null
   note: string
+  // Чья дата: получатель клиента («ДР жены» → Алия, жена); null — самого клиента.
+  recipientId: number | null
+  recipientName: string
+  recipientRelation: string
   createdByUserId: number | null
   createdByName: string | null
   createdByRole: UserRole | null
@@ -152,9 +156,18 @@ export function formatYears(turns: number) {
   return `${turns} ${plural(turns, ["год", "года", "лет"])}`
 }
 
-// Одной строкой для истории правок клиента: «День рождения · 14 марта 1990 · любит пионы».
-export function describeCustomerDate(value: { title: string; day: number; month: number; year: number | null; note: string }) {
-  return [value.title, formatDayMonth(value.day, value.month, value.year), value.note].filter(Boolean).join(" · ")
+// Одной строкой для истории правок клиента: «День рождения · Алия, жена · 14 марта 1990 · любит пионы».
+export function describeCustomerDate(value: {
+  title: string
+  day: number
+  month: number
+  year: number | null
+  note: string
+  recipientLabel?: string
+}) {
+  return [value.title, value.recipientLabel ?? "", formatDayMonth(value.day, value.month, value.year), value.note]
+    .filter(Boolean)
+    .join(" · ")
 }
 
 // Насколько близко: сегодня/завтра — «горит», неделя — «скоро», дальше — спокойно.

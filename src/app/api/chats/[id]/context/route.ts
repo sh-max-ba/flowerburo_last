@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/auth"
 import { canAccessSection } from "@/lib/nav"
 import { getCustomer, getCustomerStats, listCustomerChanges, listCustomerOrders } from "@/lib/crm"
-import { getChatById, listCustomerDates } from "@/lib/db"
+import { getChatById, listCustomerDates, listCustomerRecipients } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
 
@@ -30,6 +30,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       customer,
       stats: customer ? getCustomerStats(customer.id) : null,
       dates: customer ? listCustomerDates(customer.id) : [],
+      recipients: customer ? listCustomerRecipients(customer.id) : [],
       changes: customer ? listCustomerChanges(customer.id) : [],
       orders: customer ? listCustomerOrders(customer.id) : [],
     },

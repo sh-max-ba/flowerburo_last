@@ -16,6 +16,7 @@ import {
 import type { BouquetTemplate, ChatCounts, ChatSummary, ChatTab, CustomerOption, OrderImage, Product, QuickReply, UserRole } from "@/lib/db"
 import { cn } from "@/lib/utils"
 import { OrderDialog } from "@/components/orders/new-order-dialog"
+import type { CustomerRecipient } from "@/lib/recipients"
 import type { ProductLineItem } from "@/components/products/product-line-items"
 import { useHideMobileNav } from "@/components/mobile-nav"
 import { ScreenBody } from "@/components/screen-body"
@@ -106,6 +107,8 @@ export function ChatsScreen({
   const [forwardMessage, setForwardMessage] = useState<BubbleMessage | null>(null)
   const [newChatOpen, setNewChatOpen] = useState(openNew)
   const [orderCustomer, setOrderCustomer] = useState<CustomerOption | null>(null)
+  // «Заказ к дате» из важной даты: получатель и день срока подставляются в окно заказа.
+  const [orderExtras, setOrderExtras] = useState<{ recipient: CustomerRecipient | null; dueDate?: string }>({ recipient: null })
   const [orderItems, setOrderItems] = useState<ProductLineItem[]>([])
   // Фото/чеки из чата, отложенные к следующему заказу этого экрана.
   const [pendingImages, setPendingImages] = useState<OrderImage[]>([])
@@ -383,7 +386,10 @@ export function ChatsScreen({
         pendingImages={pendingImages}
         onRemovePendingImage={(imageId) => setPendingImages((current) => current.filter((image) => image.id !== imageId))}
         onClose={() => setPanel(null)}
-        onCreateOrder={(customer) => setOrderCustomer(customer)}
+        onCreateOrder={(customer, extras) => {
+          setOrderExtras({ recipient: extras?.recipient ?? null, dueDate: extras?.dueDate })
+          setOrderCustomer(customer)
+        }}
         onCustomerChanged={refreshInbox}
       />
     ) : null
@@ -543,6 +549,8 @@ export function ChatsScreen({
           initialCustomer={orderCustomer}
           initialSource={selected.chatType}
           initialImages={pendingImages}
+          initialRecipient={orderExtras.recipient}
+          initialDueDate={orderExtras.dueDate}
           description={`Заказ для клиента из чата ${selected.name || selected.phone}. Клиент и источник подставлены автоматически.`}
         />
       ) : null}

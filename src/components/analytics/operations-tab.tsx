@@ -13,6 +13,7 @@ import { formatInstantShort, formatQty, formatSignedQty, plural } from "./format
 import { productCardHref } from "./links"
 import { SegmentedTabs } from "@/components/ui/segmented-tabs"
 import { ActiveFilters, FilterCombobox, OpenInWindowLink, Pagination, TableToolbar } from "./table-chrome"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 const KIND_LABEL: Record<OperationKind, string> = {
   sale: "Чек",
@@ -258,7 +259,7 @@ function OperationRows({
           {/* В узкой таблице номер уходит под бейдж, чтобы не раздвигать колонку. */}
           <span className="flex flex-col items-start gap-0.5 @3xl/ops:flex-row @3xl/ops:items-center @3xl/ops:gap-2">
             <Badge variant={KIND_TONE[row.kind]}>{KIND_LABEL[row.kind]}</Badge>
-            <span className="font-medium">{row.kind === "sale" ? `#${row.id}` : row.number}</span>
+            <span className="font-medium">{row.kind === "sale" ? `#${row.id}` : row.kind === "order" ? orderNumberLabel(row) : row.number}</span>
           </span>
         </td>
         <td className="w-full max-w-0 min-w-32 px-3 py-2.5">

@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { ru } from "date-fns/locale"
 import {
   AlertTriangleIcon,
@@ -13,12 +13,15 @@ import {
   ReceiptTextIcon,
   StoreIcon,
   TruckIcon,
+  UserRoundIcon,
+  UserRoundPlusIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import type { BouquetTemplate, CustomerOption, OrderImage, Product } from "@/lib/db"
 import { discountTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import { calculateCommercialTotals, normalizeDiscountType, type DiscountType } from "@/lib/pricing"
+import { RECIPIENT_RELATIONS, recipientLabel, type CustomerRecipient } from "@/lib/recipients"
 import { cn, formatMoney } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -50,7 +53,8 @@ import { TimeDial } from "@/components/orders/time-dial"
 // справа поля этапами «Клиент → Получение → Оплата». Все этапы смонтированы всегда (переключение
 // только прячет панели), поэтому набранное не теряется и уходит одним FormData. На узком экране
 // колонки складываются: состав, затем этапы. Переиспользуется кассой и чатами (initialCustomer /
-// initialSource / initialImages — клиент, источник и фото из диалога).
+// initialSource / initialImages — клиент, источник и фото из диалога; initialRecipient /
+// initialDueDate — «Заказ к дате» из важной даты клиента).
 
 export type OrderStepKey = "customer" | "delivery" | "payment"
 
@@ -155,6 +159,8 @@ export function OrderDialog({
   initialCustomer,
   initialSource,
   initialImages,
+  initialRecipient,
+  initialDueDate,
   description,
 }: {
   open: boolean
@@ -169,6 +175,8 @@ export function OrderDialog({
   initialCustomer?: CustomerOption | null
   initialSource?: string
   initialImages?: OrderImage[]
+  initialRecipient?: CustomerRecipient | null
+  initialDueDate?: string
   description?: string
 }) {
   return (
@@ -189,6 +197,8 @@ export function OrderDialog({
           initialCustomer={initialCustomer}
           initialSource={initialSource}
           initialImages={initialImages}
+          initialRecipient={initialRecipient}
+          initialDueDate={initialDueDate}
         />
       </DialogContent>
     </Dialog>
@@ -206,6 +216,8 @@ function NewOrderForm({
   initialCustomer,
   initialSource,
   initialImages,
+  initialRecipient,
+  initialDueDate,
 }: {
   products: Product[]
   bouquets: BouquetTemplate[]
@@ -217,9 +229,11 @@ function NewOrderForm({
   initialCustomer?: CustomerOption | null
   initialSource?: string
   initialImages?: OrderImage[]
+  initialRecipient?: CustomerRecipient | null
+  initialDueDate?: string
 }) {
   const [step, setStep] = useState<OrderStepKey>("customer")
-  const [deliveryType, setDeliveryType] = useState("pickup")
+  const [deliveryType, setDeliveryType] = useState(initialRecipient?.address ? "delivery" : "pickup")
   // Суммы держим строками: с числовым состоянием «0» в поле не стирался при вводе.
   const [deliveryPriceInput, setDeliveryPriceInput] = useState("")
   const [courierPayoutInput, setCourierPayoutInput] = useState("")
@@ -229,7 +243,14 @@ function NewOrderForm({
   const prepaid = parseMoneyInput(prepaidInput)
   const [customer, setCustomer] = useState(initialCustomer?.name ?? "")
   const [phone, setPhone] = useState(initialCustomer?.phone || PHONE_PREFIX)
-  const [recipientPhone, setRecipientPhone] = useState(PHONE_PREFIX)
+  const [recipientPhone, setRecipientPhone] = useState(initialRecipient?.phone || PHONE_PREFIX)
+  // Получатель: сам клиент, из списка получателей клиента или другой человек (можно запомнить).
+  const [recipientMode, setRecipientMode] = useState<"self" | "saved" | "other">(initialRecipient ? "saved" : "self")
+  const [recipientId, setRecipientId] = useState<number | null>(initialRecipient?.id ?? null)
+  const [recipientName, setRecipientName] = useState(initialRecipient?.name ?? "")
+  const [recipientRelation, setRecipientRelation] = useState(initialRecipient?.relation ?? "")
+  const [saveRecipient, setSaveRecipient] = useState(true)
+  const [recipients, setRecipients] = useState<CustomerRecipient[]>(initialRecipient ? [initialRecipient] : [])
   // Клиент из чата может отсутствовать в общем списке (список грузится один раз) — добавляем.
   const [createdCustomers, setCreatedCustomers] = useState<CustomerOption[]>(initialCustomer ? [initialCustomer] : [])
   const [customerDialogOpen, setCustomerDialogOpen] = useState(false)
@@ -243,9 +264,9 @@ function NewOrderForm({
   const orderDiscountValue = parseMoneyInput(orderDiscountInput)
   const [orderDiscountTouched, setOrderDiscountTouched] = useState(false)
   const [orderDiscountOpen, setOrderDiscountOpen] = useState(false)
-  const [dueDate, setDueDate] = useState("")
-  const [dueTime, setDueTime] = useState("")
-  const [address, setAddress] = useState("")
+  const [dueDate, setDueDate] = useState(initialDueDate ?? "")
+  const [dueTime, setDueTime] = useState(initialDueDate ? "18:00" : "")
+  const [address, setAddress] = useState(initialRecipient?.address ?? "")
   const [note, setNote] = useState("")
   // Фото/чеки: загружаются сразу при выборе (или приходят из чата), в заказ уходят id.
   const [images, setImages] = useState<OrderImage[]>(initialImages ?? [])
@@ -263,6 +284,24 @@ function NewOrderForm({
   )
   const selectedCustomer =
     selectedCustomerId === null ? null : availableCustomers.find((current) => current.id === selectedCustomerId) ?? null
+  // Получатели выбранного клиента — чипы на шаге «Клиент».
+  useEffect(() => {
+    if (!selectedCustomerId) {
+      return
+    }
+    const controller = new AbortController()
+    fetch(`/api/customers/${selectedCustomerId}/recipients`, { cache: "no-store", signal: controller.signal })
+      .then((response) => response.json() as Promise<{ status: string; recipients?: CustomerRecipient[] }>)
+      .then((payload) => {
+        if (payload.status === "ok") {
+          setRecipients(payload.recipients ?? [])
+        }
+      })
+      .catch(() => undefined)
+    return () => controller.abort()
+  }, [selectedCustomerId])
+  const visibleRecipients = selectedCustomerId ? recipients.filter((recipient) => recipient.customerId === selectedCustomerId) : []
+
   const isDelivery = deliveryType === "delivery"
   const effectiveDeliveryPrice = isDelivery ? deliveryPrice : 0
   const orderTotals = calculateCommercialTotals(getProductLineItemsForTotals(items), orderDiscountType, orderDiscountValue)
@@ -304,6 +343,11 @@ function NewOrderForm({
     setCustomer("")
     setPhone(PHONE_PREFIX)
     setRecipientPhone(PHONE_PREFIX)
+    setRecipientMode("self")
+    setRecipientId(null)
+    setRecipientName("")
+    setRecipientRelation("")
+    setSaveRecipient(true)
     setOrderDiscountType("none")
     setOrderDiscountInput("")
     setOrderDiscountTouched(false)
@@ -331,7 +375,39 @@ function NewOrderForm({
     }
   }
 
+  function chooseRecipient(mode: "self" | "other" | CustomerRecipient) {
+    if (mode === "self") {
+      setRecipientMode("self")
+      setRecipientId(null)
+      setRecipientName("")
+      setRecipientRelation("")
+      setRecipientPhone(PHONE_PREFIX)
+      return
+    }
+    if (mode === "other") {
+      setRecipientMode("other")
+      setRecipientId(null)
+      setRecipientName("")
+      setRecipientRelation("")
+      setRecipientPhone(PHONE_PREFIX)
+      return
+    }
+    setRecipientMode("saved")
+    setRecipientId(mode.id)
+    setRecipientName(mode.name)
+    setRecipientRelation(mode.relation)
+    setRecipientPhone(mode.phone || PHONE_PREFIX)
+    // Адрес получателя — сразу в «Получение»: доставка к нему.
+    if (mode.address) {
+      setDeliveryType("delivery")
+      setAddress(mode.address)
+    }
+  }
+
   function applyOrderCustomer(nextCustomer: CustomerOption | null) {
+    if (nextCustomer?.id !== selectedCustomerId && recipientMode === "saved") {
+      chooseRecipient("self")
+    }
     setSelectedCustomerId(nextCustomer?.id ?? null)
     setCustomer(nextCustomer?.name ?? "")
     setPhone(nextCustomer?.phone || PHONE_PREFIX)
@@ -437,7 +513,11 @@ function NewOrderForm({
         <input type="hidden" name="dueAt" value={dueAt} />
         <input type="hidden" name="customer" value={customer} />
         <input type="hidden" name="phone" value={phoneForSubmit(phone)} />
-        <input type="hidden" name="recipientPhone" value={phoneForSubmit(recipientPhone)} />
+        <input type="hidden" name="recipientPhone" value={recipientMode === "self" ? "" : phoneForSubmit(recipientPhone)} />
+        <input type="hidden" name="recipientName" value={recipientMode === "self" ? "" : recipientName.trim()} />
+        <input type="hidden" name="recipientRelation" value={recipientMode === "other" ? recipientRelation.trim() : ""} />
+        {recipientMode === "saved" && recipientId ? <input type="hidden" name="recipientId" value={recipientId} /> : null}
+        {recipientMode === "other" && saveRecipient && selectedCustomer ? <input type="hidden" name="saveRecipient" value="1" /> : null}
         {initialSource ? <input type="hidden" name="source" value={initialSource} /> : null}
 
         <div className="grid min-h-0 flex-1 content-start overflow-y-auto lg:grid-cols-[minmax(0,11fr)_minmax(0,10fr)] lg:content-stretch lg:overflow-hidden">
@@ -515,16 +595,22 @@ function NewOrderForm({
                       <Input id="order-phone" inputMode="tel" value={phone} onChange={(event) => setPhone(event.target.value)} />
                     </Field>
                   </div>
-                  <Field>
-                    <FieldLabel htmlFor="order-recipient-phone">Номер получателя</FieldLabel>
-                    <Input
-                      id="order-recipient-phone"
-                      inputMode="tel"
-                      placeholder="Если букет получает другой человек"
-                      value={recipientPhone}
-                      onChange={(event) => setRecipientPhone(event.target.value)}
-                    />
-                  </Field>
+                  <RecipientPicker
+                    mode={recipientMode}
+                    recipientId={recipientId}
+                    recipients={visibleRecipients}
+                    customerSelected={Boolean(selectedCustomer)}
+                    name={recipientName}
+                    relation={recipientRelation}
+                    phone={recipientPhone}
+                    save={saveRecipient}
+                    disabled={pending}
+                    onChoose={chooseRecipient}
+                    onNameChange={setRecipientName}
+                    onRelationChange={setRecipientRelation}
+                    onPhoneChange={setRecipientPhone}
+                    onSaveChange={setSaveRecipient}
+                  />
                 </FieldGroup>
               </div>
 
@@ -771,6 +857,164 @@ function NewOrderForm({
         </div>
       </form>
     </>
+  )
+}
+
+// Получатель заказа: «Сам клиент», получатели из списка клиента (имя, телефон и адрес подставятся)
+// или «Другой человек» — с галочкой «Запомнить у клиента», чтобы в следующий раз выбрать одним нажатием.
+function RecipientPicker({
+  mode,
+  recipientId,
+  recipients,
+  customerSelected,
+  name,
+  relation,
+  phone,
+  save,
+  disabled,
+  onChoose,
+  onNameChange,
+  onRelationChange,
+  onPhoneChange,
+  onSaveChange,
+}: {
+  mode: "self" | "saved" | "other"
+  recipientId: number | null
+  recipients: CustomerRecipient[]
+  customerSelected: boolean
+  name: string
+  relation: string
+  phone: string
+  save: boolean
+  disabled?: boolean
+  onChoose: (mode: "self" | "other" | CustomerRecipient) => void
+  onNameChange: (value: string) => void
+  onRelationChange: (value: string) => void
+  onPhoneChange: (value: string) => void
+  onSaveChange: (value: boolean) => void
+}) {
+  const chipClass = (active: boolean) =>
+    cn(
+      "inline-flex h-9 max-w-full items-center gap-1.5 rounded-full px-3 text-sm font-medium transition-colors pointer-coarse:h-10",
+      active ? "bg-brand-subtle text-brand-strong ring-1 ring-brand/40" : "bg-muted/60 text-foreground hover:bg-muted"
+    )
+  return (
+    <Field data-slot="order-recipient">
+      <FieldLabel>Кому букет</FieldLabel>
+      <div className="flex flex-wrap gap-1.5">
+        <button type="button" disabled={disabled} className={chipClass(mode === "self")} aria-pressed={mode === "self"} onClick={() => onChoose("self")}>
+          <UserRoundIcon className="size-4 shrink-0" aria-hidden />
+          Сам клиент
+        </button>
+        {recipients.map((recipient) => {
+          const active = mode === "saved" && recipientId === recipient.id
+          return (
+            <button
+              key={recipient.id}
+              type="button"
+              disabled={disabled}
+              className={chipClass(active)}
+              aria-pressed={active}
+              onClick={() => onChoose(recipient)}
+              title={[recipient.phone, recipient.address].filter(Boolean).join(" · ")}
+            >
+              <span className="truncate">{recipientLabel(recipient)}</span>
+            </button>
+          )
+        })}
+        <button type="button" disabled={disabled} className={chipClass(mode === "other")} aria-pressed={mode === "other"} onClick={() => onChoose("other")}>
+          <UserRoundPlusIcon className="size-4 shrink-0" aria-hidden />
+          Другой человек
+        </button>
+      </div>
+      {mode === "self" ? (
+        <FieldDescription>
+          {recipients.length
+            ? "Букет получает сам клиент. Или выберите получателя — телефон и адрес подставятся."
+            : "Букет получает сам клиент. Если другой человек — нажмите «Другой человек»."}
+        </FieldDescription>
+      ) : (
+        <div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
+          <div className="grid gap-3 @md/order:grid-cols-2">
+            <Field>
+              <FieldLabel htmlFor="order-recipient-name">Имя получателя</FieldLabel>
+              <Input
+                id="order-recipient-name"
+                value={name}
+                disabled={disabled}
+                onChange={(event) => onNameChange(event.target.value)}
+                placeholder="Алия"
+                autoComplete="off"
+                className="bg-background"
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="order-recipient-phone">Телефон получателя</FieldLabel>
+              <Input
+                id="order-recipient-phone"
+                inputMode="tel"
+                value={phone}
+                disabled={disabled}
+                onChange={(event) => onPhoneChange(event.target.value)}
+                className="bg-background tabular-nums"
+              />
+            </Field>
+          </div>
+          {mode === "other" ? (
+            <>
+              <Field>
+                <FieldLabel htmlFor="order-recipient-relation">Кем приходится клиенту</FieldLabel>
+                <Input
+                  id="order-recipient-relation"
+                  value={relation}
+                  disabled={disabled}
+                  onChange={(event) => onRelationChange(event.target.value)}
+                  placeholder="жена, мама, коллега"
+                  autoComplete="off"
+                  className="bg-background"
+                />
+                <div className="flex flex-wrap gap-1.5">
+                  {RECIPIENT_RELATIONS.map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => onRelationChange(preset)}
+                      aria-pressed={relation === preset}
+                      className={cn(
+                        "inline-flex h-7 items-center rounded-full px-2.5 text-xs font-medium transition-colors pointer-coarse:h-9",
+                        relation === preset ? "bg-brand-subtle text-brand-strong" : "bg-background text-foreground hover:bg-zinc-100"
+                      )}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+              {customerSelected ? (
+                <label className="flex items-start gap-2.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={save}
+                    disabled={disabled}
+                    onChange={(event) => onSaveChange(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 accent-(--brand)"
+                  />
+                  <span>
+                    <span className="font-medium">Запомнить у клиента</span>
+                    <span className="block text-xs text-muted-foreground">В следующий раз получатель выберется одним нажатием — с телефоном и адресом.</span>
+                  </span>
+                </label>
+              ) : (
+                <p className="text-xs text-muted-foreground">Выберите клиента, чтобы запомнить получателя в его карточке.</p>
+              )}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">Из списка получателей клиента. Адрес — на шаге «Получение».</p>
+          )}
+        </div>
+      )}
+    </Field>
   )
 }
 

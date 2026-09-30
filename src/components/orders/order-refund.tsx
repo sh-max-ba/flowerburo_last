@@ -36,6 +36,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { OrderStatusBadge, Spinner } from "@/components/orders/order-shared"
 import { HeaderAction } from "@/components/screen-header"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 export type RefundItem = { name: string; qty: number }
 
@@ -67,7 +68,7 @@ export function refundTargetFromOrder(order: RefundableOrder): RefundTarget {
   return {
     kind: "order",
     id: order.id,
-    label: order.number || `#${order.id}`,
+    label: orderNumberLabel(order),
     customer: order.customer || "Клиент не указан",
     status: order.status,
     paid: order.paid,

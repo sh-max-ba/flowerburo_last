@@ -185,15 +185,11 @@ export function listCustomers(options: { search?: string } = {}) {
   const rows = db()
     .prepare(
       `SELECT customers.*,
-        COUNT(DISTINCT deals.id) as deals_count,
-        COUNT(DISTINCT orders.id) as orders_count,
-        COUNT(DISTINCT sales.id) as sales_count
+        (SELECT COUNT(*) FROM orders WHERE orders.customer_id = customers.id
+          AND orders.status NOT IN ('Отменен', 'Черновик')) as orders_count,
+        (SELECT COUNT(*) FROM sales WHERE sales.customer_id = customers.id AND sales.reversed_at IS NULL) as sales_count
        FROM customers
-       LEFT JOIN deals ON deals.customer_id = customers.id
-       LEFT JOIN orders ON orders.customer_id = customers.id
-       LEFT JOIN sales ON sales.customer_id = customers.id
        ${where}
-       GROUP BY customers.id
        ORDER BY customers.created_at DESC, customers.id DESC
        LIMIT 200`
     )
@@ -327,8 +323,8 @@ export type CustomerChange = {
 
 export type CustomerEditableField = "name" | "phone" | "defaultDiscountPercent" | "comment" | "instagram"
 
-// В историю пишутся и важные даты (добавлена/изменена/удалена) — одной строкой «повод · дата».
-export type CustomerChangeField = CustomerEditableField | "importantDate"
+// В историю пишутся и важные даты, и получатели (добавлен/изменён/удалён) — одной строкой.
+export type CustomerChangeField = CustomerEditableField | "importantDate" | "recipient"
 
 const customerFieldColumns: Record<CustomerEditableField, string> = {
   name: "name",
@@ -554,7 +550,8 @@ export function listCustomerOrders(customerId: number): Order[] {
         completed_by_user_id as completedByUserId,
         (SELECT name FROM users WHERE users.id = orders.completed_by_user_id) as completedByName,
         (SELECT role FROM users WHERE users.id = orders.completed_by_user_id) as completedByRole,
-        customer, phone, COALESCE(recipient_phone, '') as recipientPhone,
+        customer, phone, COALESCE(recipient_phone, '') as recipientPhone, COALESCE(recipient_name, '') as recipientName,
+        recipient_id as recipientId,
         COALESCE(source, '') as source, COALESCE(delivery_type, 'pickup') as deliveryType,
         COALESCE(address, '') as address, due_at as dueAt, status,
         COALESCE(NULLIF(items_total_before_discount, 0), total) as itemsTotalBeforeDiscount,
@@ -598,7 +595,8 @@ export function getOrderById(orderId: number): Order | null {
         completed_by_user_id as completedByUserId,
         (SELECT name FROM users WHERE users.id = orders.completed_by_user_id) as completedByName,
         (SELECT role FROM users WHERE users.id = orders.completed_by_user_id) as completedByRole,
-        customer, phone, COALESCE(recipient_phone, '') as recipientPhone,
+        customer, phone, COALESCE(recipient_phone, '') as recipientPhone, COALESCE(recipient_name, '') as recipientName,
+        recipient_id as recipientId,
         COALESCE(source, '') as source, COALESCE(delivery_type, 'pickup') as deliveryType,
         COALESCE(address, '') as address, due_at as dueAt, status,
         COALESCE(NULLIF(items_total_before_discount, 0), total) as itemsTotalBeforeDiscount,
@@ -635,7 +633,8 @@ export function listDealOrders(dealId: number): Order[] {
         completed_by_user_id as completedByUserId,
         (SELECT name FROM users WHERE users.id = orders.completed_by_user_id) as completedByName,
         (SELECT role FROM users WHERE users.id = orders.completed_by_user_id) as completedByRole,
-        customer, phone, COALESCE(recipient_phone, '') as recipientPhone,
+        customer, phone, COALESCE(recipient_phone, '') as recipientPhone, COALESCE(recipient_name, '') as recipientName,
+        recipient_id as recipientId,
         COALESCE(source, '') as source, COALESCE(delivery_type, 'pickup') as deliveryType,
         COALESCE(address, '') as address, due_at as dueAt, status,
         COALESCE(NULLIF(items_total_before_discount, 0), total) as itemsTotalBeforeDiscount,

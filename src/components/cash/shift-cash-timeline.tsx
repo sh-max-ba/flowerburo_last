@@ -30,6 +30,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { LineComposition, type CompositionItem } from "@/components/cash/line-composition"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 // Минимальный набор полей строки единой ленты кассы за смену.
 type TimelineRow = {
@@ -438,7 +439,7 @@ function buildTimelineRows(detail: ShiftDetails | null): TimelineRow[] {
       key: `order-${order.transactionId}`,
       createdAt: order.createdAt,
       typeLabel: cashTransactionTypeLabel(order.type),
-      reference: order.number || `Заказ #${order.orderId}`,
+      reference: `Заказ ${orderNumberLabel({ id: order.orderId, number: order.number })}`,
       amount: order.amount,
       paymentMethod: order.paymentMethod,
       outflow,

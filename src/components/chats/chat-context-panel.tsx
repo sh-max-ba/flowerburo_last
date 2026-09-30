@@ -8,6 +8,7 @@ import { toast } from "sonner"
 import { createCustomerFromChatAction, sendOrderToChatAction, updateCustomerFieldAction } from "@/app/actions"
 import type { Customer, CustomerChange, CustomerChangeField, CustomerEditableField, CustomerStats } from "@/lib/crm"
 import type { CustomerDate } from "@/lib/customer-dates"
+import type { CustomerRecipient } from "@/lib/recipients"
 import type { BouquetTemplate, ChatSummary, Order, OrderImage, Product } from "@/lib/db"
 import { deliveryTypeLabel, sourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
@@ -16,6 +17,7 @@ import { OrderEditSheet } from "@/components/orders/order-edit-sheet"
 import { OrderStatusBadge, dateTimeLong } from "@/components/orders/order-shared"
 import { FloristMark } from "@/components/florist-mark"
 import { CustomerDatesSection } from "@/components/customers/customer-dates"
+import { CustomerRecipientsSection } from "@/components/customers/customer-recipients"
 import { getSafeOrderImagePath } from "@/lib/order-images"
 import { formatOrderForChat } from "@/lib/order-message"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -23,6 +25,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { ChatAvatar, channelMeta, formatDateTime, formatPhone } from "./chat-shared"
+import { orderHeading } from "@/lib/order-labels"
 
 // Правая панель диалога: «Контакт» — карточка клиента с инлайн-правкой (имя, телефон, скидка,
 // комментарий), важными датами, сводкой по заказам и историей изменений; «Заказы» — заказы клиента и создание
@@ -35,6 +38,7 @@ type ContextData = {
   customer: Customer | null
   stats: CustomerStats | null
   dates: CustomerDate[]
+  recipients: CustomerRecipient[]
   changes: CustomerChange[]
   orders: Order[]
 }
@@ -46,6 +50,7 @@ const fieldLabels: Record<CustomerChangeField, string> = {
   comment: "Комментарий",
   instagram: "Instagram",
   importantDate: "Важная дата",
+  recipient: "Получатель",
 }
 
 export function ChatContextPanel({
@@ -70,7 +75,11 @@ export function ChatContextPanel({
   pendingImages: OrderImage[]
   onRemovePendingImage: (imageId: number) => void
   onClose: () => void
-  onCreateOrder: (customer: { id: number; name: string; phone: string; defaultDiscountPercent: number }) => void
+  onCreateOrder: (
+    customer: { id: number; name: string; phone: string; defaultDiscountPercent: number },
+    // «Заказ к дате»: получатель даты и день срока.
+    extras?: { recipient?: CustomerRecipient | null; dueDate?: string }
+  ) => void
   onCustomerChanged: () => void
 }) {
   const [data, setData] = useState<ContextData | null>(null)
@@ -364,6 +373,26 @@ export function ChatContextPanel({
             <CustomerDatesSection
               customerId={customer.id}
               dates={data.dates ?? []}
+              recipients={data.recipients ?? []}
+              variant="panel"
+              onChanged={async () => {
+                await load()
+                onCustomerChanged()
+              }}
+              onOrderForDate={(date) =>
+                onCreateOrder(
+                  { id: customer.id, name: customer.name, phone: customer.phone, defaultDiscountPercent: customer.defaultDiscountPercent },
+                  {
+                    recipient: (data.recipients ?? []).find((recipient) => recipient.id === date.recipientId) ?? null,
+                    dueDate: date.nextDate,
+                  }
+                )
+              }
+            />
+
+            <CustomerRecipientsSection
+              customerId={customer.id}
+              recipients={data.recipients ?? []}
               variant="panel"
               onChanged={async () => {
                 await load()
@@ -566,12 +595,12 @@ function OrderRow({ order, onOpen, onShare }: { order: Order; onOpen: () => void
       <span className="flex w-full items-start justify-between gap-2">
         <span className="min-w-0">
           <span className="block text-sm font-medium">
-            {order.number || `#${order.id}`}
+            {orderHeading(order)}
             <span className="font-normal text-muted-foreground"> · {order.dueAt ? dateTimeLong(order.dueAt) : "без срока"}</span>
           </span>
           <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
             <span>{deliveryTypeLabel(order.deliveryType)}</span>
-            {order.items.length ? <span>· {order.items.length} поз.</span> : null}
+            {order.recipientName ? <span>· получатель: {order.recipientName}</span> : null}
             {balance > 0.009 && order.status !== "Отменен" ? <span>· остаток {formatMoney(balance)}</span> : null}
             <OrderPhotoMark images={order.images} />
           </span>

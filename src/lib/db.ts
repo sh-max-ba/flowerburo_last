@@ -195,6 +195,12 @@ export {
   deleteCustomerDate,
 } from "./db/queries/customer-dates"
 export type { CustomerDateInput } from "./db/queries/customer-dates"
+export {
+  listCustomerRecipients,
+  saveCustomerRecipient,
+  deleteCustomerRecipient,
+} from "./db/queries/customer-recipients"
+export type { CustomerRecipientInput } from "./db/queries/customer-recipients"
 export type {
   WazzupChatIdentity,
   OutboundWazzupMessageInput,

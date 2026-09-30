@@ -3,6 +3,8 @@ import { SHOP_UTC_OFFSET_SQL } from "@/lib/datetime"
 import type { OrderStatus, OwnerDashboardData, OwnerDashboardRange } from "../types"
 import { db } from "../connection"
 import { getShiftDetails } from "./shifts"
+import { orderTitle } from "@/lib/order-labels"
+import { loadOrderItemsByOrder } from "./dashboard"
 
 // «День» дашборда — сутки магазина (Бишкек, UTC+6): метки в БД лежат в UTC, и без смещения
 // границы суток проходили бы в 06:00 местного (ночные продажи падали на «вчера»).
@@ -258,6 +260,8 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
     status: string
     total: number
   }>
+  // Состав — только чтобы назвать заказ по-человечески («Нежность», «Роза 80 см + ещё 2»).
+  const orderListItems = loadOrderItemsByOrder(client, orderListRows.map((row) => numberFromRow(row.id)))
 
   // (d) Долги клиентов (текущее) ---------------------------------------------
   const debtTotalsRow = client
@@ -387,6 +391,7 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
       orders: orderListRows.map((row) => ({
         id: numberFromRow(row.id),
         number: row.number === null || row.number === undefined ? null : String(row.number),
+        title: orderTitle({ items: orderListItems.get(numberFromRow(row.id)) ?? [] }),
         customer: String(row.customer ?? ""),
         dueAt: row.dueAt ? String(row.dueAt) : null,
         status: String(row.status ?? "") as OrderStatus,

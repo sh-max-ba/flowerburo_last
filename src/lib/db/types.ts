@@ -330,6 +330,9 @@ export type Order = {
   dealId: number | null
   phone: string
   recipientPhone: string
+  // Кому букет: имя получателя и ссылка на получателя из списка клиента (null — не из списка).
+  recipientName: string
+  recipientId: number | null
   source: string
   deliveryType: string
   address: string
@@ -771,6 +774,8 @@ export type OwnerDashboardStockItem = {
 export type OwnerDashboardOrderRow = {
   id: number
   number: string | null
+  // Название по составу («Нежность», «Роза 80 см + ещё 2») — orderTitle.
+  title: string
   customer: string
   dueAt: string | null
   status: OrderStatus

@@ -13,6 +13,7 @@ import {
   type DatesWindow,
   type UpcomingCustomerDate,
 } from "@/lib/customer-dates"
+import { recipientLabel } from "@/lib/recipients"
 import { cn } from "@/lib/utils"
 import { ClientsTabs } from "@/components/clients/clients-tabs"
 import { telLink } from "@/components/clients/customers-page"
@@ -52,6 +53,7 @@ export function CustomerDatesPage({
         date.customerName.toLowerCase().includes(query) ||
         date.title.toLowerCase().includes(query) ||
         date.note.toLowerCase().includes(query) ||
+        date.recipientName.toLowerCase().includes(query) ||
         (digits.length > 0 && date.customerPhone.replace(/\D/g, "").includes(digits))
     )
   }, [dates, search])
@@ -158,7 +160,12 @@ const dateColumns: DataViewColumn<UpcomingCustomerDate>[] = [
     cell: (date) => (
       <span className="block min-w-0">
         <span className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-12 truncate">{date.title}</span>
+          <span className="min-w-12 truncate">
+            {date.title}
+            {date.recipientName ? (
+              <span className="text-zinc-600"> · {recipientLabel({ name: date.recipientName, relation: date.recipientRelation })}</span>
+            ) : null}
+          </span>
           {date.turns ? <span className="shrink-0 text-muted-foreground tabular-nums">· {formatYears(date.turns)}</span> : null}
           <FloristMark role={date.createdByRole} name={date.createdByName} action="Добавил" compact />
         </span>
@@ -206,7 +213,12 @@ function DateCardRow({ date }: { date: UpcomingCustomerDate }) {
           <DaysLeftPill daysLeft={date.daysLeft} />
         </div>
         <div className="mt-0.5 truncate text-sm text-muted-foreground">
-          {[date.title, formatDayMonth(date.day, date.month), date.turns ? formatYears(date.turns) : ""]
+          {[
+            date.title,
+            date.recipientName ? recipientLabel({ name: date.recipientName, relation: date.recipientRelation }) : "",
+            formatDayMonth(date.day, date.month),
+            date.turns ? formatYears(date.turns) : "",
+          ]
             .filter(Boolean)
             .join(" · ")}
         </div>

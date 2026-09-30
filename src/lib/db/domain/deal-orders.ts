@@ -12,7 +12,9 @@ import { calculateComponentLineTotal, itemsForCommercialTotals } from "../querie
 import { requireOpenShift } from "../queries/shifts"
 import { getAllowOversellOrders } from "../queries/app-settings"
 import { syncOrderImagesFromForm } from "../queries/order-images"
+import { applyOrderRecipient } from "../queries/customer-recipients"
 import { buildOrderItems } from "./order-lifecycle"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 export function createOrderFromDeal(formData: FormData, currentUser: CurrentUser) {
   const client = db()
@@ -275,7 +277,7 @@ export function createOrderFromDeal(formData: FormData, currentUser: CurrentUser
       userId: currentUser.id,
       type: "order_create",
       total: orderTotal,
-      note: `Создан заказ ${number} из сделки ${String(deal.number ?? `#${dealId}`)}: ${customer}`,
+      note: `Создан заказ ${orderNumberLabel({ id: orderId, number })} из сделки ${String(deal.number ?? `#${dealId}`)}: ${customer}`,
     })
 
     return orderId
@@ -626,6 +628,7 @@ export function updateOrder(
       })
 
     syncOrderImagesFromForm(client, orderId, formData)
+    applyOrderRecipient(client, orderId, formData, currentUser)
   })
 
   update()

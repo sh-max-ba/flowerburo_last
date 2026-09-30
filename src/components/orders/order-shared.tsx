@@ -37,6 +37,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProductThumbnail } from "@/components/products/product-thumbnail"
 import { useViewer } from "@/components/viewer-context"
+import { orderHeading, orderSearchTokens } from "@/lib/order-labels"
 
 export type OrderSortMode = "default" | "due" | "new"
 export type OrderViewMode = "list" | "calendar"
@@ -200,10 +201,11 @@ function readyOrderStatusRank(status: OrderStatus) {
 // Поиск по заказам в шапке: номер, клиент, телефоны, адрес, комментарий, состав.
 export function orderMatchesSearch(order: Order, query: string) {
   return [
-    order.number,
+    ...orderSearchTokens(order),
     String(order.id),
     order.customer,
     order.phone,
+    order.recipientName,
     order.recipientPhone,
     order.address,
     order.note,
@@ -511,7 +513,7 @@ function OrderCalendarCard({
         "flex w-full min-w-0 flex-col gap-1 rounded-lg bg-background p-2 text-left text-xs shadow-xs outline-none transition-colors hover:bg-zinc-50 focus-visible:ring-3 focus-visible:ring-ring/35",
         urgency.cardClass
       )}
-      aria-label={`Заказ ${order.number || `#${order.id}`}, ${order.customer || "клиент не указан"}`}
+      aria-label={`Заказ ${orderHeading(order)}, ${order.customer || "клиент не указан"}`}
     >
       <div className="flex items-center justify-between gap-1">
         <span className="flex items-center gap-1 text-sm font-semibold tabular-nums">

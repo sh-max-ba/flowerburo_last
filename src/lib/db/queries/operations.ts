@@ -2,6 +2,7 @@ import { numberFromRow } from "@/lib/db-row"
 import { SHOP_UTC_OFFSET_SQL } from "@/lib/datetime"
 import { db } from "../connection"
 import { resolveAnalyticsRange, type AnalyticsRange, type AnalyticsRangeInput } from "./analytics"
+import { orderNumberLabel } from "@/lib/order-labels"
 
 // Журнал операций за период (/analytics?tab=operations): чеки кассы, выданные заказы, проведённые
 // приходы, списания и инвентаризации — одним списком с фильтрами из URL (тип, категория, товар,
@@ -336,7 +337,7 @@ export function getAnalyticsOperations(rangeInput: AnalyticsRangeInput | undefin
         kind === "sale"
           ? `Чек #${id}`
           : kind === "order"
-            ? `Заказ №${number}`
+            ? `Заказ ${orderNumberLabel({ id, number })}`
             : kind === "receipt"
               ? `Приход ${number}`
               : kind === "writeoff"
