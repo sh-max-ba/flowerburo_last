@@ -19,6 +19,7 @@ import {
   MicIcon,
   PaperclipIcon,
   ReceiptTextIcon,
+  ReplyIcon,
   SendIcon,
   UserRoundIcon,
   UserRoundCheckIcon,
@@ -29,9 +30,9 @@ import {
 import { toast } from "sonner"
 import { markChatAnsweredAction, markQuickReplyUsedAction, sendBouquetToChatAction, sendChatMessageAction } from "@/app/actions"
 import type { BouquetTemplate, ChatSummary, QuickReply, UserRole, WazzupMessage } from "@/lib/db"
+import { messageBodyText } from "@/lib/chat-message-kinds"
 import { chatUploadTypes, maxChatUploadSize } from "@/lib/chat-uploads"
 import { parseDbInstant } from "@/lib/datetime"
-import { wazzupMessageTypeLabel } from "@/lib/labels"
 import { cn } from "@/lib/utils"
 import { useIsPhone } from "@/hooks/use-mobile"
 import { Button } from "@/components/ui/button"
@@ -51,7 +52,19 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { BouquetPickerDialog } from "./bouquet-picker"
 import { ChatAvatar, channelMeta, formatDayLabel, formatPhone, formatWaiting, sameDay } from "./chat-shared"
-import { copyMessageText, formatSeconds, guessFileName, mediaUrl, MessageBubble, type BubbleMessage, type MessageAction } from "./message-bubble"
+import {
+  copyMessageText,
+  formatSeconds,
+  guessFileName,
+  mediaUrl,
+  MessageBubble,
+  QuoteCard,
+  quoteFromMessage,
+  quoteSnapshotText,
+  type BubbleMessage,
+  type MessageAction,
+  type QuoteView,
+} from "./message-bubble"
 import {
   applyQuickReply,
   filterQuickReplies,
@@ -81,9 +94,17 @@ type Attachment = {
   messageType: "image" | "video" | "audio" | "document"
 }
 
-type PendingMessage = { tempId: number; kind: "text" | "file" | "voice"; text: string; fileName: string; dateTime: string }
+// quote — цитата ответа, чтобы она была видна ещё до подтверждения отправки.
+type PendingMessage = {
+  tempId: number
+  kind: "text" | "file" | "voice"
+  text: string
+  fileName: string
+  dateTime: string
+  quote: QuoteView | null
+}
 
-type ReplyTarget = { messageId: string; text: string }
+type ReplyTarget = { messageId: string; text: string; quote: QuoteView }
 
 type RecordAction = "send" | "transcribe" | "cancel"
 
@@ -157,6 +178,8 @@ export function ChatWindow({
   const [replyTo, setReplyTo] = useState<ReplyTarget | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [lightbox, setLightbox] = useState<BubbleMessage | null>(null)
+  // Сообщение, к которому только что перешли по цитате, — подсвечивается на пару секунд.
+  const [flashKey, setFlashKey] = useState<string | null>(null)
   const [bouquetOpen, setBouquetOpen] = useState(false)
   const [bouquetBusy, setBouquetBusy] = useState<number | null>(null)
   const [recording, setRecording] = useState(false)
@@ -180,6 +203,7 @@ export function ChatWindow({
   const streamRef = useRef<MediaStream | null>(null)
   const recordActionRef = useRef<RecordAction>("send")
   const stickToBottomRef = useRef(true)
+  const flashTimerRef = useRef<number | undefined>(undefined)
   // Позиция курсора в поле на момент открытия ⚡ — туда и вставим выбранный ответ.
   const caretRef = useRef<{ start: number; end: number } | null>(null)
 
@@ -262,6 +286,7 @@ export function ChatWindow({
   useEffect(() => {
     return () => {
       streamRef.current?.getTracks().forEach((track) => track.stop())
+      window.clearTimeout(flashTimerRef.current)
     }
   }, [])
 
@@ -379,11 +404,19 @@ export function ChatWindow({
       replyUsed = true
       return { refMessageId: reply.messageId, quotedText: reply.text }
     }
+    // Цитата видна у первого из отправляемых сообщений — к нему же и прикрепится ответ.
+    let pendingQuote = reply?.quote ?? null
+    const takePendingQuote = () => {
+      const quote = pendingQuote
+      pendingQuote = null
+      return quote
+    }
     for (const attachment of files) {
       const tempId = tempIdRef.current--
+      const quote = takePendingQuote()
       setPending((current) => [
         ...current,
-        { tempId, kind: "file", text: "", fileName: attachment.file.name, dateTime: new Date().toISOString() },
+        { tempId, kind: "file", text: "", fileName: attachment.file.name, dateTime: new Date().toISOString(), quote },
       ])
       queue.push({
         tempId,
@@ -400,7 +433,8 @@ export function ChatWindow({
     }
     if (text) {
       const tempId = tempIdRef.current--
-      setPending((current) => [...current, { tempId, kind: "text", text, fileName: "", dateTime: new Date().toISOString() }])
+      const quote = takePendingQuote()
+      setPending((current) => [...current, { tempId, kind: "text", text, fileName: "", dateTime: new Date().toISOString(), quote }])
       queue.push({ tempId, run: () => sendChatMessageAction(chatId, { text, ...replyOptions() }) })
     }
 
@@ -439,7 +473,10 @@ export function ChatWindow({
     }
     const reply = replyTo
     const tempId = tempIdRef.current--
-    setPending((current) => [...current, { tempId, kind: "voice", text: "", fileName: "", dateTime: new Date().toISOString() }])
+    setPending((current) => [
+      ...current,
+      { tempId, kind: "voice", text: "", fileName: "", dateTime: new Date().toISOString(), quote: reply?.quote ?? null },
+    ])
     setReplyTo(null)
     setSending(true)
     stickToBottomRef.current = true
@@ -574,10 +611,12 @@ export function ChatWindow({
 
   function handleAction(action: MessageAction, message: BubbleMessage) {
     switch (action) {
-      case "reply":
-        setReplyTo({ messageId: message.messageId, text: message.text || wazzupMessageTypeLabel(message.messageType) })
+      case "reply": {
+        const quote = quoteFromMessage(message)
+        setReplyTo({ messageId: message.messageId, text: quoteSnapshotText(quote), quote })
         textareaRef.current?.focus()
         return
+      }
       case "forward":
         onForward(message)
         return
@@ -588,7 +627,7 @@ export function ChatWindow({
         onAttachToOrder(message, "receipt")
         return
       case "copy":
-        void copyMessageText(message.text)
+        void copyMessageText(messageBodyText(message.text) || message.text)
         return
       case "saveQuickReply":
         setQuickDraft({ id: null, title: "", text: message.text })
@@ -734,6 +773,7 @@ export function ChatWindow({
         authorName: message.authorName,
         authorRole: message.authorRole,
         quotedText: message.quotedText,
+        quoted: message.quoted,
         transcript: message.transcript,
         isEdited: message.isEdited,
         isDeleted: message.isDeleted,
@@ -754,6 +794,7 @@ export function ChatWindow({
         authorName: currentUser.name,
         authorRole: currentUser.role,
         quotedText: "",
+        quoted: item.quote,
         transcript: "",
         isEdited: false,
         isDeleted: false,
@@ -767,6 +808,22 @@ export function ChatWindow({
     [messages, pending, currentUser.name, currentUser.role]
   )
 
+  // Нажатие на цитату: прокрутить к оригиналу и коротко подсветить его.
+  function jumpToMessage(messageId: string) {
+    const target = messageId ? items.find((item) => item.messageId === messageId) : undefined
+    const element = target ? scrollRef.current?.querySelector<HTMLElement>(`[data-message-key="${target.key}"]`) : null
+    if (!target || !element) {
+      toast.message("Это сообщение раньше загруженной истории.")
+      return
+    }
+    stickToBottomRef.current = false
+    element.scrollIntoView({ block: "center", behavior: "smooth" })
+    setFlashKey(target.key)
+    window.clearTimeout(flashTimerRef.current)
+    flashTimerRef.current = window.setTimeout(() => setFlashKey(null), 1800)
+  }
+
+  const contactName = liveChat.name || liveChat.phone || liveChat.chatId
   const waitingSince = liveChat.unansweredCount > 0 ? formatWaiting(liveChat.lastInboundAt) : ""
   const assigned = users.find((user) => user.id === liveChat.assignedUserId)
   const assignedLabel = assigned?.name ?? liveChat.assignedUserName ?? ""
@@ -954,13 +1011,22 @@ export function ChatWindow({
               const groupStart = showDay || !previous || !sameGroup(previous, item)
               const groupEnd = !next || !sameDay(item.dateTime, next.dateTime) || !sameGroup(item, next)
               return (
-                <div key={item.key} className={cn("flex flex-col", index > 0 && (groupStart ? "mt-3" : "mt-0.5"))}>
+                <div key={item.key} data-message-key={item.key} className={cn("flex flex-col", index > 0 && (groupStart ? "mt-3" : "mt-0.5"))}>
                   {showDay ? (
                     <div className="sticky top-0 z-10 mx-auto mb-3 rounded-full bg-background/90 px-3 py-1 text-[11px] font-medium text-muted-foreground shadow-xs backdrop-blur">
                       {formatDayLabel(item.dateTime)}
                     </div>
                   ) : null}
-                  <MessageBubble message={item} groupStart={groupStart} groupEnd={groupEnd} onAction={handleAction} onOpenImage={setLightbox} />
+                  <MessageBubble
+                    message={item}
+                    contactName={contactName}
+                    groupStart={groupStart}
+                    groupEnd={groupEnd}
+                    highlighted={flashKey === item.key}
+                    onAction={handleAction}
+                    onOpenMedia={setLightbox}
+                    onJumpToQuote={jumpToMessage}
+                  />
                 </div>
               )
             })}
@@ -990,14 +1056,26 @@ export function ChatWindow({
         ) : null}
         <div className="flex flex-col gap-2">
           {replyTo ? (
-            <div className="flex items-start gap-2 rounded-xl border-l-2 border-brand bg-zinc-100 px-3 py-2 text-xs">
-              <div className="min-w-0 flex-1">
-                <div className="font-medium text-brand-strong">В ответ на сообщение</div>
-                <div className="truncate text-muted-foreground">{replyTo.text || "Вложение"}</div>
-              </div>
-              <button type="button" onClick={() => setReplyTo(null)} className="text-muted-foreground hover:text-foreground" aria-label="Отменить ответ">
+            <div className="flex items-center gap-1.5">
+              <ReplyIcon className="mx-1.5 size-4 shrink-0 text-brand-strong" aria-label="Ответ на сообщение" />
+              <QuoteCard
+                quote={replyTo.quote}
+                contactName={contactName}
+                tone="composer"
+                onClick={() => jumpToMessage(replyTo.messageId)}
+                className="min-w-0 flex-1"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-lg"
+                className="size-10 shrink-0 rounded-full text-muted-foreground"
+                onClick={() => setReplyTo(null)}
+                aria-label="Отменить ответ"
+                title="Отменить ответ (Esc)"
+              >
                 <XIcon className="size-4" />
-              </button>
+              </Button>
             </div>
           ) : null}
 
@@ -1141,16 +1219,25 @@ export function ChatWindow({
           </DialogHeader>
           {lightbox ? (
             <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={mediaUrl(lightbox)} alt={guessFileName(lightbox)} className="max-h-[78vh] w-full rounded-lg object-contain" />
+              {lightbox.messageType === "video" ? (
+                // История из ответа клиента (в ленте она — миниатюра) — смотрим здесь же.
+                <video src={mediaUrl(lightbox)} controls autoPlay playsInline className="mx-auto block max-h-[78vh] max-w-full rounded-lg bg-black" />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={mediaUrl(lightbox)} alt={guessFileName(lightbox)} className="max-h-[78vh] w-full rounded-lg object-contain" />
+              )}
               <div className="flex flex-wrap items-center justify-end gap-1">
-                <Button variant="ghost" size="sm" onClick={() => handleAction("toOrderPhoto", lightbox)}>
-                  <ImagePlusIcon data-icon="inline-start" />В заказ как фото
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => handleAction("toOrderReceipt", lightbox)}>
-                  <ReceiptTextIcon data-icon="inline-start" />
-                  Как чек
-                </Button>
+                {lightbox.messageType === "image" ? (
+                  <>
+                    <Button variant="ghost" size="sm" onClick={() => handleAction("toOrderPhoto", lightbox)}>
+                      <ImagePlusIcon data-icon="inline-start" />В заказ как фото
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => handleAction("toOrderReceipt", lightbox)}>
+                      <ReceiptTextIcon data-icon="inline-start" />
+                      Как чек
+                    </Button>
+                  </>
+                ) : null}
                 <Button variant="ghost" size="sm" onClick={() => handleAction("forward", lightbox)}>
                   Переслать
                 </Button>

@@ -122,6 +122,9 @@ export type WazzupMessage = {
   // refMessageId, references/webhooks.md quotedMessage).
   quotedMessageId: string
   quotedText: string
+  // То, на что ответили, в читаемом виде: Wazzup в quotedMessage присылает только тип («[text]»,
+  // «[video]»), поэтому оригинал ищем в нашей ленте по quotedMessageId. null — это не ответ.
+  quoted: WazzupQuotedMessage | null
   // Кэш расшифровки голосового (STT). Пусто, пока не запрошена расшифровка.
   transcript: string
   // Клиент отредактировал/удалил сообщение в мессенджере (вебхук isEdited/isDeleted).
@@ -135,6 +138,21 @@ export type WazzupMessage = {
   fileName: string
   dateTime: string
   createdAt: string
+}
+
+export type WazzupQuotedMessage = {
+  // Строка wazzup_messages оригинала (для превью фото/видео и прокрутки к нему); 0 — оригинала у нас
+  // нет, есть только снимок quotedText.
+  id: number
+  messageId: string
+  // null — оригинал не найден, чей он — неизвестно.
+  direction: WazzupMessageDirection | null
+  messageType: string
+  text: string
+  hasMedia: boolean
+  authorName: string
+  isDeleted: boolean
+  fileName: string
 }
 
 export type BouquetTemplateInput = {

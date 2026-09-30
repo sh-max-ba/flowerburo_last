@@ -20,6 +20,7 @@ import type {
   WarehouseImport,
   WarehouseImportItem,
   WazzupMessage,
+  WazzupQuotedMessage,
 } from "./types"
 import { stockLotStatuses, stockOverheadKinds } from "./types"
 
@@ -184,6 +185,7 @@ export function mapWazzupMessage(row: Record<string, unknown>): WazzupMessage {
     authorRole: userRoleFromRow(row.author_role),
     quotedMessageId: String(row.quoted_message_id ?? ""),
     quotedText: String(row.quoted_text ?? ""),
+    quoted: mapQuotedMessage(row),
     transcript: String(row.transcript ?? ""),
     isEdited: Number(row.is_edited ?? 0) === 1,
     isDeleted: Number(row.is_deleted ?? 0) === 1,
@@ -192,6 +194,41 @@ export function mapWazzupMessage(row: Record<string, unknown>): WazzupMessage {
     fileName: String(row.file_name ?? ""),
     dateTime: String(row.date_time ?? ""),
     createdAt: String(row.created_at ?? ""),
+  }
+}
+
+// Цитата: колонки q_* приходят из LEFT JOIN оригинала в listWazzupChatMessages. Без них (или если
+// оригинала у нас нет) — снимок quoted_text: у входящих это лишь «[text]»/«[video]», у наших — текст.
+function mapQuotedMessage(row: Record<string, unknown>): WazzupQuotedMessage | null {
+  const quotedMessageId = String(row.quoted_message_id ?? "").trim()
+  const snapshot = String(row.quoted_text ?? "").trim()
+  if (!quotedMessageId && !snapshot) {
+    return null
+  }
+  if (row.q_id !== null && row.q_id !== undefined) {
+    return {
+      id: numberFromRow(row.q_id),
+      messageId: quotedMessageId,
+      direction: String(row.q_direction ?? "") === "outbound" ? "outbound" : "inbound",
+      messageType: String(row.q_message_type ?? "") || "text",
+      text: String(row.q_text ?? ""),
+      hasMedia: Boolean(String(row.q_content_uri ?? "").trim()),
+      authorName: String(row.q_author_name ?? ""),
+      isDeleted: Number(row.q_is_deleted ?? 0) === 1,
+      fileName: String(row.q_file_name ?? ""),
+    }
+  }
+  const typeOnly = /^\[([a-z_]+)\]$/.exec(snapshot)
+  return {
+    id: 0,
+    messageId: quotedMessageId,
+    direction: null,
+    messageType: typeOnly ? typeOnly[1] : "text",
+    text: typeOnly ? "" : snapshot,
+    hasMedia: false,
+    authorName: "",
+    isDeleted: false,
+    fileName: "",
   }
 }
 

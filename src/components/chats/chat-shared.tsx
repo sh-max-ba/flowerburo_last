@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { CameraIcon, MessageCircleIcon, SendIcon, UsersRoundIcon } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
+import { specialMessagePreview } from "@/lib/chat-message-kinds"
 import { parseDbInstant, SHOP_TIME_ZONE } from "@/lib/datetime"
 import { wazzupMessageTypeLabel } from "@/lib/labels"
 import { cn } from "@/lib/utils"
@@ -202,11 +203,12 @@ export function formatWaiting(value: string, now = new Date()) {
   return `${Math.round(hours / 24)} д`
 }
 
-// Превью сообщения в списке: текст или тип вложения с иконкой-подсказкой.
+// Превью сообщения в списке: текст или тип вложения с иконкой-подсказкой. Служебные тексты
+// Instagram («Reply to video story…») — по-русски.
 export function messagePreview(text: string, messageType: string) {
   const value = text.trim()
   if (value && !/^\[[a-z_]+\]$/.test(value)) {
-    return value.replace(/\s+/g, " ")
+    return (specialMessagePreview(value) || value).replace(/\s+/g, " ")
   }
   const type = value.startsWith("[") ? value.slice(1, -1) : messageType
   if (type === "audio") {
