@@ -12,6 +12,7 @@ import type {
   Sale,
   SalePaymentMethod,
   ShiftRelatedOrder,
+  UserRole,
 } from "@/lib/db"
 
 type Row = Record<string, unknown>
@@ -37,6 +38,11 @@ export function rowStr(value: unknown) {
 // Число или null: сохраняет SQL NULL вместо приведения к 0.
 export function rowNumOrNull(value: unknown) {
   return value === null || value === undefined ? null : numberFromRow(value)
+}
+
+// Роль пользователя из строки (подзапрос к users) или null, если автора нет.
+export function userRoleFromRow(value: unknown): UserRole | null {
+  return value === "owner" || value === "manager" || value === "florist" ? value : null
 }
 
 // Булево из 0/1-флага БД (как `numberFromRow(x) === 1`).
@@ -99,6 +105,12 @@ export function mapOrderRow(row: Row, items: OrderItem[] = [], images: OrderImag
     id: numberFromRow(row.id),
     number: row.number === null ? null : String(row.number ?? ""),
     createdByUserId: row.createdByUserId === null ? null : numberFromRow(row.createdByUserId),
+    // Выборки без этих колонок (CRM-списки) дают null — отметки там не показываются.
+    createdByName: row.createdByName == null ? null : String(row.createdByName),
+    createdByRole: userRoleFromRow(row.createdByRole),
+    completedByUserId: row.completedByUserId == null ? null : numberFromRow(row.completedByUserId),
+    completedByName: row.completedByName == null ? null : String(row.completedByName),
+    completedByRole: userRoleFromRow(row.completedByRole),
     updatedByUserId: row.updatedByUserId === null ? null : numberFromRow(row.updatedByUserId),
     customerId: row.customerId === null ? null : numberFromRow(row.customerId),
     dealId: row.dealId === null ? null : numberFromRow(row.dealId),

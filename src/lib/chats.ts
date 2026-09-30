@@ -142,6 +142,7 @@ export async function sendChatMessage(
         text: contentUri ? null : text,
         contentUri: contentUri || null,
         authorName: currentUser.name,
+        authorUserId: currentUser.id,
         quotedMessageId: refMessageId || null,
         quotedText: refMessageId ? clean(options.quotedText ?? "") : null,
         forwarded: Boolean(options.forwarded),

@@ -25,6 +25,7 @@ const routeTitles: Record<string, string> = {
   "/bouquets": "Букеты",
   "/settings": "Настройки",
   "/users": "Пользователи",
+  "/guides": "Руководства",
 }
 
 const routeContexts: Record<string, string> = {
@@ -50,6 +51,7 @@ const routeContexts: Record<string, string> = {
   "/bouquets": "Шаблоны букетов",
   "/settings": "Администрирование",
   "/users": "Доступ и роли",
+  "/guides": "Как работать в FlowerBuro",
 }
 
 export function getPageTitle(pathname: string) {
@@ -85,6 +87,10 @@ export function getPageTitle(pathname: string) {
 
   if (/^\/warehouse\/imports\/[^/]+$/.test(path)) {
     return "Импорт"
+  }
+
+  if (/^\/guides\/[^/]+\/[^/]+$/.test(path)) {
+    return "Инструкция"
   }
 
   return routeTitles[path] ?? "FlowerBuro | sellz"
@@ -123,6 +129,10 @@ export function getPageContext(pathname: string) {
 
   if (/^\/warehouse\/imports\/[^/]+$/.test(path)) {
     return "Отчёт импорта"
+  }
+
+  if (/^\/guides\/[^/]+\/[^/]+$/.test(path)) {
+    return "Пошаговая инструкция"
   }
 
   return routeContexts[path] ?? ""

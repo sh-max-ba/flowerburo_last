@@ -3,9 +3,12 @@ import { CrmShell } from "@/components/crm-shell"
 import { DashboardPage } from "@/components/dashboard/dashboard-page"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
-import { getOwnerDashboardData } from "@/lib/db"
+import { getOwnerDashboardData, listUpcomingCustomerDates } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
+
+// «Ближайшие даты» клиентов — на месяц вперёд, не зависят от выбранного периода.
+const UPCOMING_DATES_DAYS = 30
 
 export default async function Page({
   searchParams,
@@ -33,7 +36,7 @@ export default async function Page({
       defaultSidebarOpen={await getSidebarDefaultOpen()}
       header="page"
     >
-      <DashboardPage data={data} />
+      <DashboardPage data={data} upcomingDates={listUpcomingCustomerDates({ days: UPCOMING_DATES_DAYS })} />
     </CrmShell>
   )
 }

@@ -5,12 +5,14 @@ import { CustomerDetailPage } from "@/components/clients/customer-detail-page"
 import { getDefaultPathForRole, requireUser } from "@/lib/auth"
 import { getShiftShellContext, getSidebarDefaultOpen } from "@/lib/app-shell"
 import { getCustomer, listCustomerOrders, listCustomerSales, listDeals } from "@/lib/crm"
+import { getChatByCustomerId, listCustomerDates } from "@/lib/db"
+import { canAccessSection } from "@/lib/nav"
 
 export const dynamic = "force-dynamic"
 
 export default async function ClientDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser()
-  if (user.role === "florist") {
+  if (!canAccessSection("clients", user.role, false)) {
     return <AccessDenied homeHref={getDefaultPathForRole(user.role)} />
   }
 
@@ -38,6 +40,8 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ i
         deals={listDeals({ customerId })}
         orders={listCustomerOrders(customerId)}
         sales={listCustomerSales(customerId)}
+        dates={listCustomerDates(customerId)}
+        hasChat={Boolean(getChatByCustomerId(customerId))}
       />
     </CrmShell>
   )

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useTransition } from "react"
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react"
 import type React from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
@@ -26,6 +26,7 @@ import { MobileChromeProvider, MobileTabBadge, MobileTabBar, useTextInputFocused
 import { ShiftChip } from "@/components/shift-chip"
 import { SoundToggle } from "@/components/notifications/sound-toggle"
 import { ShiftSheet } from "@/components/shifts/shift-sheet"
+import { ShiftActionProvider, ViewerProvider } from "@/components/viewer-context"
 import { Button } from "@/components/ui/button"
 import { SegmentedTabs } from "@/components/ui/segmented-tabs"
 import {
@@ -109,6 +110,8 @@ export function CrmShell({
   const pageTitle = getPageTitle(pathname) || title
   const detail = getDetailParent({ active, subnav, pathname })
   const rowActions = buildRowActions(user.role, canAccessCash)
+  const viewer = useMemo(() => ({ id: user.id, name: user.name, role: user.role }), [user.id, user.name, user.role])
+  const openShiftSheet = useCallback(() => setShiftSheet(true), [])
 
   function submitShiftForm(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -278,13 +281,18 @@ export function CrmShell({
               )}
             >
               {autoHeader}
-              {children}
+              <ViewerProvider value={viewer}>
+                <ShiftActionProvider value={shiftContext?.canManageShift ? openShiftSheet : null}>
+                  {children}
+                </ShiftActionProvider>
+              </ViewerProvider>
             </div>
           </ScreenChromeProvider>
         </MobileChromeProvider>
         {/* Телефон (< md): стеклянный док разделов вместо гамбургера; «Ещё» открывает полное меню. */}
         <MobileTabBar
           items={visibleItems}
+          role={user.role}
           active={sidebarActive}
           hidden={!dockVisible}
           badges={{
@@ -435,15 +443,23 @@ function IncomingDealsSidebarBadge() {
   return <SidebarMenuBadge>{count > 99 ? "99+" : count}</SidebarMenuBadge>
 }
 
-// Бейдж «Чаты»: диалоги, ждущие ответа (входящие после нашего последнего сообщения).
+// Бейдж «Чаты»: диалоги, где клиенту не отвечали вообще. Если таких нет, а есть только те, где
+// разговор уже идёт (ответили с телефона, клиент написал ещё), — их число бледно-серым.
 function UnansweredChatsSidebarBadge() {
-  const count = usePolledCount("/api/chats/unanswered-count")
-  if (count <= 0) {
+  const { count, repliedCount } = usePolledCounts(CHATS_COUNT_URL)
+  const value = count > 0 ? count : repliedCount
+  if (value <= 0) {
     return null
   }
 
-  return <SidebarMenuBadge>{count > 99 ? "99+" : count}</SidebarMenuBadge>
+  return (
+    <SidebarMenuBadge className={cn(count <= 0 && "text-muted-foreground/50 peer-data-active/menu-button:text-muted-foreground/60")}>
+      {value > 99 ? "99+" : value}
+    </SidebarMenuBadge>
+  )
 }
+
+const CHATS_COUNT_URL = "/api/chats/unanswered-count"
 
 // PERF-2: счётчик «Готовые заказы, ожидающие действия». Опрашивает /api/ready-orders/count
 // каждые 5 сек (доступ к подсчёту имеют только owner/manager — см. route).
@@ -457,18 +473,22 @@ function ReadyOrdersSidebarBadge() {
 }
 
 // Бейдж на нижней панели телефона — опрашивает только на узком экране (на планшете/ПК
-// тот же счётчик уже опрашивает сайдбар).
+// тот же счётчик уже опрашивает сайдбар). repliedCount (только у «Чатов») — бледный бейдж.
 function MobileCountBadge({ url }: { url: string }) {
-  const count = usePolledCount(url, MOBILE_MEDIA)
-  return <MobileTabBadge count={count} />
+  const { count, repliedCount } = usePolledCounts(url, MOBILE_MEDIA)
+  return count > 0 ? <MobileTabBadge count={count} /> : <MobileTabBadge count={repliedCount} muted />
 }
 
 const MOBILE_MEDIA = "(max-width: 767px)"
 
+function usePolledCount(url: string, media?: string) {
+  return usePolledCounts(url, media).count
+}
+
 // Опрос счётчика раз в 5 сек, только пока вкладка видима; предыдущий запрос отменяется.
 // media — опрашивать, только пока совпадает медиазапрос.
-function usePolledCount(url: string, media?: string) {
-  const [count, setCount] = useState(0)
+function usePolledCounts(url: string, media?: string) {
+  const [counts, setCounts] = useState({ count: 0, repliedCount: 0 })
 
   useEffect(() => {
     let disposed = false
@@ -494,9 +514,12 @@ function usePolledCount(url: string, media?: string) {
           return
         }
 
-        const data = (await response.json()) as { count?: unknown }
+        const data = (await response.json()) as { count?: unknown; repliedCount?: unknown }
         if (!disposed) {
-          setCount(Number(data.count ?? 0))
+          const next = { count: Number(data.count ?? 0), repliedCount: Number(data.repliedCount ?? 0) }
+          setCounts((current) =>
+            current.count === next.count && current.repliedCount === next.repliedCount ? current : next
+          )
         }
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
@@ -515,5 +538,5 @@ function usePolledCount(url: string, media?: string) {
     }
   }, [url, media])
 
-  return count
+  return counts
 }

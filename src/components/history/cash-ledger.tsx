@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { FloristMark } from "@/components/florist-mark"
 import { ScreenBody } from "@/components/screen-body"
 import { HeaderAction, HeaderFilter, ScreenHeader } from "@/components/screen-header"
 import { Badge } from "@/components/ui/badge"
@@ -161,6 +162,7 @@ export function CashLedger({ entries, showStockHistoryLink = false }: { entries:
                       <span className="tabular-nums">{formatDateTime(entry.createdAt)}</span>
                       <span>{getPaymentMethodLabel(entry.paymentMethod)}</span>
                       {entry.userName ? <span>{entry.userName}</span> : null}
+                      <FloristMark role={entry.userRole} name={entry.userName} compact />
                       {entry.discountAmount > 0 ? (
                         <span className="text-emerald-700">скидка −{formatMoney(entry.discountAmount)}</span>
                       ) : null}
@@ -242,7 +244,12 @@ export function CashLedger({ entries, showStockHistoryLink = false }: { entries:
                           )}
                         </TableCell>
                         <TableCell className="whitespace-nowrap">{renderLink(entry)}</TableCell>
-                        <TableCell className="whitespace-nowrap">{entry.userName || "—"}</TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1.5">
+                            {entry.userName || "—"}
+                            <FloristMark role={entry.userRole} name={entry.userName} compact />
+                          </span>
+                        </TableCell>
                         <TableCell className="min-w-48 text-xs text-muted-foreground">{entry.comment || "—"}</TableCell>
                       </TableRow>
                       {expandable && isOpen && (

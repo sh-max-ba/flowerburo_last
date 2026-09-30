@@ -1,7 +1,6 @@
 "use client"
 
 import { useMemo, useState, useTransition } from "react"
-import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { AlertTriangleIcon, ArrowDownUpIcon, CalendarDaysIcon, ExpandIcon, ListIcon, PencilIcon, PlusIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -11,6 +10,7 @@ import {
   startOrderWorkAction,
 } from "@/app/actions"
 import type { BouquetTemplate, Order, OrderStatus, Product } from "@/lib/db"
+import { shopTodayLocal } from "@/lib/datetime"
 import { deliveryTypeLabel } from "@/lib/labels"
 import { formatMoney } from "@/lib/utils"
 import { Alert, AlertTitle } from "@/components/ui/alert"
@@ -56,6 +56,8 @@ import {
 import { OrderDetailsDialog, OrderPhotoMark } from "@/components/orders/order-details-dialog"
 import { OrderEditSheet } from "@/components/orders/order-edit-sheet"
 import { OrderImageStrip } from "@/components/orders/order-images"
+import { FloristMark } from "@/components/florist-mark"
+import { useShiftAction } from "@/components/viewer-context"
 import { cn } from "@/lib/utils"
 
 type Result = Awaited<ReturnType<typeof startOrderWorkAction>>
@@ -85,17 +87,18 @@ export function OrdersPage({
   orders: Order[]
   products: Product[]
   bouquets: BouquetTemplate[]
-  // Когда смена не открыта, в пустом состоянии показываем подсказку перейти к сменам.
+  // Когда смена не открыта, в пустом состоянии предлагаем открыть её (окно чипа смены).
   hasOpenShift?: boolean
   // «+ Новый заказ» ведёт на кассу (оформление заказа) — только тем, кому доступна касса.
   canCreateOrder?: boolean
 }) {
   const router = useRouter()
+  const openShiftSheet = useShiftAction()
   const [search, setSearch] = useState("")
   const [sortMode, setSortMode] = useState<OrderSortMode>("default")
   const [viewMode, setViewMode] = useState<OrderViewMode>("list")
   const [statusFilter, setStatusFilter] = useState<WorkStatusFilter>("all")
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(shopTodayLocal()))
   const [pendingOrderId, setPendingOrderId] = useState<number | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
   const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
@@ -233,9 +236,12 @@ export function OrdersPage({
                 Показать все
               </Button>
             ) : (
-              hasOpenShift === false && (
-                <Button variant="ghost" size="sm" render={<Link href="/shifts" />}>
-                  Перейти к сменам
+              hasOpenShift === false &&
+              openShiftSheet && (
+                // Открываем то же окно, что и чип смены: раньше кнопка вела на «Смены», куда
+                // флористу и менеджеру нельзя.
+                <Button variant="ghost" size="sm" onClick={openShiftSheet}>
+                  Открыть смену
                 </Button>
               )
             )}
@@ -246,7 +252,7 @@ export function OrdersPage({
               orders={orders}
               weekStart={weekStart}
               showMoney={false}
-              onToday={() => setWeekStart(startOfWeek(new Date()))}
+              onToday={() => setWeekStart(startOfWeek(shopTodayLocal()))}
               onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
               onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
               onOpenOrder={setViewingOrder}
@@ -372,6 +378,7 @@ function WorkOrderCard({
         <div className="flex flex-wrap items-center gap-2">
           <span>{deliveryTypeLabel(order.deliveryType)}</span>
           <OrderSourceBadge source={order.source} />
+          <FloristMark role={order.createdByRole} name={order.createdByName} action="Оформил" />
         </div>
         {order.recipientPhone && <div>Получатель: {order.recipientPhone}</div>}
         {order.address && <div>{order.address}</div>}

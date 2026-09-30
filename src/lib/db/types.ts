@@ -116,6 +116,8 @@ export type WazzupMessage = {
   status: string
   isEcho: boolean
   authorName: string
+  // Роль отправившего из FlowerBuro (флористы помечаются в ленте); null — клиент, телефон или старое сообщение.
+  authorRole: UserRole | null
   // Ответ/цитирование: messageId цитируемого сообщения и снимок его текста (см. references/messages.md
   // refMessageId, references/webhooks.md quotedMessage).
   quotedMessageId: string
@@ -316,6 +318,12 @@ export type Order = {
   id: number
   number: string | null
   createdByUserId: number | null
+  // Кто оформил и кто выдал (клиенту/курьеру) — имя и роль, чтобы помечать действия флористов.
+  createdByName: string | null
+  createdByRole: UserRole | null
+  completedByUserId: number | null
+  completedByName: string | null
+  completedByRole: UserRole | null
   updatedByUserId: number | null
   customer: string
   customerId: number | null
@@ -850,6 +858,8 @@ export type CashLedgerEntry = {
   dealId: number | null
   userId: number | null
   userName: string
+  // Роль автора проводки — операции флориста помечаются в истории кассы.
+  userRole: UserRole | null
   customerName: string
   type: CashTransactionType
   paymentMethod: PaymentMethod

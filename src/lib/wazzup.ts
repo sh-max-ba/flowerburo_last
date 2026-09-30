@@ -1058,7 +1058,7 @@ export async function postWazzupMessage(payload: WazzupMessageRequest): Promise<
 function recordOutboundForDeal(
   deal: Pick<Deal, "id" | "customerId">,
   target: Extract<WazzupChatTarget, { status: "ok" }>,
-  currentUser: Pick<CurrentUser, "name">,
+  currentUser: Pick<CurrentUser, "id" | "name">,
   message: {
     result: PostWazzupMessageResult
     crmMessageId: string
@@ -1086,6 +1086,7 @@ function recordOutboundForDeal(
     text: message.text ?? null,
     contentUri: message.contentUri ?? null,
     authorName: currentUser.name,
+    authorUserId: currentUser.id,
     quotedMessageId: message.quotedMessageId ?? null,
     quotedText: message.quotedText ?? null,
     dateTime: message.dateTime,

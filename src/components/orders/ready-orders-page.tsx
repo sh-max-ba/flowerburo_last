@@ -9,6 +9,7 @@ import {
   handOrderToCourierAction,
 } from "@/app/actions"
 import type { DashboardData, Order } from "@/lib/db"
+import { formatDeadline, shopTodayLocal } from "@/lib/datetime"
 import { deliveryTypeLabel, getPaymentMethodLabel, paymentMethodOptions } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -58,6 +59,7 @@ import {
   sortReadyOrders,
 } from "@/components/orders/order-shared"
 import { OrderImageStrip } from "@/components/orders/order-images"
+import { FloristMark } from "@/components/florist-mark"
 import { OrderDetailsDialog } from "@/components/orders/order-details-dialog"
 
 type OpenShift = DashboardData["stats"]["openShift"]
@@ -101,7 +103,7 @@ export function ReadyOrdersPage({
   const [sortMode, setSortMode] = useState<OrderSortMode>("default")
   const [viewMode, setViewMode] = useState<OrderViewMode>("list")
   const [statusFilter, setStatusFilter] = useState<ReadyStatusFilter>("pending")
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(shopTodayLocal()))
   const [handoverOrder, setHandoverOrder] = useState<Order | null>(null)
   const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
   const [pendingOrderId, setPendingOrderId] = useState<number | null>(null)
@@ -246,7 +248,7 @@ export function ReadyOrdersPage({
               orders={orders}
               weekStart={weekStart}
               showMoney
-              onToday={() => setWeekStart(startOfWeek(new Date()))}
+              onToday={() => setWeekStart(startOfWeek(shopTodayLocal()))}
               onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
               onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
               onOpenOrder={setViewingOrder}
@@ -352,6 +354,12 @@ function ReadyOrderCard({
             ) : (
               <Badge className="bg-amber-100 text-amber-900 hover:bg-amber-100">Курьер не оплачен</Badge>
             ))}
+          <FloristMark role={order.createdByRole} name={order.createdByName} action="Оформил" />
+          <FloristMark
+            role={order.completedByRole}
+            name={order.completedByName}
+            action={order.status === "Передан курьеру" ? "Передал курьеру" : "Выдал"}
+          />
         </div>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-3">
@@ -364,7 +372,7 @@ function ReadyOrderCard({
             {order.recipientPhone ? (
               <Info label="Номер получателя" value={order.recipientPhone} />
             ) : (
-              <Info label="К сроку" value={order.dueAt ? dateTime(order.dueAt) : "-"} />
+              <Info label="К сроку" value={order.dueAt ? formatDeadline(order.dueAt) : "-"} />
             )}
           </div>
         </div>
@@ -414,7 +422,7 @@ function ReadyOrderCard({
               </div>
             )}
             <div className="grid grid-cols-2 gap-2 border-t pt-2 text-sm">
-              <Info label="К сроку" value={order.dueAt ? dateTime(order.dueAt) : "-"} />
+              <Info label="К сроку" value={order.dueAt ? formatDeadline(order.dueAt) : "-"} />
               <Info label="Готов" value={order.readyAt ? dateTime(order.readyAt) : "-"} />
             </div>
           </div>

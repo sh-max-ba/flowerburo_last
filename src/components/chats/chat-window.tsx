@@ -4,6 +4,8 @@ import type React from "react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import {
+  ArchiveIcon,
+  ArchiveRestoreIcon,
   ArrowLeftIcon,
   CheckIcon,
   ClipboardListIcon,
@@ -26,7 +28,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { markChatAnsweredAction, markQuickReplyUsedAction, sendBouquetToChatAction, sendChatMessageAction } from "@/app/actions"
-import type { BouquetTemplate, ChatSummary, QuickReply, WazzupMessage } from "@/lib/db"
+import type { BouquetTemplate, ChatSummary, QuickReply, UserRole, WazzupMessage } from "@/lib/db"
 import { chatUploadTypes, maxChatUploadSize } from "@/lib/chat-uploads"
 import { parseDbInstant } from "@/lib/datetime"
 import { wazzupMessageTypeLabel } from "@/lib/labels"
@@ -120,13 +122,14 @@ export function ChatWindow({
   showBack,
   onTogglePanel,
   onAssign,
+  onArchive,
   onBack,
   onForward,
   onAttachToOrder,
   onActivity,
 }: {
   chat: ChatSummary
-  currentUser: { id: number; name: string }
+  currentUser: { id: number; name: string; role: UserRole }
   users: Array<{ id: number; name: string }>
   bouquets: BouquetTemplate[]
   // Быстрые ответы живут на экране: окно диалога пересоздаётся при смене чата, а правки должны остаться.
@@ -136,6 +139,8 @@ export function ChatWindow({
   showBack: boolean
   onTogglePanel: (panel: "contact" | "orders") => void
   onAssign: (userId: number | null) => void
+  // Скрыть диалог в архив (true) или вернуть (false).
+  onArchive: (archived: boolean) => void
   onBack: () => void
   onForward: (message: BubbleMessage) => void
   // Фото из чата — к новому заказу (как фото или чек); тянет экран, у него список вложений.
@@ -727,6 +732,7 @@ export function ChatWindow({
         contentUri: message.contentUri,
         status: message.status,
         authorName: message.authorName,
+        authorRole: message.authorRole,
         quotedText: message.quotedText,
         transcript: message.transcript,
         isEdited: message.isEdited,
@@ -746,6 +752,7 @@ export function ChatWindow({
         contentUri: "",
         status: "sending",
         authorName: currentUser.name,
+        authorRole: currentUser.role,
         quotedText: "",
         transcript: "",
         isEdited: false,
@@ -757,7 +764,7 @@ export function ChatWindow({
         pending: true,
       })),
     ],
-    [messages, pending, currentUser.name]
+    [messages, pending, currentUser.name, currentUser.role]
   )
 
   const waitingSince = liveChat.unansweredCount > 0 ? formatWaiting(liveChat.lastInboundAt) : ""
@@ -886,6 +893,10 @@ export function ChatWindow({
               <DropdownMenuItem onClick={() => void refreshFeed()}>
                 <Loader2Icon />
                 Обновить ленту
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onArchive(!liveChat.archived)}>
+                {liveChat.archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
+                {liveChat.archived ? "Вернуть из архива" : "В архив"}
               </DropdownMenuItem>
               {phone ? (
                 // На телефоне в шапке нет места под «Ответственного» — выбор здесь.

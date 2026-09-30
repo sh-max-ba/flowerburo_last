@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { type NextRequest } from "next/server"
 import { getCurrentUser } from "@/lib/auth"
+import { canAccessSection } from "@/lib/nav"
 import { getWazzupMessageMedia } from "@/lib/db"
 import { chatUploadContentTypes } from "@/lib/chat-uploads"
 import { fetchRemoteMedia, MediaFetchError } from "@/lib/media-fetch"
@@ -13,10 +14,10 @@ const MAX_BYTES = 25 * 1024 * 1024
 
 // Прокси медиа сообщений: content_uri от Wazzup может протухать и не должен утекать в клиент как
 // внешняя ссылка. Тянем по id строки wazzup_messages (а не по произвольному URL из запроса), под
-// auth owner+manager — поэтому подделать цель нельзя. Короткий приватный кэш гасит повторные тяги.
+// auth раздела «Чаты» — поэтому подделать цель нельзя. Короткий приватный кэш гасит повторные тяги.
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser()
-  if (!user || user.role === "florist") {
+  if (!user || !canAccessSection("chats", user.role, false)) {
     return new Response("Forbidden", { status: 403 })
   }
 

@@ -19,6 +19,7 @@ import type { Customer } from "@/lib/crm"
 import { sourceLabel, sourceOptions } from "@/lib/labels"
 import { cn } from "@/lib/utils"
 import { DataView, type DataViewColumn } from "@/components/data-view"
+import { ClientsTabs } from "@/components/clients/clients-tabs"
 import { ScreenBody } from "@/components/screen-body"
 import { HeaderFilter, HeaderPrimaryAction, ScreenHeader } from "@/components/screen-header"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -56,9 +57,12 @@ const sourceFilterOptions = [
 export function CustomersPage({
   customers,
   search,
+  weekCount,
 }: {
   customers: Customer[]
   search: string
+  // Дат клиентов в ближайшие 7 дней — счётчик вкладки «Даты».
+  weekCount: number
 }) {
   const router = useRouter()
   // Диалог открывается кнопкой в шапке и ссылкой /clients?new=1 («+» на строке меню).
@@ -155,7 +159,7 @@ export function CustomersPage({
         primaryAction={
           <HeaderPrimaryAction icon={PlusIcon} label="Новый клиент" onClick={() => setDialogOpen(true)} />
         }
-        tabs={null}
+        tabs={<ClientsTabs value="clients" weekCount={weekCount} />}
       />
 
       <ScreenBody>

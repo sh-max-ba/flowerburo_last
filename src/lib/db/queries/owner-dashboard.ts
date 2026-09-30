@@ -214,7 +214,7 @@ export function getOwnerDashboardData(opts?: OwnerDashboardRangeInput): OwnerDas
   // «Ждут ответа» дашборда ведёт в /chats?tab=waiting. Раньше здесь считались входящие сделки
   // канбана, который выведен из работы.
   const incomingDealsRow = client
-    .prepare("SELECT COUNT(*) as count FROM chats WHERE unanswered_count > 0 AND is_group = 0")
+    .prepare("SELECT COUNT(*) as count FROM chats WHERE unanswered_count > 0 AND is_group = 0 AND archived_at IS NULL")
     .get() as { count: number } | undefined
 
   const readyOrdersRow = client

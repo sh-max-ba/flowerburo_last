@@ -6,13 +6,16 @@ import Link from "next/link"
 import { CheckIcon, ExternalLinkIcon, HistoryIcon, Loader2Icon, PencilIcon, PlusIcon, ReceiptTextIcon, SendIcon, UserRoundPlusIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 import { createCustomerFromChatAction, sendOrderToChatAction, updateCustomerFieldAction } from "@/app/actions"
-import type { Customer, CustomerChange, CustomerEditableField, CustomerStats } from "@/lib/crm"
+import type { Customer, CustomerChange, CustomerChangeField, CustomerEditableField, CustomerStats } from "@/lib/crm"
+import type { CustomerDate } from "@/lib/customer-dates"
 import type { BouquetTemplate, ChatSummary, Order, OrderImage, Product } from "@/lib/db"
 import { deliveryTypeLabel, sourceLabel } from "@/lib/labels"
 import { cn, formatMoney } from "@/lib/utils"
 import { OrderDetailsDialog, OrderPhotoMark } from "@/components/orders/order-details-dialog"
 import { OrderEditSheet } from "@/components/orders/order-edit-sheet"
 import { OrderStatusBadge, dateTimeLong } from "@/components/orders/order-shared"
+import { FloristMark } from "@/components/florist-mark"
+import { CustomerDatesSection } from "@/components/customers/customer-dates"
 import { getSafeOrderImagePath } from "@/lib/order-images"
 import { formatOrderForChat } from "@/lib/order-message"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -22,7 +25,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { ChatAvatar, channelMeta, formatDateTime, formatPhone } from "./chat-shared"
 
 // Правая панель диалога: «Контакт» — карточка клиента с инлайн-правкой (имя, телефон, скидка,
-// комментарий), сводкой по заказам и историей изменений; «Заказы» — заказы клиента и создание
+// комментарий), важными датами, сводкой по заказам и историей изменений; «Заказы» — заказы клиента и создание
 // нового (клиент подставляется автоматически). Данные грузятся по /api/chats/[id]/context.
 
 export type ChatPanelKind = "contact" | "orders"
@@ -31,16 +34,18 @@ type ContextData = {
   chat: ChatSummary
   customer: Customer | null
   stats: CustomerStats | null
+  dates: CustomerDate[]
   changes: CustomerChange[]
   orders: Order[]
 }
 
-const fieldLabels: Record<CustomerEditableField, string> = {
+const fieldLabels: Record<CustomerChangeField, string> = {
   name: "Имя",
   phone: "Телефон",
   defaultDiscountPercent: "Скидка",
   comment: "Комментарий",
   instagram: "Instagram",
+  importantDate: "Важная дата",
 }
 
 export function ChatContextPanel({
@@ -356,6 +361,16 @@ export function ChatContextPanel({
               <InlineField label="Комментарий" value={customer.comment} multiline placeholder="Предпочтения, поводы, адрес…" onSave={(value) => saveField("comment", value)} />
             </dl>
 
+            <CustomerDatesSection
+              customerId={customer.id}
+              dates={data.dates ?? []}
+              variant="panel"
+              onChanged={async () => {
+                await load()
+                onCustomerChanged()
+              }}
+            />
+
             {stats ? (
               <div className="grid grid-cols-2 gap-2">
                 <Stat label="Заказов" value={String(stats.ordersCount)} hint={stats.ordersTotal ? formatMoney(stats.ordersTotal) : ""} />
@@ -376,8 +391,11 @@ export function ChatContextPanel({
                 <ul className="flex flex-col gap-1.5 text-sm">
                   {changes.map((change) => (
                     <li key={change.id} className="rounded-lg bg-muted/40 px-2.5 py-1.5">
-                      <div className="text-[11px] text-muted-foreground">
-                        {change.userName || "Система"} · {formatDateTime(change.createdAt)}
+                      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground">
+                        <span>
+                          {change.userName || "Система"} · {formatDateTime(change.createdAt)}
+                        </span>
+                        <FloristMark role={change.userRole} name={change.userName} action="Изменил" compact />
                       </div>
                       <div className="mt-0.5">
                         <span className="text-muted-foreground">{fieldLabels[change.field] ?? change.field}: </span>
@@ -544,23 +562,37 @@ function OrderRow({ order, onOpen, onShare }: { order: Order; onOpen: () => void
   const balance = order.total - order.paid
   return (
     <div className="flex items-start gap-1 rounded-lg bg-muted/40 pr-1 transition-colors hover:bg-muted/70">
-    <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 items-start justify-between gap-2 px-3 py-2 text-left">
-      <span className="min-w-0">
-        <span className="block text-sm font-medium">
-          {order.number || `#${order.id}`}
-          <span className="font-normal text-muted-foreground"> · {order.dueAt ? dateTimeLong(order.dueAt) : "без срока"}</span>
+    <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 flex-col gap-1 px-3 py-2 text-left">
+      <span className="flex w-full items-start justify-between gap-2">
+        <span className="min-w-0">
+          <span className="block text-sm font-medium">
+            {order.number || `#${order.id}`}
+            <span className="font-normal text-muted-foreground"> · {order.dueAt ? dateTimeLong(order.dueAt) : "без срока"}</span>
+          </span>
+          <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+            <span>{deliveryTypeLabel(order.deliveryType)}</span>
+            {order.items.length ? <span>· {order.items.length} поз.</span> : null}
+            {balance > 0.009 && order.status !== "Отменен" ? <span>· остаток {formatMoney(balance)}</span> : null}
+            <OrderPhotoMark images={order.images} />
+          </span>
         </span>
-        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-          <span>{deliveryTypeLabel(order.deliveryType)}</span>
-          {order.items.length ? <span>· {order.items.length} поз.</span> : null}
-          {balance > 0.009 && order.status !== "Отменен" ? <span>· остаток {formatMoney(balance)}</span> : null}
-          <OrderPhotoMark images={order.images} />
+        <span className="flex shrink-0 flex-col items-end gap-1">
+          <span className="text-sm font-semibold tabular-nums">{formatMoney(order.total)}</span>
+          <OrderStatusBadge status={order.status} />
         </span>
       </span>
-      <span className="flex shrink-0 flex-col items-end gap-1">
-        <span className="text-sm font-semibold tabular-nums">{formatMoney(order.total)}</span>
-        <OrderStatusBadge status={order.status} />
-      </span>
+      {/* Метки флориста — отдельной строкой во всю ширину и с переносом: панель узкая. */}
+      {order.createdByRole === "florist" || order.completedByRole === "florist" ? (
+        <span className="flex flex-wrap gap-1">
+          <FloristMark role={order.createdByRole} name={order.createdByName} action="Оформил" wrap />
+          <FloristMark
+            role={order.completedByRole}
+            name={order.completedByName}
+            action={order.status === "Передан курьеру" ? "Передал курьеру" : "Выдал"}
+            wrap
+          />
+        </span>
+      ) : null}
     </button>
     <Button
       type="button"

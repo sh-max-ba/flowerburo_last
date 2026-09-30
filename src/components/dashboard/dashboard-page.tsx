@@ -3,9 +3,11 @@ import {
   AlarmClockIcon,
   AlertTriangleIcon,
   ArrowRightIcon,
+  CalendarHeartIcon,
   CheckCircle2Icon,
   ClockIcon,
   CreditCardIcon,
+  MessageCircleIcon,
   ReceiptTextIcon,
   TrendingDownIcon,
   TrendingUpIcon,
@@ -14,8 +16,9 @@ import {
   WalletIcon,
 } from "lucide-react"
 import type { OwnerDashboardData, OwnerDashboardRange } from "@/lib/db"
+import { formatDayMonth, formatYears, type UpcomingCustomerDate } from "@/lib/customer-dates"
 import { cn, formatMoney } from "@/lib/utils"
-import { formatInstant } from "@/lib/datetime"
+import { formatDeadline, formatInstant, wallClockToInstant } from "@/lib/datetime"
 import { getPaymentMethodLabel } from "@/lib/labels"
 import { Money, StatCard } from "./stat-card"
 import { RevenueChart } from "./revenue-chart"
@@ -23,9 +26,12 @@ import { DonutChart } from "./donut-chart"
 import { ManagersTable } from "./managers-table"
 import { DateRangePicker } from "./date-range-picker"
 import { ScreenHeader } from "@/components/screen-header"
+import { DaysLeftPill } from "@/components/customers/customer-dates"
 
 type DashboardPageProps = {
   data: OwnerDashboardData
+  // Дни рождения и годовщины клиентов на ближайший месяц (не зависят от периода).
+  upcomingDates: UpcomingCustomerDate[]
 }
 
 // Время открытия смены (opened_at — UTC из БД, показываем в поясе магазина).
@@ -33,7 +39,7 @@ function formatOpenedAt(value: string | null) {
   return formatInstant(value)
 }
 
-export function DashboardPage({ data }: DashboardPageProps) {
+export function DashboardPage({ data, upcomingDates }: DashboardPageProps) {
   const { range, shift, period, stock, work, managers, revenueSeries, revenueWindow, paymentBreakdown } =
     data
 
@@ -60,7 +66,10 @@ export function DashboardPage({ data }: DashboardPageProps) {
         />
         <PaymentBreakdownCard data={paymentBreakdown} className="md:col-span-2 lg:col-span-4" />
 
-        {/* Ряд 3 */}
+        {/* Ряд 3: кого из клиентов поздравить в ближайший месяц — на всю ширину, в две колонки. */}
+        <UpcomingDatesCard dates={upcomingDates} className="md:col-span-2 lg:col-span-12" />
+
+        {/* Ряд 4 */}
         {managers.length > 0 ? (
           <StatCard
             title="Показатели менеджеров"
@@ -71,7 +80,7 @@ export function DashboardPage({ data }: DashboardPageProps) {
           </StatCard>
         ) : null}
 
-        {/* Ряд 4: список заказов на всю ширину — вместо компактной карточки «Заказы». */}
+        {/* Ряд 5: список заказов на всю ширину — вместо компактной карточки «Заказы». */}
         <OrdersTableCard work={work} className="md:col-span-2 lg:col-span-12" />
       </div>
     </div>
@@ -166,6 +175,100 @@ function StockCard({
         <FooterLink href="/stock" label="Открыть склад" />
       </div>
     </StatCard>
+  )
+}
+
+// (e) БЛИЖАЙШИЕ ДАТЫ клиентов — кого поздравить в ближайший месяц ---------------
+// Строка ведёт в карточку клиента, значок сообщения — в его чат. Полный список с поиском —
+// «Клиенты → Даты» (там же видят менеджеры и флористы: дашборд только у управляющего).
+const UPCOMING_DATES_SHOWN = 6
+
+function UpcomingDatesCard({
+  dates,
+  className,
+}: {
+  dates: UpcomingCustomerDate[]
+  className?: string
+}) {
+  const rows = dates.slice(0, UPCOMING_DATES_SHOWN)
+  const hidden = Math.max(0, dates.length - rows.length)
+  const today = dates.filter((date) => date.daysLeft === 0).length
+  const week = dates.filter((date) => date.daysLeft <= 7).length
+
+  return (
+    <StatCard
+      title="Ближайшие даты"
+      icon={CalendarHeartIcon}
+      fill={false}
+      headerRight={
+        <div className="flex flex-wrap items-center justify-end gap-1">
+          <CounterChip href="/clients?view=dates&days=0" label="Сегодня" value={today} tone="success" />
+          <CounterChip href="/clients?view=dates&days=7" label="За 7 дней" value={week} />
+        </div>
+      }
+      className={className}
+    >
+      {rows.length === 0 ? (
+        <div className="flex flex-col gap-1">
+          <CalmRow text="В ближайший месяц дат нет" />
+          <span className="text-xs text-muted-foreground">
+            Дни рождения и годовщины добавляются в карточке клиента — блок «Важные даты».
+          </span>
+        </div>
+      ) : (
+        <div className="@container/dates -mx-2">
+          <ul className="grid grid-cols-1 gap-x-6 @2xl/dates:grid-cols-2">
+            {rows.map((date) => (
+              <UpcomingDateRow key={date.id} date={date} />
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="flex items-center justify-between gap-2">
+        {hidden > 0 ? (
+          <span className="text-xs text-muted-foreground">
+            ещё {hidden} {plural(hidden, DATES)} в этом месяце
+          </span>
+        ) : (
+          <span />
+        )}
+        <FooterLink href="/clients?view=dates" label="Все даты" />
+      </div>
+    </StatCard>
+  )
+}
+
+function UpcomingDateRow({ date }: { date: UpcomingCustomerDate }) {
+  const chatHref = date.hasChat || date.customerPhone ? `/chats?customer=${date.customerId}` : null
+  const details = [
+    date.title,
+    formatDayMonth(date.day, date.month),
+    date.turns ? formatYears(date.turns) : "",
+  ].filter(Boolean)
+
+  return (
+    <li className="flex items-center gap-1 rounded-lg border-t border-zinc-100 transition-colors hover:bg-zinc-50/70">
+      <Link href={`/clients/${date.customerId}`} className="flex min-w-0 flex-1 items-start gap-3 px-2 py-2.5">
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate font-medium text-zinc-900">{date.customerName}</span>
+            <DaysLeftPill daysLeft={date.daysLeft} className="shrink-0" />
+          </span>
+          <span className="mt-0.5 block truncate text-sm text-zinc-600">{details.join(" · ")}</span>
+          {date.note ? <span className="block truncate text-xs text-muted-foreground">{date.note}</span> : null}
+        </span>
+      </Link>
+      {chatHref ? (
+        <Link
+          href={chatHref}
+          aria-label={`Написать: ${date.customerName}`}
+          title="Написать в чат"
+          className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-zinc-100 hover:text-brand-strong pointer-coarse:size-11"
+        >
+          <MessageCircleIcon className="size-4" />
+        </Link>
+      ) : null}
+    </li>
   )
 }
 
@@ -535,19 +638,16 @@ function formatDue(value: string | null): { text: string; overdue: boolean } {
     return { text: "Без срока", overdue: false }
   }
 
-  const date = new Date(value.includes("T") ? value : value.replace(" ", "T"))
-  if (Number.isNaN(date.getTime())) {
+  // Срок — наивное время магазина: показываем ровно введённые часы, а просрочку считаем от
+  // настоящего момента (сервер в UTC иначе отмечал бы просрочку на 6 часов позже).
+  const due = wallClockToInstant(value)
+  if (!due) {
     return { text: "—", overdue: false }
   }
 
   return {
-    text: new Intl.DateTimeFormat("ru-RU", {
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(date),
-    overdue: date.getTime() < Date.now(),
+    text: formatDeadline(value),
+    overdue: due.getTime() < Date.now(),
   }
 }
 
@@ -556,6 +656,7 @@ const SALES: [string, string, string] = ["продажа", "продажи", "п
 const ORDERS: [string, string, string] = ["заказ", "заказа", "заказов"]
 const DAYS: [string, string, string] = ["день", "дня", "дней"]
 const POSITIONS: [string, string, string] = ["позиция", "позиции", "позиций"]
+const DATES: [string, string, string] = ["дата", "даты", "дат"]
 
 function plural(n: number, forms: [string, string, string]): string {
   const mod10 = n % 10

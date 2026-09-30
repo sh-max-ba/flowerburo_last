@@ -1,14 +1,30 @@
 "use client"
 
-import { CheckCheckIcon, CheckIcon, MessageSquareDashedIcon, UserRoundCheckIcon, UserRoundXIcon } from "lucide-react"
+import {
+  ArchiveIcon,
+  ArchiveRestoreIcon,
+  CheckCheckIcon,
+  CheckIcon,
+  MessageSquareDashedIcon,
+  UserRoundCheckIcon,
+  UserRoundXIcon,
+} from "lucide-react"
 import type { ChatSummary } from "@/lib/db"
 import { cn } from "@/lib/utils"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import { ChatAvatar, formatListTime, messagePreview } from "./chat-shared"
 
 // Колонка диалогов: аватар с каналом, имя, время, превью последнего сообщения, счётчик
-// неотвеченных. Контекстное меню строки — «Отметить отвеченным» / «Взять себе».
+// неотвеченных: яркий — клиенту не отвечали вообще, бледно-серый — разговор уже идёт (отвечали с
+// телефона или из CRM). Контекстное меню строки (правая кнопка / долгое нажатие) — «Отметить
+// отвеченным», «Взять себе», «В архив».
 
 export function ChatList({
   chats,
@@ -20,6 +36,7 @@ export function ChatList({
   onMarkAnswered,
   onAssignToMe,
   onUnassign,
+  onArchive,
 }: {
   chats: ChatSummary[]
   selectedId: number | null
@@ -30,6 +47,7 @@ export function ChatList({
   onMarkAnswered: (chat: ChatSummary) => void
   onAssignToMe: (chat: ChatSummary) => void
   onUnassign: (chat: ChatSummary) => void
+  onArchive: (chat: ChatSummary, archived: boolean) => void
 }) {
   if (!chats.length) {
     return (
@@ -48,6 +66,8 @@ export function ChatList({
       {chats.map((chat) => {
         const active = chat.id === selectedId
         const mine = chat.assignedUserId === currentUserId
+        // Яркое выделение — только там, где клиенту ещё не отвечали.
+        const urgent = chat.unansweredCount > 0 && !chat.repliedRecently
         return (
           <li key={chat.id}>
             <ContextMenu>
@@ -65,10 +85,10 @@ export function ChatList({
                   <ChatAvatar chatId={chat.id} name={chat.name} hasAvatar={chat.hasAvatar} chatType={chat.chatType} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className={cn("truncate text-[15px]", chat.unansweredCount > 0 ? "font-semibold" : "font-medium")}>
+                      <span className={cn("truncate text-[15px]", urgent ? "font-semibold" : "font-medium")}>
                         {chat.name || chat.phone || chat.chatId}
                       </span>
-                      <span className={cn("shrink-0 text-[11px] tabular-nums", chat.unansweredCount > 0 ? "font-medium text-brand-strong" : "text-muted-foreground")}>
+                      <span className={cn("shrink-0 text-[11px] tabular-nums", urgent ? "font-medium text-brand-strong" : "text-muted-foreground")}>
                         {formatListTime(chat.lastMessageAt)}
                       </span>
                     </div>
@@ -76,7 +96,7 @@ export function ChatList({
                       <span
                         className={cn(
                           "flex min-w-0 items-center gap-1 truncate text-[13px]",
-                          chat.unansweredCount > 0 ? "text-foreground" : "text-muted-foreground"
+                          urgent ? "text-foreground" : "text-muted-foreground"
                         )}
                       >
                         {chat.lastMessageDirection === "outbound" ? (
@@ -88,8 +108,12 @@ export function ChatList({
                       </span>
                       {chat.unansweredCount > 0 ? (
                         <span
-                          className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand px-1.5 text-[11px] font-semibold text-brand-foreground tabular-nums"
-                          aria-label={`${chat.unansweredCount} без ответа`}
+                          className={cn(
+                            "flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1.5 text-[11px] font-semibold tabular-nums",
+                            urgent ? "bg-brand text-brand-foreground" : "bg-zinc-200/80 font-medium text-zinc-500"
+                          )}
+                          aria-label={urgent ? `${chat.unansweredCount} без ответа` : `${chat.unansweredCount} после нашего ответа`}
+                          title={urgent ? undefined : "Клиенту уже отвечали — новые сообщения после ответа"}
                         >
                           {chat.unansweredCount > 99 ? "99+" : chat.unansweredCount}
                         </span>
@@ -118,6 +142,11 @@ export function ChatList({
                     Взять себе
                   </ContextMenuItem>
                 )}
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => onArchive(chat, !chat.archived)}>
+                  {chat.archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
+                  {chat.archived ? "Вернуть из архива" : "В архив"}
+                </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
           </li>

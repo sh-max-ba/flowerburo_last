@@ -27,6 +27,7 @@ export type OutboundWazzupMessageInput = {
   text?: string | null
   contentUri?: string | null
   authorName?: string | null
+  authorUserId?: number | null
   quotedMessageId?: string | null
   quotedText?: string | null
   forwarded?: boolean
@@ -52,11 +53,11 @@ export function upsertOutboundWazzupMessage(
     .prepare(
       `INSERT INTO wazzup_messages (
         message_id, crm_message_id, deal_id, customer_id, channel_id, chat_type, chat_id,
-        direction, message_type, text, content_uri, status, is_echo, author_name,
+        direction, message_type, text, content_uri, status, is_echo, author_name, author_user_id,
         quoted_message_id, quoted_text, forwarded, file_name, date_time, raw_payload, created_at, updated_at
       ) VALUES (
         @messageId, @crmMessageId, @dealId, @customerId, @channelId, @chatType, @chatId,
-        'outbound', @messageType, @text, @contentUri, 'sent', 1, @authorName,
+        'outbound', @messageType, @text, @contentUri, 'sent', 1, @authorName, @authorUserId,
         @quotedMessageId, @quotedText, @forwarded, @fileName, @dateTime, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )
       ON CONFLICT(message_id) DO UPDATE SET
@@ -67,6 +68,7 @@ export function upsertOutboundWazzupMessage(
         customer_id = COALESCE(wazzup_messages.customer_id, excluded.customer_id),
         channel_id = COALESCE(NULLIF(wazzup_messages.channel_id, ''), excluded.channel_id),
         author_name = COALESCE(NULLIF(wazzup_messages.author_name, ''), excluded.author_name),
+        author_user_id = COALESCE(wazzup_messages.author_user_id, excluded.author_user_id),
         text = COALESCE(wazzup_messages.text, excluded.text),
         content_uri = COALESCE(wazzup_messages.content_uri, excluded.content_uri),
         quoted_message_id = COALESCE(NULLIF(wazzup_messages.quoted_message_id, ''), excluded.quoted_message_id),
@@ -85,6 +87,7 @@ export function upsertOutboundWazzupMessage(
       text,
       contentUri,
       authorName: clean(input.authorName ?? "") || null,
+      authorUserId: input.authorUserId ?? null,
       quotedMessageId: clean(input.quotedMessageId ?? "") || null,
       quotedText: clean(input.quotedText ?? "") || null,
       forwarded: input.forwarded ? 1 : 0,
@@ -123,7 +126,9 @@ export function listWazzupChatMessages(
   const rows = db()
     .prepare(
       `SELECT * FROM (
-        SELECT * FROM wazzup_messages
+        SELECT wazzup_messages.*,
+          (SELECT role FROM users WHERE users.id = wazzup_messages.author_user_id) AS author_role
+        FROM wazzup_messages
         WHERE (@dealId IS NOT NULL AND deal_id = @dealId)
            OR (@chatType <> '' AND @chatId <> '' AND chat_type = @chatType AND chat_id = @chatId)
         ORDER BY COALESCE(date_time, created_at) DESC, id DESC

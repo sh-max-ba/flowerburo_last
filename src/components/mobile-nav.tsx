@@ -6,6 +6,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { MenuIcon } from "lucide-react"
 
+import type { UserRole } from "@/lib/db"
 import type { NavItem, NavSectionId } from "@/lib/nav"
 import { NAV_ICONS } from "@/lib/nav-icons"
 import { cn } from "@/lib/utils"
@@ -17,8 +18,9 @@ import { useSidebar } from "@/components/ui/sidebar"
 
 // Порядок важности разделов на телефоне: первые четыре доступных роли попадают на панель.
 // owner → Аналитика, Чаты, Касса, Заказы (Дашборд — в «Ещё»); manager → Чаты, Касса, Заказы, Готовые;
-// florist → Заказы (+Касса).
+// florist — от стола заказов (его главный экран): Заказы, Касса (при открытой смене), Готовые, Чаты.
 const MOBILE_PRIORITY: NavSectionId[] = ["analytics", "chats", "sales", "orders", "ready-orders", "clients"]
+const FLORIST_MOBILE_PRIORITY: NavSectionId[] = ["orders", "sales", "ready-orders", "chats", "clients"]
 const MOBILE_SLOTS = 4
 
 const SHORT_LABELS: Partial<Record<NavSectionId, string>> = {
@@ -27,8 +29,9 @@ const SHORT_LABELS: Partial<Record<NavSectionId, string>> = {
   "history-cash": "История",
 }
 
-export function getMobileTabs(items: NavItem[]) {
-  return MOBILE_PRIORITY.map((id) => items.find((item) => item.id === id)).filter((item): item is NavItem => Boolean(item)).slice(0, MOBILE_SLOTS)
+export function getMobileTabs(items: NavItem[], role: UserRole) {
+  const priority = role === "florist" ? FLORIST_MOBILE_PRIORITY : MOBILE_PRIORITY
+  return priority.map((id) => items.find((item) => item.id === id)).filter((item): item is NavItem => Boolean(item)).slice(0, MOBILE_SLOTS)
 }
 
 type MobileChrome = {
@@ -102,6 +105,7 @@ const HOLD_DELAY_MS = 250
 
 type MobileTabBarProps = {
   items: NavItem[]
+  role: UserRole
   active: NavSectionId
   hidden?: boolean
   badges?: Partial<Record<NavSectionId, React.ReactNode>>
@@ -121,7 +125,7 @@ type DockEntry = {
 // Док-панель на телефоне: плавающая стеклянная капсула. Тап — просто открывает раздел. Если палец
 // зажать или повести по доку, иконка под ним увеличивается (слабее — соседи); отпускание над
 // иконкой открывает раздел.
-export function MobileTabBar({ items, active, hidden = false, badges }: MobileTabBarProps) {
+export function MobileTabBar({ items, role, active, hidden = false, badges }: MobileTabBarProps) {
   const router = useRouter()
   const { setOpenMobile, openMobile } = useSidebar()
   const dockRef = useRef<HTMLDivElement | null>(null)
@@ -142,7 +146,7 @@ export function MobileTabBar({ items, active, hidden = false, badges }: MobileTa
     }
   }, [])
 
-  const tabs = getMobileTabs(items)
+  const tabs = getMobileTabs(items, role)
   const activeInTabs = tabs.some((item) => item.id === active)
   const activeItem = items.find((item) => item.id === active)
   // «Ещё» становится текущим разделом, если он не на панели (Склад, Клиенты, Настройки…).
@@ -379,12 +383,18 @@ function dockItemClass(active: boolean) {
 }
 
 // Точка-счётчик на иконке вкладки.
-export function MobileTabBadge({ count }: { count: number }) {
+// muted — бледно-серый бейдж: есть сообщения, но не срочные (клиенту уже отвечали).
+export function MobileTabBadge({ count, muted = false }: { count: number; muted?: boolean }) {
   if (count <= 0) {
     return null
   }
   return (
-    <span className="absolute -top-1.5 left-3 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-none font-semibold text-primary-foreground tabular-nums">
+    <span
+      className={cn(
+        "absolute -top-1.5 left-3 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] leading-none font-semibold tabular-nums",
+        muted ? "bg-zinc-200 text-zinc-500" : "bg-primary text-primary-foreground"
+      )}
+    >
       {count > 99 ? "99+" : count}
     </span>
   )

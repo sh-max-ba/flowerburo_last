@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server"
 import { getCurrentUser } from "@/lib/auth"
+import { canAccessSection } from "@/lib/nav"
 import { getWazzupTranscriptionSource, saveWazzupMessageTranscript } from "@/lib/db"
 import { fetchRemoteMedia, MediaFetchError } from "@/lib/media-fetch"
 import { transcribeAudioToText, TranscriptionError } from "@/lib/transcription"
@@ -10,12 +11,12 @@ export const dynamic = "force-dynamic"
 // OpenAI принимает аудио до 25 МБ.
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
-// Один эндпоинт на обе фичи. Только owner+manager (как медиа/голос). Два режима:
+// Один эндпоинт на обе фичи. Доступ — как к разделу «Чаты» (как медиа/голос). Два режима:
 //   • multipart `file`        — разовая надиктовка (текст в поле ввода), без кэша;
 //   • JSON `{ messageId }`     — расшифровка существующего голосового, с кэшем в БД.
 export async function POST(request: NextRequest) {
   const user = await getCurrentUser()
-  if (!user || user.role === "florist") {
+  if (!user || !canAccessSection("chats", user.role, false)) {
     return Response.json({ ok: false, message: "Недостаточно прав." }, { status: 403 })
   }
 

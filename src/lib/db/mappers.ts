@@ -1,4 +1,4 @@
-import { numberFromRow } from "@/lib/db-row"
+import { numberFromRow, userRoleFromRow } from "@/lib/db-row"
 import { roundMoney } from "./form-parsers"
 import type {
   AllocationMethod,
@@ -181,6 +181,7 @@ export function mapWazzupMessage(row: Record<string, unknown>): WazzupMessage {
     status: String(row.status ?? ""),
     isEcho: Number(row.is_echo ?? 0) === 1,
     authorName: String(row.author_name ?? ""),
+    authorRole: userRoleFromRow(row.author_role),
     quotedMessageId: String(row.quoted_message_id ?? ""),
     quotedText: String(row.quoted_text ?? ""),
     transcript: String(row.transcript ?? ""),
